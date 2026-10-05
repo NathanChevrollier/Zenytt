@@ -4,7 +4,7 @@
 // la machine n'est joignable que depuis un serveur. Le pont local (côté Rust) parle le protocole
 // de passerelle attendu par le client web ; l'interface ne connaît que l'adresse et le jeton.
 import { create } from "zustand";
-import { api, type DesktopView, type RdpSessionInfo, type VncSessionInfo } from "./api";
+import { api, errorMessage, type DesktopView, type RdpSessionInfo, type VncSessionInfo } from "./api";
 import { useApp } from "./store";
 import type { SectionId } from "../sections";
 
@@ -102,3 +102,17 @@ export const useRdp = create<RdpStore>((set, get) => ({
     set({ desktop: null, session: null, vnc: null, vm: null, origin: null, state: { kind: "ouverture" } });
   },
 }));
+
+/** Où s'ouvre l'écran d'une VM : dans Zenytt (VNC intégré) ou dans le client du système (remote-viewer). */
+export type ScreenMode = "internal" | "external";
+
+/** Ouvre l'écran d'une VM dans le mode choisi. Le client du système affiche aussi le SPICE. */
+export async function openVmScreen(serverId: string, vm: { uuid: string; name: string }, mode: ScreenMode) {
+  if (mode === "internal") return useRdp.getState().openVm(serverId, vm);
+  const { notify } = useApp.getState();
+  try {
+    notify(await api.vmConsoleExternal(serverId, vm), "success");
+  } catch (e) {
+    notify(errorMessage(e), "error");
+  }
+}

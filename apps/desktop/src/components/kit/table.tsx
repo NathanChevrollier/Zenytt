@@ -88,7 +88,15 @@ export function DataTable<T>({
     if (!col?.sortValue) return rows;
     const get = col.sortValue;
     const mul = sort.dir === "asc" ? 1 : -1;
+    // Groupés : le tri s'applique dans chaque groupe, qui garde sa place (sinon les groupes se
+    // mélangent et leurs en-têtes se répètent).
+    const groupRank = new Map<string, number>();
+    if (groupBy) for (const r of rows) if (!groupRank.has(groupBy.key(r))) groupRank.set(groupBy.key(r), groupRank.size);
     return [...rows].sort((a, b) => {
+      if (groupBy) {
+        const g = groupRank.get(groupBy.key(a))! - groupRank.get(groupBy.key(b))!;
+        if (g) return g;
+      }
       const x = get(a);
       const y = get(b);
       if (x == null && y == null) return 0;
@@ -97,7 +105,7 @@ export function DataTable<T>({
       if (typeof x === "number" && typeof y === "number") return (x - y) * mul;
       return String(x).localeCompare(String(y), "fr", { numeric: true, sensitivity: "base" }) * mul;
     });
-  }, [rows, sort, columns]);
+  }, [rows, sort, columns, groupBy]);
 
   // Rendu fenêtré : seules les lignes visibles (plus une marge) sont dans le DOM.
   const scrollRef = useRef<HTMLDivElement>(null);

@@ -4,7 +4,7 @@ import { Box, Cable, CircleHelp, FolderOpen, Globe, History, Layers, Monitor, Pl
 import { useDoctor } from "./ConnectionDoctor";
 import { focusedTerminal } from "../lib/focus";
 import { api, errorMessage, shellQuote, type DesktopView, type DockerOverview, type Snippet, type TunnelView, type WebEngine } from "../lib/api";
-import { launchDesktop } from "./RemoteDesktops";
+import { openDesktop } from "./RemoteDesktops";
 import { SECTIONS } from "../sections";
 import { GUIDES } from "../lib/guides";
 import { ensureConnected, useApp, useAppPick } from "../lib/store";
@@ -201,7 +201,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
       }
     }
     for (const d of desktops) {
-      list.push({ group: "Bureaux à distance", id: `rdp:${d.id}`, label: `Bureau à distance : ${d.name}`, hint: d.host, icon: <Monitor size={15} />, run: () => void launchDesktop(d) });
+      list.push({ group: "Bureaux à distance", id: `rdp:${d.id}`, label: `Bureau à distance : ${d.name}`, hint: d.host, icon: <Monitor size={15} />, run: () => void openDesktop(d, useApp.getState().settings.vmScreen ?? "internal") });
     }
     for (const t of tunnels) {
       list.push({

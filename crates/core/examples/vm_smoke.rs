@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let spice = vms.iter().find(|v| v.name == "spice-test").ok_or("spice-test absente")?;
     let d = vm::detail(&c, access, None, &spice.uuid).await?;
-    check(d.graphics == Graphics::Spice, "spice-test reconnue en SPICE")?;
+    check(matches!(d.graphics, Graphics::Spice { .. }), "spice-test reconnue en SPICE")?;
 
     let other = connect("nokvm", "nokvm").await?;
     let (access, reason) = vm::access(&other, None).await?;

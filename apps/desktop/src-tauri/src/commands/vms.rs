@@ -212,8 +212,8 @@ pub async fn vm_console_open(
     let (port, listen, public, has_password) = match d.graphics {
         vm::Graphics::Vnc { port: Some(p), listen, public, password } => (p, listen, public, password),
         vm::Graphics::Vnc { port: None, .. } => return Err("la VM est éteinte : démarre-la pour voir son écran".into()),
-        vm::Graphics::Spice => {
-            return Err("cette VM affiche son écran en SPICE, que Zenytt ne sait pas afficher : utilise la console série, ou passe son affichage en VNC".into())
+        vm::Graphics::Spice { .. } => {
+            return Err("cette VM affiche son écran en SPICE, que Zenytt n'affiche pas : ouvre-le dans le client du système (remote-viewer), ou utilise la console série".into())
         }
         vm::Graphics::None => return Err("cette VM n'a pas d'écran : utilise la console série".into()),
         vm::Graphics::VncSocket => {
@@ -246,6 +246,50 @@ pub async fn vm_console_open(
             .to_string()
     });
     Ok(VmConsole { session, warning })
+}
+
+/// Écran de la VM dans le client du système (remote-viewer de virt-viewer), en VNC comme en SPICE,
+/// par un tunnel SSH refermé avec la fenêtre. Le mot de passe éventuel passe par un fichier .vv
+/// effacé dès sa lecture.
+#[tauri::command]
+pub async fn vm_console_external(
+    app: tauri::AppHandle,
+    store: State<'_, Store>,
+    sessions: State<'_, Sessions>,
+    cache: State<'_, VmAccess>,
+    tunnels: State<'_, crate::commands::tunnels::Tunnels>,
+    server_id: String,
+    uuid: String,
+    name: String,
+) -> Result<String, String> {
+    let c = ctx(&store, &sessions, &cache, &server_id).await?;
+    let d = vm::detail(&c.conn, c.access, c.sudo.as_deref(), &uuid).await.map_err(err)?;
+    let (kind, port, listen, has_password) = match d.graphics {
+        vm::Graphics::Vnc { port: Some(p), listen, password, .. } => ("vnc", p, listen, password),
+        vm::Graphics::Spice { port: Some(p), listen, password } => ("spice", p, listen, password),
+        vm::Graphics::Vnc { port: None, .. } | vm::Graphics::Spice { port: None, .. } => {
+            return Err("la VM est éteinte : démarre-la pour voir son écran".into())
+        }
+        vm::Graphics::VncSocket => {
+            return Err("l'écran de cette VM passe par un socket Unix, pas par un port : utilise la console série".into())
+        }
+        vm::Graphics::None => return Err("cette VM n'a pas d'écran : utilise la console série".into()),
+    };
+    let password =
+        if has_password { vm::display_password_of(&c.conn, c.access, c.sudo.as_deref(), &uuid, kind).await.map_err(err)? } else { None };
+    let key = format!("vm-ext-{uuid}");
+    let target = crate::commands::rdp::ViewerTarget {
+        key: &key,
+        via: Some(&server_id),
+        label: &name,
+        kind,
+        host: &vm::vnc_connect_host(&listen),
+        port,
+        password: password.as_deref(),
+        fullscreen: false,
+    };
+    crate::commands::rdp::open_in_remote_viewer(&app, &tunnels, target).await?;
+    Ok(format!("Écran de « {name} » ouvert dans remote-viewer"))
 }
 
 /// Commande à lancer dans un onglet terminal pour la console série de la VM.

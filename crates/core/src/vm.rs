@@ -167,7 +167,12 @@ pub enum Graphics {
     },
     /// VNC sur un socket Unix (`<listen type='socket'>`) : rien à joindre par un tunnel TCP.
     VncSocket,
-    Spice,
+    /// Écran SPICE : non affiché dans Zenytt, mais ouvert dans remote-viewer par un tunnel.
+    Spice {
+        port: Option<u16>,
+        listen: String,
+        password: bool,
+    },
     None,
 }
 
@@ -247,8 +252,18 @@ pub(crate) fn parse_detail(xml: &str) -> Result<VmDetail> {
                 listen,
             }
         }
-        Some(_) => Graphics::Spice,
-        None => Graphics::None,
+        Some(g) if g.attribute("type") == Some("spice") => {
+            let listen =
+                child(g, "listen").and_then(|l| l.attribute("address")).or(g.attribute("listen")).unwrap_or("127.0.0.1").to_string();
+            Graphics::Spice {
+                // Sans port TCP (socket Unix, éteinte) : rien à joindre par un tunnel.
+                port: g.attribute("port").and_then(|p| p.parse().ok()).filter(|p: &u16| *p > 0),
+                password: g.attribute("passwd").is_some(),
+                listen,
+            }
+        }
+        // Autres affichages (egl-headless, dbus…) : rien à ouvrir à distance.
+        Some(_) | None => Graphics::None,
     };
     let firmware = if os.and_then(|o| o.attribute("firmware")) == Some("efi") || os.and_then(|o| child(o, "loader")).is_some() {
         "uefi"
@@ -266,20 +281,26 @@ pub(crate) fn parse_detail(xml: &str) -> Result<VmDetail> {
     })
 }
 
-/// Mot de passe VNC d'une VM, lu dans `dumpxml --security-info` (absent du XML ordinaire).
-pub(crate) fn vnc_password(xml: &str) -> Option<String> {
+/// Mot de passe de l'écran `kind` (`vnc` ou `spice`) d'une VM, lu dans `dumpxml --security-info`
+/// (absent du XML ordinaire).
+pub(crate) fn display_password(xml: &str, kind: &str) -> Option<String> {
     let doc = roxmltree::Document::parse(xml).ok()?;
     let devices = child(doc.root_element(), "devices")?;
-    devices.children().find(|g| g.has_tag_name("graphics") && g.attribute("type") == Some("vnc"))?.attribute("passwd").map(str::to_string)
+    devices.children().find(|g| g.has_tag_name("graphics") && g.attribute("type") == Some(kind))?.attribute("passwd").map(str::to_string)
 }
 
 /// Mot de passe de l'écran VNC, s'il y en a un.
 pub async fn vnc_password_of(conn: &Connection, access: Access, sudo: Option<&str>, uuid: &str) -> Result<Option<String>> {
+    display_password_of(conn, access, sudo, uuid, "vnc").await
+}
+
+/// Mot de passe de l'écran `kind` (`vnc` ou `spice`), s'il y en a un.
+pub async fn display_password_of(conn: &Connection, access: Access, sudo: Option<&str>, uuid: &str, kind: &str) -> Result<Option<String>> {
     if !valid_uuid(uuid) {
         return Err(Error::Other("identifiant de VM invalide".into()));
     }
     let xml = run(conn, access, sudo, &format!("dumpxml --security-info {}", shell_quote(uuid))).await?.into_result()?.stdout;
-    Ok(vnc_password(&xml))
+    Ok(display_password(&xml, kind))
 }
 
 fn xml_attr(value: &str) -> String {
@@ -572,7 +593,12 @@ mod tests {
     #[test]
     fn graphics_spice_and_none() {
         let d = parse_detail(include_str!("vm/fixtures/spice.xml")).unwrap();
-        assert_eq!(d.graphics, Graphics::Spice);
+        // Éteinte (autoport) : pas encore de port ; l'écoute est lue pour le tunnel.
+        assert_eq!(d.graphics, Graphics::Spice { port: None, listen: "127.0.0.1".into(), password: false });
+        let running = "<domain><os><type>hvm</type></os><devices><graphics type='spice' port='5901' passwd='x'><listen type='address' address='0.0.0.0'/></graphics></devices></domain>";
+        assert_eq!(parse_detail(running).unwrap().graphics, Graphics::Spice { port: Some(5901), listen: "0.0.0.0".into(), password: true });
+        assert_eq!(display_password(running, "spice").as_deref(), Some("x"));
+        assert_eq!(display_password(running, "vnc"), None);
         let bare = "<domain><os><type>hvm</type></os><devices/></domain>";
         assert_eq!(parse_detail(bare).unwrap().graphics, Graphics::None);
     }
@@ -656,9 +682,9 @@ mod tests {
     #[test]
     fn vnc_password_is_read_from_security_info() {
         let xml = include_str!("vm/fixtures/vnc-password.xml");
-        assert_eq!(vnc_password(xml).as_deref(), Some("s3cret"));
+        assert_eq!(display_password(xml, "vnc").as_deref(), Some("s3cret"));
         assert!(matches!(parse_detail(xml).unwrap().graphics, Graphics::Vnc { password: true, .. }));
-        assert_eq!(vnc_password(include_str!("vm/fixtures/cirros.xml")), None);
+        assert_eq!(display_password(include_str!("vm/fixtures/cirros.xml"), "vnc"), None);
     }
 
     #[test]

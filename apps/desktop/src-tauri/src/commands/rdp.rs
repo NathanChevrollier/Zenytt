@@ -149,7 +149,20 @@ fn free_port() -> Result<u16, String> {
 pub async fn desktop_launch(app: AppHandle, store: State<'_, Store>, tunnels: State<'_, Tunnels>, id: String) -> Result<String, String> {
     let d = find_desktop(&store, &id)?;
     if d.protocol == DesktopProtocol::Vnc {
-        return Err("les bureaux VNC s'ouvrent dans Zenytt : utilise « Se connecter »".into());
+        // Client du système pour un bureau VNC : remote-viewer (virt-viewer), comme pour SPICE.
+        let (_, password) = credentials(&store, &d)?;
+        let target = ViewerTarget {
+            key: &d.id,
+            via: d.via_server_id.as_deref(),
+            label: &d.name,
+            kind: "vnc",
+            host: &d.host,
+            port: d.port,
+            password: password.as_deref(),
+            fullscreen: d.fullscreen,
+        };
+        open_in_remote_viewer(&app, &tunnels, target).await?;
+        return Ok("Bureau VNC ouvert dans remote-viewer".into());
     }
     if d.protocol == DesktopProtocol::Spice {
         return spice_launch(&app, &store, &tunnels, &d).await;
@@ -278,14 +291,17 @@ fn write_private(path: &std::path::Path, content: &[u8]) -> Result<(), String> {
     f.write_all(content).map_err(|e| e.to_string())
 }
 
-/// Fichier de connexion de remote-viewer (format `.vv` de virt-viewer). `delete-this-file=1`
-/// demande à remote-viewer d'effacer le fichier dès qu'il l'a lu : le mot de passe SPICE ne reste
-/// pas sur le disque.
-fn vv_file(title: &str, host: &str, port: u16, password: Option<&str>, fullscreen: bool) -> Result<String, String> {
+/// Fichier de connexion de remote-viewer (format `.vv` de virt-viewer), `kind` : `spice` ou `vnc`.
+/// `delete-this-file=1` demande à remote-viewer d'effacer le fichier dès qu'il l'a lu : le mot de
+/// passe ne reste pas sur le disque.
+fn vv_file(kind: &str, title: &str, host: &str, port: u16, password: Option<&str>, fullscreen: bool) -> Result<String, String> {
+    if !matches!(kind, "spice" | "vnc") {
+        return Err("type d'écran inconnu".into());
+    }
     let title = clean(title, "nom")?;
     let mut lines = vec![
         "[virt-viewer]".to_string(),
-        "type=spice".to_string(),
+        format!("type={kind}"),
         format!("host={host}"),
         format!("port={port}"),
         format!("title={title}"),
@@ -298,7 +314,7 @@ fn vv_file(title: &str, host: &str, port: u16, password: Option<&str>, fullscree
     if let Some(pw) = password.filter(|p| !p.is_empty()) {
         // Une seule ligne par valeur : un retour à la ligne ajouterait ses propres clés.
         if pw.chars().any(char::is_control) {
-            return Err("mot de passe SPICE invalide".into());
+            return Err("mot de passe de l'écran invalide".into());
         }
         lines.push(format!("password={pw}"));
     }
@@ -327,55 +343,86 @@ fn remote_viewer() -> Result<std::path::PathBuf, String> {
     Err("remote-viewer (virt-viewer) n'est pas installé : https://virt-manager.org/download — sous macOS « brew install virt-viewer », sous Linux le paquet virt-viewer".into())
 }
 
-/// Ouvre une console SPICE dans remote-viewer, à travers un tunnel SSH si la machine passe par un
-/// serveur (SPICE sans TLS fait circuler l'écran en clair). Le tunnel vit aussi longtemps que la
-/// fenêtre de remote-viewer.
-async fn spice_launch(app: &AppHandle, store: &Store, tunnels: &Tunnels, d: &RemoteDesktop) -> Result<String, String> {
+/// Écran à ouvrir dans remote-viewer : `host:port` vu depuis `via` (serveur SSH) s'il y en a un,
+/// sinon depuis ce PC.
+pub(crate) struct ViewerTarget<'a> {
+    /// Identifiant de la session (tunnel `rdp-<key>`).
+    pub key: &'a str,
+    pub via: Option<&'a str>,
+    pub label: &'a str,
+    /// `spice` ou `vnc`.
+    pub kind: &'a str,
+    pub host: &'a str,
+    pub port: u16,
+    pub password: Option<&'a str>,
+    pub fullscreen: bool,
+}
+
+/// Ouvre un écran SPICE ou VNC dans remote-viewer, à travers un tunnel SSH si la machine passe par
+/// un serveur (SPICE sans TLS et VNC font circuler l'écran en clair). Le tunnel vit aussi longtemps
+/// que la fenêtre de remote-viewer.
+pub(crate) async fn open_in_remote_viewer(app: &AppHandle, tunnels: &Tunnels, t: ViewerTarget<'_>) -> Result<(), String> {
     let viewer = remote_viewer()?;
-    let (_, password) = credentials(store, d)?;
-    let tid = tunnel_id(&d.id);
-    let (host, port) = match &d.via_server_id {
+    let tid = tunnel_id(t.key);
+    let (host, port) = match t.via {
         Some(server) => {
             tunnels.stop(&tid);
             let local_port = free_port()?;
             let def = TunnelDef {
                 id: tid.clone(),
-                server_id: server.clone(),
-                name: format!("SPICE {}", d.name),
+                server_id: server.to_string(),
+                name: format!("{} {}", t.kind.to_uppercase(), t.label),
                 local_port,
-                remote_host: d.host.clone(),
-                remote_port: d.port,
+                remote_host: t.host.to_string(),
+                remote_port: t.port,
                 auto_start: false,
             };
             tunnels.start(app, def).await?;
             ("127.0.0.1".to_string(), local_port)
         }
-        None => (d.host.clone(), d.port),
+        None => (t.host.to_string(), t.port),
     };
     let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("spice");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let file = dir.join(format!("{}.vv", d.id));
+    let file = dir.join(format!("{}.vv", t.key));
     // Le fichier peut contenir le mot de passe : créé d'emblée lisible par l'utilisateur seul (et
     // non restreint après coup, ce qui laissait un instant où il était lisible par tous), le temps
     // que remote-viewer le lise puis l'efface.
-    write_private(&file, vv_file(&d.name, &host, port, password.as_deref(), d.fullscreen)?.as_bytes())?;
+    write_private(&file, vv_file(t.kind, t.label, &host, port, t.password, t.fullscreen)?.as_bytes())?;
     let mut child = std::process::Command::new(&viewer).arg(&file).spawn().map_err(|e| format!("remote-viewer : {e}"))?;
     log::info!(
-        "console SPICE « {} » ouverte ({host}:{port}{})",
-        d.name,
-        if d.via_server_id.is_some() { ", via un tunnel SSH" } else { "" }
+        "écran {} « {} » ouvert dans remote-viewer ({host}:{port}{})",
+        t.kind,
+        t.label,
+        if t.via.is_some() { ", via un tunnel SSH" } else { "" }
     );
-    let via = d.via_server_id.is_some();
+    let via = t.via.is_some();
     let app = app.clone();
-    let file_for_cleanup = file.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _ = child.wait();
         // Filet de sécurité si remote-viewer n'a pas effacé le fichier (ancienne version, échec).
-        let _ = std::fs::remove_file(&file_for_cleanup);
+        let _ = std::fs::remove_file(&file);
         if via {
             app.state::<Tunnels>().stop(&tid);
         }
     });
+    Ok(())
+}
+
+/// Ouvre une console SPICE enregistrée dans remote-viewer.
+async fn spice_launch(app: &AppHandle, store: &Store, tunnels: &Tunnels, d: &RemoteDesktop) -> Result<String, String> {
+    let (_, password) = credentials(store, d)?;
+    let target = ViewerTarget {
+        key: &d.id,
+        via: d.via_server_id.as_deref(),
+        label: &d.name,
+        kind: "spice",
+        host: &d.host,
+        port: d.port,
+        password: password.as_deref(),
+        fullscreen: d.fullscreen,
+    };
+    open_in_remote_viewer(app, tunnels, target).await?;
     Ok("Console SPICE ouverte dans remote-viewer".into())
 }
 
@@ -602,15 +649,18 @@ mod tests {
 
     #[test]
     fn spice_file_forgets_its_password() {
-        let vv = vv_file("VM de test", "127.0.0.1", 61000, Some("s3cret"), false).unwrap();
+        let vv = vv_file("spice", "VM de test", "127.0.0.1", 61000, Some("s3cret"), false).unwrap();
         assert!(vv.starts_with("[virt-viewer]\ntype=spice\n"));
         assert!(vv.contains("host=127.0.0.1\nport=61000\n"));
         assert!(vv.contains("delete-this-file=1"), "remote-viewer doit effacer le fichier après lecture");
         assert!(vv.contains("password=s3cret\n"));
-        assert!(!vv_file("VM", "h", 1, None, true).unwrap().contains("password="));
+        assert!(!vv_file("spice", "VM", "h", 1, None, true).unwrap().contains("password="));
         // Un retour à la ligne dans une valeur ajouterait ses propres clés au fichier.
-        assert!(vv_file("VM\nhost=evil", "h", 1, None, false).is_err());
-        assert!(vv_file("VM", "h", 1, Some("a\nhost=evil"), false).is_err());
+        assert!(vv_file("spice", "VM\nhost=evil", "h", 1, None, false).is_err());
+        assert!(vv_file("spice", "VM", "h", 1, Some("a\nhost=evil"), false).is_err());
+        // Écran VNC d'une VM ouvert dans le client du système (tiroir Machines).
+        assert!(vv_file("vnc", "VM", "h", 5900, None, false).unwrap().starts_with("[virt-viewer]\ntype=vnc\n"));
+        assert!(vv_file("rdp\nhost=evil", "VM", "h", 1, None, false).is_err());
     }
 
     #[test]

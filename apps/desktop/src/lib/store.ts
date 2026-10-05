@@ -131,7 +131,11 @@ export interface Folders {
   containers: Record<string, Record<string, string>>;
   /** Par serveur : dossiers de conteneurs créés, même vides. */
   containerFolders: Record<string, string[]>;
-  /** Dossiers repliés (`servers:<nom>` ou `docker:<serveur>:<nom>`). */
+  /** Par serveur : UUID de la machine virtuelle → dossier. */
+  vms?: Record<string, Record<string, string>>;
+  /** Par serveur : dossiers de machines virtuelles créés, même vides. */
+  vmFolders?: Record<string, string[]>;
+  /** Dossiers repliés (`servers:<nom>`, `docker:<serveur>:<nom>` ou `vms:<serveur>:<nom>`). */
   collapsed: string[];
 }
 

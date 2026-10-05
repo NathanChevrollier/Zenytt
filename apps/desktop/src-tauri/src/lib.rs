@@ -272,6 +272,7 @@ pub fn run() {
             vms::vm_action,
             vms::vm_delete,
             vms::vm_console_open,
+            vms::vm_console_external,
             vms::vm_serial_command,
             vms::vm_vnc_restrict,
             docker::docker_compose_launch,

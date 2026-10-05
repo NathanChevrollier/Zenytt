@@ -99,7 +99,11 @@ export interface VmOverview {
   vms: Vm[];
 }
 
-export type VmGraphics = { kind: "vnc"; port: number | null; listen: string; public: boolean; password: boolean } | { kind: "vncSocket" } | { kind: "spice" } | { kind: "none" };
+export type VmGraphics =
+  | { kind: "vnc"; port: number | null; listen: string; public: boolean; password: boolean }
+  | { kind: "vncSocket" }
+  | { kind: "spice"; port: number | null; listen: string; password: boolean }
+  | { kind: "none" };
 
 export interface VmDetail {
   /** `shared` : en lecture seule ou partagé avec d'autres VM, jamais supprimé avec la VM. */
@@ -1362,6 +1366,8 @@ export const api = {
   /** Renvoie les fichiers restés sur le serveur (hors d'un pool libvirt, à supprimer à la main). */
   vmDelete: (serverId: string, vm: Vm, withStorage: boolean) => invoke<string[]>("vm_delete", { serverId, uuid: vm.uuid, name: vm.name, withStorage }),
   vmConsoleOpen: (serverId: string, uuid: string, name: string) => invoke<VmConsole>("vm_console_open", { serverId, uuid, name }),
+  /** Écran de la VM dans le client du système (remote-viewer), par un tunnel SSH. */
+  vmConsoleExternal: (serverId: string, vm: { uuid: string; name: string }) => invoke<string>("vm_console_external", { serverId, uuid: vm.uuid, name: vm.name }),
   vmSerialCommand: (serverId: string, uuid: string) => invoke<string>("vm_serial_command", { serverId, uuid }),
   /** Écran VNC limité à 127.0.0.1, au prochain démarrage de la VM. */
   vmVncRestrict: (serverId: string, vm: Vm) => invoke<void>("vm_vnc_restrict", { serverId, uuid: vm.uuid, name: vm.name }),

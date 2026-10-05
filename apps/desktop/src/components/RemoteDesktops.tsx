@@ -18,15 +18,22 @@ export const useDesktops = create<{ list: DesktopView[]; reload: () => Promise<v
   reload: async () => set({ list: await api.desktops() }),
 }));
 
+/** Le bureau peut-il s'ouvrir dans Zenytt ? (SPICE : jamais ; RDP : avec un mot de passe enregistré.) */
+export function canOpenInside(d: DesktopView): boolean {
+  const p = protocolOf(d);
+  return p === "vnc" || (p === "rdp" && d.hasPassword);
+}
+
 /**
- * Ouvre un bureau à distance (connecte d'abord le serveur de rebond, avec ses dialogues) : le VNC
- * dans le client intégré, le RDP et le SPICE dans le client du système.
+ * Ouvre un bureau dans Zenytt (`internal`) ou dans le client du système (`external` : mstsc ou
+ * FreeRDP pour le RDP, remote-viewer pour le VNC et le SPICE). Un bureau qui ne peut pas s'ouvrir
+ * dans Zenytt part dans le client du système.
  */
-export async function launchDesktop(d: DesktopView) {
+export async function openDesktop(d: DesktopView, mode: "internal" | "external") {
   const { notify } = useApp.getState();
   try {
     if (d.viaServerId && !(await ensureConnected(d.viaServerId, { force: true }))) return;
-    if (protocolOf(d) === "vnc") return void (await useRdp.getState().open(d));
+    if (mode === "internal" && canOpenInside(d)) return void (await useRdp.getState().open(d));
     notify(await api.desktopLaunch(d.id), "success");
   } catch (e) {
     notify(errorMessage(e), "error");
@@ -113,7 +120,7 @@ export function DesktopsPanel({ creating, onCreatingChange }: { creating: boolea
                       title="Ouvre la console dans remote-viewer (virt-viewer), à travers le tunnel SSH le cas échéant"
                       onClick={async () => {
                         setBusy(d.id);
-                        await launchDesktop(d);
+                        await openDesktop(d, "external");
                         setBusy(null);
                       }}
                     >
@@ -131,15 +138,15 @@ export function DesktopsPanel({ creating, onCreatingChange }: { creating: boolea
                     Se connecter
                   </Button>
                   )}
-                  {protocolOf(d) === "rdp" && (
+                  {protocolOf(d) !== "spice" && (
                   <Button
                     size="sm"
                     loading={busy === d.id}
                     icon={<ExternalLink size={13} />}
-                    title="Ouvrir avec le client du système (mstsc, FreeRDP…)"
+                    title={protocolOf(d) === "rdp" ? "Ouvrir avec le client du système (mstsc, FreeRDP…)" : "Ouvrir dans remote-viewer (virt-viewer), à travers le tunnel SSH le cas échéant"}
                     onClick={async () => {
                       setBusy(d.id);
-                      await launchDesktop(d);
+                      await openDesktop(d, "external");
                       setBusy(null);
                     }}
                   >

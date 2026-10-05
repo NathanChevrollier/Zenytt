@@ -1,15 +1,18 @@
 // Machines virtuelles KVM/QEMU d'un serveur (libvirt) : liste, cycle de vie, écran (VNC par tunnel
 // SSH, dans Zenytt) et console série (onglet terminal). Rien n'est exposé sur Internet.
-import { useCallback, useEffect, useState } from "react";
-import { Monitor, Pause, Play, Power, PowerOff, RotateCw, SquareTerminal, Trash2, Zap } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ExternalLink, FolderInput, FolderPlus, Monitor, Pause, Pencil, Play, Power, PowerOff, RotateCw, SquareTerminal, Trash2, Zap } from "lucide-react";
 import { api, errorMessage, type Vm, type VmAction, type VmOverview, type VmStats } from "../lib/api";
 import { allowedActions, memoryText, needsConfirmation, removableDiskFiles, stateLabel } from "../lib/vm";
-import { useRdp } from "../lib/rdp";
+import { openVmScreen } from "../lib/rdp";
+import { useItemFolders } from "../lib/folders";
+import { startDrag } from "../lib/drag";
+import { askFolderName, toggleCollapsed } from "../components/Folders";
 import { useApp, useAppPick } from "../lib/store";
 import { useCachedState } from "../lib/cache";
 import { useAutoRefresh } from "../lib/refresh";
 import { usePolling } from "../lib/poll";
-import { Badge, Button, Checkbox, DataTable, EmptyState, ErrorState, IconButton, Loading, Modal, type Column, type MenuItem } from "../components/ui";
+import { Badge, Button, Checkbox, DataTable, EmptyState, ErrorState, IconButton, Loading, MenuButton, Modal, type Column, type MenuItem } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 import ServerGate, { ServerContext } from "../components/ServerGate";
 import VmDrawer from "./vms/VmDrawer";
@@ -38,6 +41,8 @@ function Vms({ serverId }: { serverId: string }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Vm | null>(null);
+  const folders = useItemFolders("vms", serverId);
+  const collapsed = useApp((s) => s.folders.collapsed);
 
   const load = useCallback(async () => {
     try {
@@ -94,7 +99,21 @@ function Vms({ serverId }: { serverId: string }) {
     }
   };
 
-  const screen = (vm: Vm) => void useRdp.getState().openVm(serverId, vm);
+  const screen = (vm: Vm) => void openVmScreen(serverId, vm, "internal");
+
+  const moveItems = (vm: Vm): MenuItem[] => [
+    { heading: "Ranger dans un dossier (local)" },
+    ...folders.names.filter((f) => f !== folders.folderOf(vm.uuid)).map((f) => ({ label: f, icon: <FolderInput size={14} />, onClick: () => folders.move([vm.uuid], f) })),
+    ...(folders.folderOf(vm.uuid) ? [{ label: "Sortir du dossier", onClick: () => folders.move([vm.uuid], null) }] : []),
+    {
+      label: "Nouveau dossier…",
+      icon: <FolderPlus size={14} />,
+      onClick: async () => {
+        const name = await askFolderName("Nouveau dossier de machines virtuelles");
+        if (name) folders.move([vm.uuid], name);
+      },
+    },
+  ];
 
   const menu = (vm: Vm): MenuItem[] => [
     ...allowedActions(vm).map((a) => ({ label: ACTION_LOOK[a].label, icon: ACTION_LOOK[a].icon, danger: a === "forceOff", onClick: () => void act(vm, a) })),
@@ -102,12 +121,29 @@ function Vms({ serverId }: { serverId: string }) {
     ...(vm.state === "running"
       ? [
           { label: "Écran", icon: <Monitor size={14} />, onClick: () => screen(vm) },
+          { label: "Écran dans le client du système", icon: <ExternalLink size={14} />, onClick: () => void openVmScreen(serverId, vm, "external") },
           { label: "Console série", icon: <SquareTerminal size={14} />, onClick: () => void serial(vm) },
           "separator" as const,
         ]
       : []),
+    ...moveItems(vm),
+    "separator" as const,
     { label: "Supprimer…", icon: <Trash2 size={14} />, danger: true, onClick: () => setDeleting(vm) },
   ];
+
+  // Dossiers (propres à ce PC) : la liste est groupée dès qu'il en existe un.
+  const grouped = folders.names.length > 0;
+  const rows = useMemo(() => {
+    const list = data?.vms ?? [];
+    if (!grouped) return list;
+    // Dossiers nommés d'abord (ordre alphabétique), « sans dossier » à la fin ; puis en marche d'abord.
+    return [...list].sort((a, b) => {
+      const fa = folders.folderOf(a.uuid) || "\uffff";
+      const fb = folders.folderOf(b.uuid) || "\uffff";
+      return fa.localeCompare(fb, "fr") || Number(b.state === "running") - Number(a.state === "running") || a.name.localeCompare(b.name, "fr");
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, grouped, folders.folderOf]);
 
   const context = server && <ServerContext server={server} />;
   const layout = (children: React.ReactNode) => (
@@ -181,6 +217,19 @@ function Vms({ serverId }: { serverId: string }) {
         context={context}
         guide="vms"
         scroll={data.vms.length === 0}
+        actions={
+          data.vms.length > 0 && (
+            <IconButton
+              title="Nouveau dossier de machines virtuelles"
+              onClick={async () => {
+                const name = await askFolderName("Nouveau dossier de machines virtuelles");
+                if (name) folders.create(name);
+              }}
+            >
+              <FolderPlus size={15} />
+            </IconButton>
+          )
+        }
         status={
           <>
             <Badge tone={running ? "ok" : "muted"}>
@@ -200,11 +249,52 @@ function Vms({ serverId }: { serverId: string }) {
         ) : (
           <DataTable
             className="min-h-0 flex-1"
-            rows={data.vms}
+            rows={rows}
             rowKey={(v) => v.uuid}
             columns={columns}
             rowHeight={52}
-            initialSort={{ key: "state", dir: "asc" }}
+            initialSort={grouped ? undefined : { key: "state", dir: "asc" }}
+            onRowMouseDown={grouped ? (v, e) => startDrag(e, v.name, (folder) => folders.move([v.uuid], folder || null)) : undefined}
+            groupBy={
+              grouped
+                ? {
+                    key: (v) => folders.folderOf(v.uuid),
+                    collapsed: (k) => collapsed.includes(`vms:${serverId}:${k}`),
+                    header: (k, list) => {
+                      const collapseKey = `vms:${serverId}:${k}`;
+                      const isCollapsed = collapsed.includes(collapseKey);
+                      return (
+                        <div data-drop={k} className="flex h-9 items-center gap-2 border-b border-line bg-subtle px-3 text-xs text-muted">
+                          <button type="button" onClick={() => toggleCollapsed(collapseKey)} aria-expanded={!isCollapsed} className="flex min-w-0 items-center gap-2">
+                            <span className={`inline-block transition-transform ${isCollapsed ? "-rotate-90" : ""}`}>▾</span>
+                            <span className={`truncate font-semibold ${k ? "text-fg" : ""}`}>{k || "Sans dossier"}</span>
+                          </button>
+                          <span className="ml-auto">
+                            {list.filter((v) => v.state === "running").length} / {list.length} en marche
+                          </span>
+                          {k && (
+                            <MenuButton
+                              size="sm"
+                              title={`Dossier ${k}`}
+                              items={[
+                                {
+                                  label: "Renommer…",
+                                  icon: <Pencil size={14} />,
+                                  onClick: async () => {
+                                    const next = await askFolderName(`Renommer « ${k} »`, k);
+                                    if (next && next !== k) folders.rename(k, next);
+                                  },
+                                },
+                                { label: "Supprimer le dossier", icon: <Trash2 size={14} />, danger: true, onClick: () => folders.remove(k) },
+                              ]}
+                            />
+                          )}
+                        </div>
+                      );
+                    },
+                  }
+                : undefined
+            }
             onRowClick={(v) => setSelected(v.uuid)}
             isSelected={(v) => v.uuid === selected}
             actionsWidth={112}

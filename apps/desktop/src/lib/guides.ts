@@ -279,13 +279,15 @@ export const GUIDES: Guide[] = [
       "Zenytt utilise virsh sur le serveur, toujours sur la connexion système (qemu:///system) : la liste est celle de virt-manager.",
       "Une VM est désignée par son UUID dans chaque commande : un nom avec espaces, accents ou apostrophes ne pose aucun problème.",
       "L'écran (VNC) s'affiche dans Zenytt à travers un tunnel SSH ; le port VNC n'a jamais besoin d'être ouvert.",
+      "Il peut aussi s'ouvrir dans le client du système (remote-viewer de virt-viewer), toujours par le tunnel : c'est le moyen d'afficher une VM en SPICE. Le tiroir Machines (à droite) laisse choisir le moyen par défaut ; l'autre reste au clic droit.",
+      "Les VM se rangent dans des dossiers (menu ⋯ d'une VM, ou glisser-déposer), propres à ce PC : la page et le tiroir Machines les affichent pareil.",
       "La console série s'ouvre dans un onglet terminal (Ctrl+] pour en sortir).",
       "Forcer l'arrêt et supprimer demandent toujours confirmation ; chaque action est inscrite dans le journal.",
     ],
     requirements: [
       "libvirt et QEMU installés sur le serveur",
       "ton utilisateur dans le groupe libvirt, ou le mot de passe sudo renseigné dans le profil",
-      "pour l'écran : un affichage VNC (le SPICE ne s'affiche pas dans Zenytt)",
+      "pour l'écran : un affichage VNC (le SPICE s'ouvre dans remote-viewer, à installer sur ce PC)",
     ],
     steps: [
       { text: "Installer libvirt (Debian, Ubuntu)", command: "sudo apt install qemu-system-x86 libvirt-daemon-system libvirt-clients virtinst" },
@@ -295,7 +297,7 @@ export const GUIDES: Guide[] = [
     ],
     troubleshooting: [
       { symptom: "« failed to connect to the hypervisor »", answer: "Ton utilisateur n'a pas accès à libvirt : ajoute-le au groupe libvirt (puis reconnecte-toi), ou renseigne le mot de passe sudo dans le profil du serveur.", command: "id -nG" },
-      { symptom: "« Écran » refuse d'ouvrir une VM en SPICE", answer: "Zenytt n'affiche que le VNC : utilise la console série, ou passe l'affichage de la VM en VNC avec la commande ci-dessus." },
+      { symptom: "« Écran » refuse d'ouvrir une VM en SPICE", answer: "Zenytt n'affiche que le VNC : choisis « Écran dans le client du système » (remote-viewer, virt-manager.org/download), utilise la console série, ou passe l'affichage de la VM en VNC avec la commande ci-dessus." },
       { symptom: "Aucune adresse IP n'est affichée", answer: "La VM n'a pas de bail DHCP du réseau de libvirt (pont vers le LAN, IP fixe). Installe l'agent invité dans la VM pour que libvirt la connaisse :", command: "sudo apt install qemu-guest-agent" },
     ],
     notes: ["La création de VM, les instantanés et le stockage arrivent dans les prochaines versions."],

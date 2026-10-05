@@ -1,9 +1,10 @@
 // Fiche d'une machine virtuelle : système, adresses, disques, réseau et écran.
 import { useEffect, useState } from "react";
-import { Lock } from "lucide-react";
+import { ExternalLink, Lock } from "lucide-react";
 import { api, errorMessage, type Vm, type VmDetail } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
 import { formatMemory, stateLabel } from "../../lib/vm";
+import { openVmScreen } from "../../lib/rdp";
 import { Badge, Button, Drawer, ErrorState, KeyValue, Loading, MenuButton, Section, type MenuItem } from "../../components/ui";
 
 export default function VmDrawer({ serverId, vm, onClose, menu }: { serverId: string; vm: Vm; onClose: () => void; menu: (vm: Vm) => MenuItem[] }) {
@@ -116,7 +117,20 @@ export default function VmDrawer({ serverId, vm, onClose, menu }: { serverId: st
                 )}
               </div>
             )}
-            {g?.kind === "spice" && <p className="text-xs text-muted">SPICE : Zenytt n'affiche que le VNC. Utilise la console série, ou passe l'affichage de la VM en VNC.</p>}
+            {g?.kind === "spice" && (
+              <div className="flex flex-col items-start gap-2 text-[13px]">
+                <span>
+                  SPICE {g.port ? <span className="font-mono">{`${g.listen}:${g.port}`}</span> : "(port attribué au démarrage)"}
+                  {g.password ? " · protégé par mot de passe" : ""}
+                </span>
+                <p className="text-xs text-muted">Zenytt n'affiche pas le SPICE lui-même : l'écran s'ouvre dans remote-viewer (virt-viewer), par un tunnel SSH.</p>
+                {vm.state === "running" && g.port && (
+                  <Button size="sm" icon={<ExternalLink size={12} />} onClick={() => void openVmScreen(serverId, vm, "external")}>
+                    Ouvrir dans le client du système
+                  </Button>
+                )}
+              </div>
+            )}
             {g?.kind === "none" && <p className="text-xs text-muted">Pas d'écran : utilise la console série.</p>}
             {g?.kind === "vncSocket" && <p className="text-xs text-muted">VNC sur un socket Unix : Zenytt ne peut pas l'afficher. Utilise la console série, ou fais écouter l'écran sur 127.0.0.1.</p>}
           </Section>
