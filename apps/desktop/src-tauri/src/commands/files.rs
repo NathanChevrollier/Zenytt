@@ -288,13 +288,13 @@ pub async fn fs_chmod(
 pub struct Transfers(Mutex<HashMap<u64, Arc<AtomicBool>>>);
 
 impl Transfers {
-    fn start(&self, id: u64) -> Arc<AtomicBool> {
+    pub(crate) fn start(&self, id: u64) -> Arc<AtomicBool> {
         let flag = Arc::new(AtomicBool::new(false));
         self.0.lock().unwrap().insert(id, flag.clone());
         flag
     }
 
-    fn finish(&self, id: u64) {
+    pub(crate) fn finish(&self, id: u64) {
         self.0.lock().unwrap().remove(&id);
     }
 }

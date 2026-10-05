@@ -1,7 +1,7 @@
 // Sauvegardes restic : tableau de bord (dernière exécution, prochaine, destination, frise des
 // 30 derniers jours), explorateur de sauvegardes avec restauration, configuration en assistant.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { DatabaseBackup, HardDrive, Play, Settings2, ShieldCheck } from "lucide-react";
+import { DatabaseBackup, Download, HardDrive, Play, Settings2, ShieldCheck } from "lucide-react";
 import { api, errorMessage, type BackupOverview, type Snapshot } from "../lib/api";
 import { useApp, useAppPick } from "../lib/store";
 import { Badge, Button, Card, EmptyState, ErrorState, Loading, MenuButton, Modal, ResultBanner, Section, StatTile } from "../components/ui";
@@ -10,6 +10,7 @@ import ServerGate, { ServerContext } from "../components/ServerGate";
 import { useCachedState } from "../lib/cache";
 import { useAutoRefresh } from "../lib/refresh";
 import SnapshotsBrowser from "./backups/Snapshots";
+import LocalCopy from "./backups/LocalCopy";
 
 const ConfigWizard = lazy(() => import("./backups/ConfigWizard"));
 
@@ -31,6 +32,8 @@ function Backups({ serverId }: { serverId: string }) {
   const [checking, setChecking] = useState(false);
   const [checkOut, setCheckOut] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [installLog, setInstallLog] = useState<{ ok: boolean; text: string } | null>(null);
 
   const loadSnapshots = useCallback(async () => {
     try {
@@ -70,6 +73,25 @@ function Backups({ serverId }: { serverId: string }) {
       setChecking(false);
     }
   };
+
+  /** Installe restic tout de suite (sans attendre la première configuration). */
+  const installRestic = async () => {
+    setInstalling(true);
+    try {
+      const log = await api.backupInstallRestic(serverId);
+      setInstallLog({ ok: true, text: log });
+      await load();
+    } catch (e) {
+      setInstallLog({ ok: false, text: errorMessage(e) });
+    } finally {
+      setInstalling(false);
+    }
+  };
+  const installButton = !data?.status.restic && (
+    <Button icon={<Download size={13} />} loading={installing} onClick={() => void installRestic()}>
+      Installer restic
+    </Button>
+  );
 
   const runNow = () =>
     openTab(serverId, { title: "Sauvegarde", command: "sudo /etc/zenytt-backup/run.sh; echo; echo 'Tu peux fermer cet onglet puis actualiser la page Sauvegardes.'; exec \"$SHELL\" -l" });
@@ -117,9 +139,12 @@ function Backups({ serverId }: { serverId: string }) {
               </Button>
             </>
           ) : (
-            <Button variant="primary" icon={<Settings2 size={14} />} onClick={() => setEditing(true)}>
-              Configurer les sauvegardes
-            </Button>
+            <>
+              {installButton}
+              <Button variant="primary" icon={<Settings2 size={14} />} onClick={() => setEditing(true)}>
+                Configurer les sauvegardes
+              </Button>
+            </>
           )
         }
       >
@@ -134,7 +159,7 @@ function Backups({ serverId }: { serverId: string }) {
                 </Button>
               }
             >
-              Une sauvegarde quotidienne, chiffrée, avec rétention automatique. Zenytt installe restic si besoin et planifie tout.
+              Une sauvegarde quotidienne, chiffrée, avec rétention automatique. Zenytt installe restic si besoin (ou tout de suite avec « Installer restic ») et planifie tout.
             </EmptyState>
             <div className="grid gap-3 sm:grid-cols-3">
               <StatTile label="Bases de données détectées" value={data.databases.length} hint={data.databases.map((d) => d.container).join(", ") || "aucune"} />
@@ -175,9 +200,11 @@ function Backups({ serverId }: { serverId: string }) {
                   </Button>
                 }
               >
-                Elles protègent des erreurs (fichier supprimé, mise à jour ratée), pas de la perte du serveur.
+                Elles protègent des erreurs (fichier supprimé, mise à jour ratée), pas de la perte du serveur. Une copie sur ce PC ou un stockage S3 en garde un double ailleurs.
               </ResultBanner>
             )}
+
+            {config.destination.kind === "local" && <LocalCopy serverId={serverId} />}
 
             <Section title="30 derniers jours" description={`Rétention : ${config.keepDaily} j · ${config.keepWeekly} sem. · ${config.keepMonthly} mois`}>
               <Timeline snaps={snaps} onPick={(id) => setSelected(id)} />
@@ -208,6 +235,14 @@ function Backups({ serverId }: { serverId: string }) {
             }}
           />
         </Suspense>
+      )}
+      {installLog && (
+        <Modal title={installLog.ok ? "restic est installé" : "Installation de restic impossible"} width="max-w-2xl" onClose={() => setInstallLog(null)} footer={<Button variant="primary" onClick={() => setInstallLog(null)}>Fermer</Button>}>
+          <div className="flex flex-col gap-3 text-sm">
+            {!installLog.ok && <p className="text-muted">Le paquet de la distribution puis le binaire officiel (vérifié par son empreinte SHA-256) ont été essayés. Détail :</p>}
+            <pre className="max-h-[50vh] overflow-auto rounded-md bg-bg p-3 font-mono text-xs whitespace-pre-wrap select-text">{installLog.text}</pre>
+          </div>
+        </Modal>
       )}
       {(checking || checkOut !== null) && (
         <Modal title="Vérification du dépôt" width="max-w-3xl" onClose={() => (setCheckOut(null), setChecking(false))}>

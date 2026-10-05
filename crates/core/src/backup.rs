@@ -205,12 +205,69 @@ fn systemd_units(schedule: &str) -> (String, String) {
     (service, timer)
 }
 
+/// Installe restic s'il manque : paquet de la distribution (apt, dnf/yum avec EPEL, apk, pacman,
+/// zypper), sinon binaire officiel publié sur GitHub, vérifié avec le fichier SHA256SUMS de la même
+/// version avant d'être installé dans /usr/local/bin. Affiche la version installée à la fin.
+pub const INSTALL_RESTIC: &str = r#"set -u
+if command -v restic >/dev/null 2>&1; then echo "restic déjà installé"; restic version; exit 0; fi
+pkg() {
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y restic || { apt-get update && apt-get install -y restic; }
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y restic || { dnf install -y epel-release && dnf install -y restic; }
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y restic || { yum install -y epel-release && yum install -y restic; }
+  elif command -v apk >/dev/null 2>&1; then apk add --no-cache restic
+  elif command -v pacman >/dev/null 2>&1; then pacman -Sy --noconfirm restic
+  elif command -v zypper >/dev/null 2>&1; then zypper -n install restic
+  else return 1; fi
+}
+echo "Installation de restic avec le gestionnaire de paquets…"
+pkg >/tmp/zenytt-restic-pkg.log 2>&1 || true
+if ! command -v restic >/dev/null 2>&1; then
+  tail -n 5 /tmp/zenytt-restic-pkg.log 2>/dev/null
+  echo "Paquet indisponible : téléchargement du binaire officiel (github.com/restic/restic)…"
+  case "$(uname -m)" in
+    x86_64|amd64) A=amd64 ;; aarch64|arm64) A=arm64 ;; armv7l|armv6l) A=arm ;; i386|i686) A=386 ;;
+    *) echo "architecture non prise en charge : $(uname -m)" >&2; exit 1 ;;
+  esac
+  if command -v curl >/dev/null 2>&1; then get() { curl -fsSL "$1" -o "$2"; }; last() { curl -fsSLI -o /dev/null -w '%{url_effective}' "$1"; }
+  elif command -v wget >/dev/null 2>&1; then get() { wget -qO "$2" "$1"; }; last() { wget -S --spider "$1" 2>&1 | sed -n 's/^ *[Ll]ocation: *//p' | tail -n1; }
+  else echo "ni curl ni wget : impossible de télécharger restic" >&2; exit 1; fi
+  command -v bunzip2 >/dev/null 2>&1 || { echo "bunzip2 manquant (paquet bzip2)" >&2; exit 1; }
+  V=$(last https://github.com/restic/restic/releases/latest | sed -n 's#.*/tag/v\([0-9][0-9.]*\).*#\1#p')
+  [ -n "$V" ] || { echo "version de restic introuvable sur GitHub" >&2; exit 1; }
+  T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+  F="restic_${V}_linux_${A}.bz2"
+  get "https://github.com/restic/restic/releases/download/v$V/$F" "$T/$F" || { echo "téléchargement de $F impossible" >&2; exit 1; }
+  get "https://github.com/restic/restic/releases/download/v$V/SHA256SUMS" "$T/SHA256SUMS" || { echo "SHA256SUMS introuvable" >&2; exit 1; }
+  (cd "$T" && grep " $F\$" SHA256SUMS | sha256sum -c -) || { echo "empreinte SHA-256 invalide : binaire refusé" >&2; exit 1; }
+  bunzip2 "$T/$F" && install -m 755 "$T/restic_${V}_linux_${A}" /usr/local/bin/restic
+fi
+command -v restic >/dev/null 2>&1 || { echo "restic n'a pas pu être installé" >&2; exit 1; }
+restic version
+"#;
+
+/// Installe restic (bouton « Installer restic », et avant la première configuration).
+pub async fn install_restic(conn: &Connection, sudo: Option<&str>) -> Result<String> {
+    crate::ssh::long(async move {
+        let out = conn.exec_sudo(&format!("sh -c {}", shell_quote(INSTALL_RESTIC)), sudo, None).await?;
+        if !out.success() {
+            return Err(Error::Remote(format!("installation de restic impossible :\n{}{}", out.stdout, out.stderr).trim().to_string()));
+        }
+        Ok(out.stdout)
+    })
+    .await
+}
+
 /// Installe restic si besoin puis écrit la configuration, les secrets, le script et la planification.
 pub async fn install(conn: &Connection, sudo: Option<&str>, cfg: &BackupConfig, env: &str) -> Result<String> {
     crate::ssh::long(async move {
         cfg.validate()?;
-        let prep = "set -e\ncommand -v restic >/dev/null || { if command -v apt-get >/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get install -y restic; elif command -v dnf >/dev/null; then dnf install -y restic; else echo 'installe restic manuellement' >&2; exit 1; fi; }\ninstall -d -m 700 /etc/zenytt-backup\ninstall -d -m 755 /var/lib/zenytt-backup\ninstall -d -m 700 /var/lib/zenytt-backup/restore";
-        let mut log = conn.exec_sudo(prep, sudo, None).await?.into_result()?.stdout;
+        let mut log = install_restic(conn, sudo).await?;
+        let prep = "set -e\ninstall -d -m 700 /etc/zenytt-backup\ninstall -d -m 755 /var/lib/zenytt-backup\ninstall -d -m 700 /var/lib/zenytt-backup/restore";
+        log.push_str(&conn.exec_sudo(prep, sudo, None).await?.into_result()?.stdout);
         if let Destination::Local { path } = &cfg.destination {
             conn.exec_sudo(&format!("install -d -m 700 {}", shell_quote(path)), sudo, None).await?.into_result()?;
         }
@@ -420,9 +477,173 @@ pub async fn check(conn: &Connection, sudo: Option<&str>) -> Result<String> {
     .await
 }
 
+// ---------- Copie du dépôt sur le PC ----------
+//
+// Un dépôt restic n'est fait que de fichiers immuables nommés par leur empreinte (sauf `config`,
+// écrit une fois) : le recopier fichier par fichier, sans jamais réécrire un fichier déjà présent,
+// donne une copie identique et toujours chiffrée. restic, sur le PC, la relit telle quelle.
+
+/// Fichier du dépôt : chemin relatif (« data/ab/ab12… ») et taille.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoFile {
+    pub path: String,
+    pub size: u64,
+}
+
+/// Dossiers d'un dépôt restic, dans l'ordre où les copier : les données avant les index qui les
+/// référencent, les instantanés en dernier. Une copie interrompue reste ainsi cohérente.
+const REPO_DIRS: [&str; 4] = ["data", "index", "keys", "snapshots"];
+
+/// Chemin relatif acceptable dans un dépôt : `config`, ou `<dossier>/[xx/]<empreinte hexadécimale>`.
+pub fn valid_repo_path(p: &str) -> bool {
+    if p == "config" {
+        return true;
+    }
+    let parts: Vec<&str> = p.split('/').collect();
+    let hex = |s: &str| (2..=128).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit());
+    match parts.as_slice() {
+        ["data", sub, id] => sub.len() == 2 && hex(sub) && hex(id),
+        [dir, id] => REPO_DIRS.contains(dir) && *dir != "data" && hex(id),
+        _ => false,
+    }
+}
+
+fn repo_rank(path: &str) -> usize {
+    REPO_DIRS.iter().position(|d| path.starts_with(&format!("{d}/"))).unwrap_or(REPO_DIRS.len())
+}
+
+/// Lit `find`/`stat` (« taille chemin ») ; les verrous (`locks/`) et tout ce qui n'est pas du dépôt sont ignorés.
+pub fn parse_repo_listing(text: &str) -> Vec<RepoFile> {
+    text.lines()
+        .filter_map(|l| {
+            let (size, path) = l.trim().split_once(' ')?;
+            let path = path.trim().trim_start_matches("./");
+            let size = size.parse().ok()?;
+            valid_repo_path(path).then(|| RepoFile { path: path.to_string(), size })
+        })
+        .collect()
+}
+
+/// Fichiers du dépôt local (dossier du serveur) de la configuration.
+pub async fn repo_files(conn: &Connection, sudo: Option<&str>, repo: &str) -> Result<Vec<RepoFile>> {
+    if !safe_path(repo) {
+        return Err(Error::Other("dossier du dépôt invalide".into()));
+    }
+    // `-printf` est propre à GNU find ; busybox (Alpine) passe par stat.
+    let script = format!(
+        "cd {} || exit 1; [ -f config ] || {{ echo 'pas de dépôt restic dans ce dossier' >&2; exit 1; }}; find . -type f ! -path './locks/*' -printf '%s %P\\n' 2>/dev/null || find . -type f ! -path './locks/*' -exec stat -c '%s %n' {{}} +",
+        shell_quote(repo)
+    );
+    let out = crate::ssh::long(conn.exec_sudo(&format!("sh -c {}", shell_quote(&script)), sudo, None)).await?.into_result()?;
+    Ok(parse_repo_listing(&out.stdout))
+}
+
+/// Ce qu'il faut faire pour que la copie locale rejoigne le dépôt du serveur.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MirrorPlan {
+    /// À télécharger, dans un ordre sûr (voir [`REPO_DIRS`]).
+    pub download: Vec<RepoFile>,
+    /// Fichiers locaux disparus du serveur (sauvegardes oubliées par la rétention) : instantanés
+    /// d'abord, données en dernier.
+    pub delete: Vec<String>,
+}
+
+pub fn plan_mirror(remote: &[RepoFile], local: &[RepoFile]) -> MirrorPlan {
+    let have: std::collections::HashMap<&str, u64> = local.iter().map(|f| (f.path.as_str(), f.size)).collect();
+    let wanted: std::collections::HashSet<&str> = remote.iter().map(|f| f.path.as_str()).collect();
+    let mut download: Vec<RepoFile> = remote.iter().filter(|f| have.get(f.path.as_str()) != Some(&f.size)).cloned().collect();
+    download.sort_by_key(|f| repo_rank(&f.path));
+    let mut delete: Vec<String> = local.iter().filter(|f| !wanted.contains(f.path.as_str())).map(|f| f.path.clone()).collect();
+    delete.sort_by_key(|p| std::cmp::Reverse(repo_rank(p)));
+    MirrorPlan { download, delete }
+}
+
+/// Télécharge un fichier lisible par root seulement, en flux (`cat` via sudo), dans `local`
+/// (écrit d'abord en `.part`, puis renommé). `on_bytes` reçoit les octets reçus ; `false` arrête.
+pub async fn fetch_file_sudo(
+    conn: &Connection,
+    sudo: Option<&str>,
+    remote: &str,
+    expected: u64,
+    local: &std::path::Path,
+    on_bytes: &(dyn Fn(u64) -> bool + Send + Sync),
+) -> Result<()> {
+    use russh::ChannelMsg;
+    use tokio::io::AsyncWriteExt;
+    if !safe_path(remote) {
+        return Err(Error::Other("chemin distant invalide".into()));
+    }
+    let io = |e: std::io::Error| Error::Other(format!("{} : {e}", local.display()));
+    if let Some(dir) = local.parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(io)?;
+    }
+    let part = local.with_extension("part");
+    let mut file = tokio::fs::File::create(&part).await.map_err(io)?;
+    let mut channel = conn.open_exec_sudo(&format!("cat -- {}", shell_quote(remote)), sudo).await?;
+    let (mut done, mut code, mut stderr) = (0u64, None, Vec::new());
+    while let Some(msg) = channel.wait().await {
+        match msg {
+            ChannelMsg::Data { data } => {
+                file.write_all(&data).await.map_err(io)?;
+                done += data.len() as u64;
+                if !on_bytes(data.len() as u64) {
+                    let _ = channel.close().await;
+                    drop(file);
+                    let _ = tokio::fs::remove_file(&part).await;
+                    return Err(crate::sftp::cancelled());
+                }
+            }
+            ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(&data),
+            ChannelMsg::ExitStatus { exit_status } => code = Some(exit_status),
+            ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+    file.flush().await.map_err(io)?;
+    drop(file);
+    if code != Some(0) || done != expected {
+        let _ = tokio::fs::remove_file(&part).await;
+        let why = String::from_utf8_lossy(&stderr).trim().to_string();
+        return Err(Error::Remote(format!(
+            "{remote} : copie incomplète ({done} octets sur {expected}){}",
+            if why.is_empty() { String::new() } else { format!(" — {why}") }
+        )));
+    }
+    tokio::fs::rename(&part, local).await.map_err(io)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repo_paths() {
+        assert!(valid_repo_path("config"));
+        assert!(valid_repo_path("data/ab/ab12cd34ef"));
+        assert!(valid_repo_path("snapshots/0123abcd"));
+        assert!(!valid_repo_path("locks/0123abcd"), "verrous ignorés");
+        assert!(!valid_repo_path("data/../../etc/passwd"));
+        assert!(!valid_repo_path("data/abc/ab12"), "sous-dossier de 2 caractères");
+        assert!(!valid_repo_path("index/notes.txt"));
+        let l = parse_repo_listing("155 config\n4096 ./data/ab/ab12cd\n12 locks/ffee\n7 snapshots/0a0b\n9 weird name\n");
+        assert_eq!(l.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), vec!["config", "data/ab/ab12cd", "snapshots/0a0b"]);
+    }
+
+    #[test]
+    fn mirror_plan_order() {
+        let f = |p: &str, s: u64| RepoFile { path: p.into(), size: s };
+        let remote = vec![f("snapshots/aa01", 1), f("config", 2), f("index/bb02", 3), f("data/cc/cc03", 4), f("keys/dd04", 5)];
+        let local = vec![f("config", 2), f("data/cc/cc03", 1), f("snapshots/ee05", 1), f("data/ff/ff06", 9)];
+        let plan = plan_mirror(&remote, &local);
+        // Données (taille différente : copie interrompue) d'abord, instantanés en dernier.
+        assert_eq!(
+            plan.download.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            vec!["data/cc/cc03", "index/bb02", "keys/dd04", "snapshots/aa01"]
+        );
+        assert_eq!(plan.delete, vec!["snapshots/ee05", "data/ff/ff06"]);
+        assert_eq!(plan_mirror(&remote, &remote), MirrorPlan::default());
+    }
 
     #[test]
     fn validation() {

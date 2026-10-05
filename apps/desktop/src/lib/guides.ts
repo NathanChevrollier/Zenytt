@@ -430,12 +430,13 @@ export const GUIDES: Guide[] = [
     topic: "exploitation",
     section: "backups",
     summary: "Sauvegardes chiffrées et dédupliquées : dumps de bases cohérents, volumes Docker, dossiers ; vers le serveur ou un stockage S3.",
-    automatic: "Zenytt installe restic et prépare /etc/zenytt-backup à la première configuration, puis pose la planification.",
+    automatic: "Zenytt installe restic (bouton « Installer restic », ou à la première configuration) et prépare /etc/zenytt-backup, puis pose la planification. Sans paquet dans ta distribution, il prend le programme officiel sur GitHub, vérifié par son empreinte.",
     how: [
       "Les bases sont exportées avant la copie, sans arrêter le service, pour obtenir un dump cohérent.",
       "La déduplication fait qu'une sauvegarde quotidienne ne coûte que ce qui a changé.",
       "La restauration propose de télécharger, de remettre en place, ou de réimporter une base.",
       "La vérification relit le dépôt et signale une corruption avant que tu en aies besoin.",
+      "Dépôt gardé sur le serveur : « Copie sur ce PC » en télécharge un double, puis seulement les nouveautés à chaque mise à jour. Il reste chiffré ; restic l'ouvre avec le même mot de passe (restic -r <dossier> snapshots).",
     ],
     requirements: ["restic", "un mot de passe sudo dans le profil", "de la place disque, ou un accès S3"],
     steps: [
@@ -449,7 +450,7 @@ export const GUIDES: Guide[] = [
     ],
     notes: [
       "La phrase de passe du dépôt est indispensable pour restaurer : Zenytt la garde dans le coffre-fort, garde-la aussi ailleurs.",
-      "Une sauvegarde sur le même disque que les données ne protège pas d'une panne de disque : prévoir S3 ou un autre serveur.",
+      "Une sauvegarde sur le même disque que les données ne protège pas d'une panne de disque : prévoir S3, un autre serveur, ou la copie sur ce PC.",
     ],
   },
 

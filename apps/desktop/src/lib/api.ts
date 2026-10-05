@@ -890,6 +890,23 @@ export interface McpConfig {
   claudeCode: string;
 }
 
+/** Avancement de la copie du dépôt de sauvegarde sur le PC. */
+export interface MirrorProgress {
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  bytesTotal: number;
+}
+
+export interface MirrorResult {
+  dir: string;
+  downloaded: number;
+  deleted: number;
+  bytes: number;
+  files: number;
+  totalBytes: number;
+}
+
 function progressChannel(onProgress: (p: Progress) => void) {
   const channel = new Channel<Progress>();
   channel.onmessage = onProgress;
@@ -1645,6 +1662,12 @@ export const api = {
   backupImportDump: (serverId: string, dump: string, database: DbSource) => invoke<string>("backup_import_dump", { serverId, dump, database }),
   backupStageDownload: (serverId: string, restored: string) => invoke<string>("backup_stage_download", { serverId, restored }),
   backupCheck: (serverId: string) => invoke<string>("backup_check", { serverId }),
+  backupInstallRestic: (serverId: string) => invoke<string>("backup_install_restic", { serverId }),
+  backupMirror: (serverId: string, dir: string, transferId: number, onProgress: (p: MirrorProgress) => void) => {
+    const channel = new Channel<MirrorProgress>();
+    channel.onmessage = onProgress;
+    return invoke<MirrorResult>("backup_mirror", { serverId, dir, transferId, onProgress: channel });
+  },
 
   deploySuggestHost: (serverId: string, project: string) => invoke<string | null>("deploy_suggest_host", { serverId, project }),
   deployPrepare: (serverId: string, project: ComposeProject, checkHost: string | null) =>

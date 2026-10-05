@@ -94,6 +94,18 @@ export interface Settings {
   confirmQuit: boolean;
   /** Onglets masqués dans la barre latérale (toujours joignables par la palette). */
   hiddenSections?: SectionId[];
+  /** Copie sur ce PC du dépôt de sauvegarde de chaque serveur (par identifiant de serveur). */
+  backupMirrors?: Record<string, BackupMirror>;
+  /** Écran d'une VM ouvert depuis le tiroir Machines : dans Zenytt, ou dans le client du système. */
+  vmScreen?: "internal" | "external";
+}
+
+/** Copie locale d'un dépôt restic : dossier, et résultat de la dernière mise à jour. */
+export interface BackupMirror {
+  dir: string;
+  lastAt?: number;
+  files?: number;
+  totalBytes?: number;
 }
 
 export type CloseAction = "ask" | "tray" | "quit";
