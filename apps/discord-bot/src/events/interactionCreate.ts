@@ -6,6 +6,8 @@ import {
   Client,
   EmbedBuilder,
   Events,
+  FileUploadBuilder,
+  LabelBuilder,
   ModalBuilder,
   PermissionFlagsBits,
   TextInputBuilder,
@@ -21,6 +23,7 @@ import { formatIssueBody, formatIssueTitle } from "../services/feedbackService.j
 import { GitHubService } from "../services/githubService.js";
 import { RoadmapService } from "../services/roadmapService.js";
 import { Cooldown } from "../services/cooldown.js";
+import { collectImages, MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES } from "../services/attachmentService.js";
 import type { FeedbackInput, FeedbackKind } from "../types/feedback.js";
 
 /** Un retour par minute et cinq par heure au plus, par personne. */
@@ -34,11 +37,11 @@ export function createInteractionHandler(client: Client, env: Env, github: GitHu
         return;
       }
       if (interaction.isButton() && (interaction.customId === "feedback:bug" || interaction.customId === "feedback:suggestion")) {
-        await showFeedbackModal(interaction.customId.slice("feedback:".length) as FeedbackKind, interaction);
+        await showFeedbackModal(interaction.customId.slice("feedback:".length) as FeedbackKind, interaction, env);
         return;
       }
       if (interaction.isModalSubmit() && interaction.customId.startsWith("feedback-modal:")) {
-        await handleFeedbackModal(interaction.customId.slice("feedback-modal:".length) as FeedbackKind, interaction, github);
+        await handleFeedbackModal(interaction.customId.slice("feedback-modal:".length) as FeedbackKind, interaction, github, env);
       }
     } catch (error) {
       console.error("[interaction] traitement échoué:", error);
@@ -59,10 +62,10 @@ async function handleCommand(
       await setupFeedback(interaction, env);
       break;
     case "bug":
-      await showFeedbackModal("bug", interaction);
+      await showFeedbackModal("bug", interaction, env);
       break;
     case "suggestion":
-      await showFeedbackModal("suggestion", interaction);
+      await showFeedbackModal("suggestion", interaction, env);
       break;
     case "sync-roadmap":
       await syncRoadmap(interaction, roadmap);
@@ -125,12 +128,11 @@ async function setupFeedback(interaction: ChatInputCommandInteraction, env: Env)
   console.info(`[feedback] panneaux publiés par ${interaction.user.tag}`);
 }
 
-async function showFeedbackModal(kind: FeedbackKind, interaction: ButtonInteraction | ChatInputCommandInteraction): Promise<void> {
+async function showFeedbackModal(kind: FeedbackKind, interaction: ButtonInteraction | ChatInputCommandInteraction, env: Env): Promise<void> {
   const isBug = kind === "bug";
   const modal = new ModalBuilder().setCustomId(`feedback-modal:${kind}`).setTitle(isBug ? "Signaler un bug" : "Proposer une amélioration");
   const title = new TextInputBuilder()
     .setCustomId("title")
-    .setLabel("Titre court")
     .setPlaceholder(isBug ? "Ex: Le terminal se ferme au démarrage" : "Ex: Ajouter le support de ...")
     .setStyle(TextInputStyle.Short)
     .setMinLength(3)
@@ -138,7 +140,6 @@ async function showFeedbackModal(kind: FeedbackKind, interaction: ButtonInteract
     .setRequired(true);
   const description = new TextInputBuilder()
     .setCustomId("description")
-    .setLabel(isBug ? "Description et étapes pour reproduire" : "Description de l'amélioration")
     .setPlaceholder(isBug ? "Étapes, résultat attendu, résultat obtenu..." : "Explique le besoin et le résultat attendu...")
     .setStyle(TextInputStyle.Paragraph)
     .setMinLength(10)
@@ -146,25 +147,33 @@ async function showFeedbackModal(kind: FeedbackKind, interaction: ButtonInteract
     .setRequired(true);
   const context = new TextInputBuilder()
     .setCustomId("context")
-    .setLabel("Contexte optionnel")
     .setPlaceholder("Version Zenytt, OS, priorité, logs utiles...")
     .setStyle(TextInputStyle.Paragraph)
     .setMaxLength(1000)
     .setRequired(false);
 
-  modal.addComponents(
-    new ActionRowBuilder<TextInputBuilder>().addComponents(title),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(description),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(context),
+  modal.addLabelComponents(
+    new LabelBuilder().setLabel("Titre court").setTextInputComponent(title),
+    new LabelBuilder().setLabel(isBug ? "Description et étapes pour reproduire" : "Description de l'amélioration").setTextInputComponent(description),
+    new LabelBuilder().setLabel("Contexte optionnel").setTextInputComponent(context),
   );
+  // Captures : seulement si une branche d'archivage est configurée (sinon elles seraient perdues).
+  if (env.GITHUB_ATTACHMENTS_BRANCH) {
+    modal.addLabelComponents(
+      new LabelBuilder()
+        .setLabel(isBug ? "Captures d'écran (optionnel)" : "Images (optionnel)")
+        .setDescription(`${MAX_ATTACHMENTS} images max (PNG, JPEG, GIF, WebP). Publiées dans l'issue GitHub publique : masque mots de passe, IP et e-mails.`)
+        .setFileUploadComponent(new FileUploadBuilder().setCustomId("images").setMinValues(0).setMaxValues(MAX_ATTACHMENTS).setRequired(false)),
+    );
+  }
   await interaction.showModal(modal);
 }
 
-async function handleFeedbackModal(kind: FeedbackKind, interaction: ModalSubmitInteraction, github: GitHubService): Promise<void> {
+async function handleFeedbackModal(kind: FeedbackKind, interaction: ModalSubmitInteraction, github: GitHubService, env: Env): Promise<void> {
   const title = interaction.fields.getTextInputValue("title").trim();
   const description = interaction.fields.getTextInputValue("description").trim();
   const context = interaction.fields.getTextInputValue("context").trim();
-  const input: FeedbackInput = { kind, title, description, ...(context ? { context } : {}) };
+  const uploaded = env.GITHUB_ATTACHMENTS_BRANCH ? [...(interaction.fields.getUploadedFiles("images")?.values() ?? [])] : [];
 
   if (title.length < 3 || description.length < 10) {
     await interaction.reply({ content: "Le titre doit contenir au moins 3 caractères et la description au moins 10 caractères.", ephemeral: true });
@@ -178,6 +187,31 @@ async function handleFeedbackModal(kind: FeedbackKind, interaction: ModalSubmitI
   }
 
   await interaction.deferReply({ ephemeral: true });
+
+  // Captures : téléchargées, vérifiées, nettoyées de leurs métadonnées puis archivées dans le dépôt.
+  // Un échec ne bloque pas le retour : il est signalé, et l'issue le mentionne.
+  const { images, rejected } = await collectImages(
+    uploaded.map((a) => ({ name: a.name, url: a.url, size: a.size, contentType: a.contentType })),
+  );
+  let urls: string[] = [];
+  let archiveFailed = false;
+  if (images.length) {
+    try {
+      urls = await github.storeAttachments(env.GITHUB_ATTACHMENTS_BRANCH, images, formatIssueTitle({ kind, title }));
+    } catch (error) {
+      archiveFailed = true;
+      console.error("[feedback] archivage des captures échoué:", error);
+    }
+  }
+  const input: FeedbackInput = {
+    kind,
+    title,
+    description,
+    ...(context ? { context } : {}),
+    ...(urls.length ? { images: urls } : {}),
+    ...(uploaded.length - urls.length > 0 ? { missingImages: uploaded.length - urls.length } : {}),
+  };
+
   const issue = await github.createIssue(
     formatIssueTitle(input),
     formatIssueBody(input, {
@@ -188,8 +222,13 @@ async function handleFeedbackModal(kind: FeedbackKind, interaction: ModalSubmitI
     kind,
   );
   feedbackCooldown.record(interaction.user.id);
-  await interaction.editReply(`Merci pour ton retour. L'issue GitHub **#${issue.number}** a été créée : ${issue.url}`);
-  console.info(`[feedback] issue #${issue.number} créée par ${interaction.user.tag} (${kind})`);
+  const notes = [
+    urls.length ? `${urls.length} capture(s) jointe(s), sans leurs métadonnées (position GPS, appareil…).` : "",
+    ...rejected.map((r) => `Image « ${r.name} » non jointe : ${r.reason}.`),
+    archiveFailed ? "Les captures n'ont pas pu être archivées : ajoute-les en commentaire de l'issue si besoin." : "",
+  ].filter(Boolean);
+  await interaction.editReply([`Merci pour ton retour. L'issue GitHub **#${issue.number}** a été créée : ${issue.url}`, ...notes].join("\n"));
+  console.info(`[feedback] issue #${issue.number} créée par ${interaction.user.tag} (${kind}, ${urls.length} capture(s))`);
 }
 
 async function showStatus(interaction: ChatInputCommandInteraction, client: Client, github: GitHubService): Promise<void> {
@@ -209,7 +248,7 @@ function buildPanel(kind: FeedbackKind): EmbedBuilder {
         ? "Tu as rencontré un problème dans Zenytt ? Décris-le avec les étapes pour le reproduire afin que l'équipe puisse l'analyser."
         : "Une idée pour rendre Zenytt plus utile ? Partage-la avec la communauté et l'équipe de développement.",
     )
-    .setFooter({ text: "Un formulaire Discord ouvrira les champs nécessaires." });
+    .setFooter({ text: `Un formulaire Discord ouvrira les champs nécessaires (captures d'écran jusqu'à ${MAX_ATTACHMENT_BYTES / 1024 / 1024} Mo acceptées).` });
 }
 
 function buildButtonRow(kind: FeedbackKind): ActionRowBuilder<ButtonBuilder> {

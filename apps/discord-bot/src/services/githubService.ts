@@ -47,6 +47,42 @@ export class GitHubService {
     }
   }
 
+  /**
+   * Archive des images dans une branche dédiée du dépôt (créée au premier usage, sans lien avec le
+   * code) et renvoie leurs adresses, affichables dans une issue. Les liens de Discord expirent au
+   * bout de quelques heures : une issue doit garder ses captures.
+   */
+  public async storeAttachments(branch: string, files: { path: string; content: Uint8Array }[], label: string): Promise<string[]> {
+    const git = this.client.rest.git;
+    const repo = { owner: this.owner, repo: this.repo };
+    // Deux envois simultanés : le second échoue à avancer la branche (non fast-forward) et réessaie.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        let parent: string | undefined;
+        let baseTree: string | undefined;
+        try {
+          parent = (await git.getRef({ ...repo, ref: `heads/${branch}` })).data.object.sha;
+          baseTree = (await git.getCommit({ ...repo, commit_sha: parent })).data.tree.sha;
+        } catch (error) {
+          if (getStatus(error) !== 404) throw error;
+        }
+        const blobs = await Promise.all(files.map((f) => git.createBlob({ ...repo, content: Buffer.from(f.content).toString("base64"), encoding: "base64" })));
+        const tree = await git.createTree({
+          ...repo,
+          ...(baseTree ? { base_tree: baseTree } : {}),
+          tree: files.map((f, i) => ({ path: f.path, mode: "100644" as const, type: "blob" as const, sha: blobs[i]!.data.sha })),
+        });
+        const commit = await git.createCommit({ ...repo, message: `chore(feedback): ${files.length} capture(s) — ${label}`, tree: tree.data.sha, parents: parent ? [parent] : [] });
+        if (parent) await git.updateRef({ ...repo, ref: `heads/${branch}`, sha: commit.data.sha, force: false });
+        else await git.createRef({ ...repo, ref: `refs/heads/${branch}`, sha: commit.data.sha });
+        return files.map((f) => `https://raw.githubusercontent.com/${this.owner}/${this.repo}/${encodeURIComponent(branch)}/${f.path}`);
+      } catch (error) {
+        if (attempt < 2 && getStatus(error) === 422) continue;
+        throw new Error(`GitHub n'a pas pu archiver les captures: ${describeGitHubError(error)}`);
+      }
+    }
+  }
+
   public async getLatestRelease(): Promise<{ tagName: string; url: string } | null> {
     try {
       const response = await this.client.rest.repos.getLatestRelease({ owner: this.owner, repo: this.repo });

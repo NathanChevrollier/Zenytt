@@ -25,6 +25,12 @@ const envSchema = z.object({
   ROADMAP_CHANNEL_ID: optionalDiscordId,
   ROADMAP_MESSAGE_ID: optionalDiscordId,
   ROADMAP_SYNC_INTERVAL_MINUTES: z.coerce.number().int().min(5).max(1440).default(15),
+  // Branche du dépôt où sont archivées les captures jointes aux retours (vide : captures désactivées).
+  GITHUB_ATTACHMENTS_BRANCH: z
+    .string()
+    .regex(/^$|^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/, "GITHUB_ATTACHMENTS_BRANCH doit être un nom de branche valide")
+    .refine((v) => !v.includes("..") && !v.endsWith(".lock") && !v.endsWith("/"), "GITHUB_ATTACHMENTS_BRANCH doit être un nom de branche valide")
+    .default("feedback-attachments"),
   GITHUB_BUG_LABEL: z.string().min(1).max(50).default("bug"),
   GITHUB_SUGGESTION_LABEL: z.string().min(1).max(50).default("enhancement"),
   GITHUB_BRAINSTORMING_LABEL: z.string().min(1).max(50).default("brainstorming"),

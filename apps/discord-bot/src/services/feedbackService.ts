@@ -27,6 +27,7 @@ export function formatIssueBody(input: FeedbackInput, author: DiscordAuthor): st
     "",
     context,
     "",
+    ...imagesSection(input),
     "## Auteur Discord",
     "",
     `- Utilisateur : ${neutralize(author.username)}`,
@@ -36,4 +37,18 @@ export function formatIssueBody(input: FeedbackInput, author: DiscordAuthor): st
     "",
     "_Issue créée automatiquement par Zenytt Community Bot._",
   ].join("\n");
+}
+
+/** Captures jointes : adresses produites par le bot (archive du dépôt), donc sûres à afficher. */
+function imagesSection(input: FeedbackInput): string[] {
+  const images = input.images ?? [];
+  const missing = input.missingImages ?? 0;
+  if (!images.length && !missing) return [];
+  return [
+    "## Captures",
+    "",
+    ...images.map((url, i) => `![Capture ${i + 1}](${url})`),
+    ...(missing ? [`_${missing} capture(s) envoyée(s) mais non jointe(s) (format, taille ou archivage refusé)._`] : []),
+    "",
+  ];
 }

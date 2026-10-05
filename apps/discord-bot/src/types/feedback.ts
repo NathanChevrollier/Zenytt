@@ -5,6 +5,10 @@ export interface FeedbackInput {
   title: string;
   description: string;
   context?: string;
+  /** Adresses des captures archivées (générées par le bot, jamais saisies). */
+  images?: string[];
+  /** Captures envoyées mais refusées ou non archivées. */
+  missingImages?: number;
 }
 
 export interface DiscordAuthor {

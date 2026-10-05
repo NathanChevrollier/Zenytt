@@ -7,6 +7,7 @@ Bot Discord autonome pour centraliser les suggestions et signalements de bugs de
 - `/setup-feedback` publie deux panneaux interactifs dans les salons configurés par ID.
 - Les boutons et `/bug` / `/suggestion` ouvrent des modales Discord natives.
 - Chaque retour crée une issue GitHub avec le label `bug` ou `enhancement`, le lien vers l'auteur Discord et son avatar.
+- Le formulaire accepte jusqu'à 4 captures d'écran ou photos (PNG, JPEG, GIF, WebP, 8 Mo chacune). Le bot vérifie leur contenu réel, **retire leurs métadonnées** (position GPS, appareil, auteur, commentaires ; l'orientation des photos est gardée), puis les archive dans une branche dédiée du dépôt (`feedback-attachments`, sans lien avec le code) : les liens de Discord expirent, ceux de l'issue restent. Une image refusée n'empêche pas l'envoi du retour ; la personne est prévenue.
 - La roadmap maintient un seul embed à jour avec les cartes du GitHub Project v2 (issues et brouillons), rangées selon leur statut, en français ou en anglais (« Todo », « En cours », « En test », « Terminé »…).
 - `/zenytt status` affiche le ping, l'uptime et la dernière release GitHub de Zenytt.
 - `/sync-roadmap` force la mise à jour du panneau et `/roadmap` affiche les chantiers en privé.
@@ -18,7 +19,8 @@ Bot Discord autonome pour centraliser les suggestions et signalements de bugs de
 - Un bot créé dans le [Discord Developer Portal](https://discord.com/developers/applications).
 - Les intents privilégiés ne sont pas nécessaires: le bot utilise seulement `Guilds`.
 - Le bot doit avoir les permissions `View Channels`, `Send Messages`, `Embed Links` et `Use Application Commands` dans les deux salons.
-- Le token GitHub doit être un fine-grained token limité au dépôt Zenytt avec `Issues: Read and write` et `Projects: Read` si le mode Project v2 est utilisé.
+- Le token GitHub doit être un fine-grained token limité au dépôt Zenytt avec `Issues: Read and write`, `Contents: Read and write` (archivage des captures dans leur branche ; inutile si `GITHUB_ATTACHMENTS_BRANCH` est vide) et `Projects: Read` si le mode Project v2 est utilisé.
+- Les fichiers dans les formulaires (composant « File Upload ») demandent un client Discord à jour ; discord.js 14.22 ou plus côté bot.
 
 ## Configuration locale
 
@@ -50,7 +52,7 @@ personnel. Le bot retrouve seul le projet dont le titre contient le nom du dép�
 | `DISCORD_TOKEN`                 | Token privé du bot Discord; ne jamais le publier.      |
 | `CLIENT_ID`                     | Application ID du bot Discord.                         |
 | `GUILD_ID`                      | ID du serveur où enregistrer les commandes.            |
-| `GITHUB_TOKEN`                  | Fine-grained token GitHub limité aux issues du dépôt.  |
+| `GITHUB_TOKEN`                  | Fine-grained token GitHub limité au dépôt (issues, contenu pour les captures). |
 | `GITHUB_OWNER`                  | Propriétaire du dépôt, par défaut `NathanChevrollier`. |
 | `GITHUB_REPO`                   | Nom du dépôt, par défaut `Zenytt`.                       |
 | `GITHUB_PROJECT_TOKEN`          | Jeton classic `read:project` pour lire le Project v2.  |
@@ -60,6 +62,7 @@ personnel. Le bot retrouve seul le projet dont le titre contient le nom du dép�
 | `ROADMAP_CHANNEL_ID`            | ID Discord du salon où publier le panneau roadmap.     |
 | `ROADMAP_MESSAGE_ID`            | ID facultatif du message à éditer directement.         |
 | `ROADMAP_SYNC_INTERVAL_MINUTES` | Intervalle de synchronisation, 15 minutes par défaut.  |
+| `GITHUB_ATTACHMENTS_BRANCH`     | Branche des captures, `feedback-attachments` par défaut ; vide pour désactiver les captures. |
 | `GITHUB_BUG_LABEL`              | Label appliqué aux bugs.                               |
 | `GITHUB_SUGGESTION_LABEL`       | Label appliqué aux suggestions.                        |
 | `GITHUB_BRAINSTORMING_LABEL`    | Label des idées, `brainstorming` par défaut.           |
@@ -92,4 +95,6 @@ src/
 
 ## Limites et exploitation
 
-Les issues sont créées immédiatement après la soumission de la modale. Une erreur GitHub est renvoyée à l'utilisateur sans exposer le token; une nouvelle soumission peut être faite après correction. Le bot est stateless: aucun contenu n'est conservé localement et aucun stockage n'est requis pour un redémarrage.
+Les issues sont créées immédiatement après la soumission de la modale. Une erreur GitHub est renvoyée à l'utilisateur sans exposer le token; une nouvelle soumission peut être faite après correction. Le bot est stateless: aucun contenu n'est conservé localement et aucun stockage n'est requis pour un redémarrage. Les captures ne transitent qu'en mémoire, le temps d'être nettoyées et envoyées à GitHub.
+
+Pour retirer une capture publiée (demande d'une personne, information sensible oubliée), supprime son fichier dans la branche `feedback-attachments` **et** réécris l'historique de cette branche (elle ne contient que des captures : `git checkout --orphan` puis un nouveau commit sans le fichier, et `git push --force`), car un fichier supprimé reste accessible dans les anciens commits.
