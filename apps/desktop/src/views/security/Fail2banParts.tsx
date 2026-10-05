@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { create } from "zustand";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Ban, Globe2, RotateCcw, ShieldCheck, Tag } from "lucide-react";
-import { countryName, dayLabel, groupByDay, recidivists, timeOf, unbanKinds, type Recidivist, type UnbanKind } from "../../lib/fail2ban";
+import { banEnd, banEndText, countryName, dayLabel, groupByDay, recidivists, timeOf, unbanKinds, type Recidivist, type UnbanKind } from "../../lib/fail2ban";
 import { api, errorMessage, MANUAL_JAILS, type BanDuration, type F2bEvent, type F2bJail, type GeoInfo, type GeoStatus, type IpLabel } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
 import { Badge, Button, Drawer, Field, Input, Loading, Modal, Select, Textarea } from "../../components/ui";
@@ -35,6 +35,13 @@ export const useIpInfo = create<IpInfoState>((set, get) => ({
 }));
 
 export const jailLabel = (name: string) => MANUAL_JAILS[name] ?? name;
+
+/** « sshd, jusqu'au 6 oct. 2026, 13:13 » ; « Bannissement manuel · définitif » (sans répéter « définitif »). */
+export function banSummary(jail: F2bJail, ip: string): string {
+  const end = banEnd(jail, ip);
+  const text = banEndText(end);
+  return text && end !== null ? `${jailLabel(jail.name)}, ${text}` : jail.name in MANUAL_JAILS || !text ? jailLabel(jail.name) : `${jailLabel(jail.name)}, ${text}`;
+}
 
 /** Pays, opérateur et étiquette d'une IP, en ligne. */
 export function IpTags({ ip, recidivist }: { ip: string; compact?: boolean; recidivist?: Recidivist }) {
@@ -135,6 +142,8 @@ export function BanDialog({ serverId, jails, ip: initialIp, initialDuration = "w
   const [label, setLabel] = useState(useIpInfo.getState().labels[initialIp ?? ""]?.label ?? "");
   const [busy, setBusy] = useState(false);
   const valid = /^[0-9a-fA-F:.]+$/.test(ip.trim()) && (duration !== "jail" || !!jail);
+  // Bannissements en cours de l'adresse : une durée 7 j / 30 j / définitive les remplace.
+  const current = jails.filter((j) => j.banned.includes(ip.trim())).map((j) => banSummary(j, ip.trim()));
 
   const submit = async () => {
     setBusy(true);
@@ -186,6 +195,11 @@ export function BanDialog({ serverId, jails, ip: initialIp, initialDuration = "w
             </Field>
           )}
         </div>
+        {current.length > 0 && (
+          <p className="rounded-md border border-border bg-subtle px-3 py-2 text-xs text-muted">
+            Actuellement bannie : {current.join(", ")}.{duration !== "jail" && " La nouvelle durée remplace ce bannissement : l'adresse ne restera listée qu'une fois."}
+          </p>
+        )}
         <Field label="Étiquette (facultatif)" hint="Pour la reconnaître plus tard : « scanner », « bot WordPress »…">
           <Input value={label} onChange={(e) => setLabel(e.target.value)} maxLength={60} />
         </Field>
@@ -301,7 +315,7 @@ export function IpDrawer({ serverId, ip, jails, onClose, onChanged, onUnban }: {
   return (
     <Drawer
       title={<span className="font-mono">{ip}</span>}
-      subtitle={bannedIn.length ? `Bannie : ${bannedIn.map(jailLabel).join(", ")}` : "Non bannie actuellement"}
+      subtitle={bannedIn.length ? `Bannie : ${jails.filter((j) => bannedIn.includes(j.name)).map((j) => banSummary(j, ip)).join(" · ")}` : "Non bannie actuellement"}
       width={560}
       onClose={onClose}
       actions={

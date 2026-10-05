@@ -535,6 +535,8 @@ const ACTIONS: Record<string, string> = {
   "nginx.write": "Configuration nginx appliquée",
   "fail2ban.unban": "IP débloquée",
   "fail2ban.ignoreip": "Exceptions fail2ban modifiées",
+  "fail2ban.ban": "IP bannie",
+  "fail2ban.settings": "Réglages fail2ban modifiés",
   "firewall.allow": "Port ouvert dans le pare-feu",
   "firewall.delete": "Règle de pare-feu supprimée",
   "ssh.key.add": "Clé SSH ajoutée",

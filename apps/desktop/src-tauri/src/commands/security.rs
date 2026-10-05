@@ -197,6 +197,35 @@ pub async fn f2b_ban(
     track(&audit, &store, &server_id, "fail2ban.ban", &detail, r)
 }
 
+/// Réglages fail2ban écrits par Zenytt, et jails que fail2ban connaît.
+#[tauri::command]
+pub async fn f2b_settings(
+    store: State<'_, Store>,
+    sessions: State<'_, Sessions>,
+    server_id: String,
+) -> Result<fail2ban::SettingsView, String> {
+    let (conn, sudo) = admin(&store, &sessions, &server_id).await?;
+    fail2ban::settings(&conn, sudo.as_deref()).await.map_err(err)
+}
+
+/// Règles par défaut, jails activées et durées : testées par fail2ban avant d'être appliquées.
+#[tauri::command]
+pub async fn f2b_settings_set(
+    audit: State<'_, AuditLog>,
+    store: State<'_, Store>,
+    sessions: State<'_, Sessions>,
+    server_id: String,
+    settings: fail2ban::Settings,
+) -> Result<String, String> {
+    let detail = serde_json::to_string(&settings).unwrap_or_default();
+    let r = async {
+        let (conn, sudo) = admin(&store, &sessions, &server_id).await?;
+        fail2ban::set_settings(&conn, sudo.as_deref(), &settings).await.map_err(err)
+    }
+    .await;
+    track(&audit, &store, &server_id, "fail2ban.settings", &detail, r)
+}
+
 /// Derniers événements du journal de fail2ban (tous, ou ceux d'une adresse).
 #[tauri::command]
 pub async fn f2b_events(

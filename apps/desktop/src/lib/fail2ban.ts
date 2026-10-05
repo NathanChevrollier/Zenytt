@@ -1,4 +1,52 @@
-import type { F2bEvent } from "./api";
+import type { F2bEvent, F2bJail } from "./api";
+
+/**
+ * Durée fail2ban lisible : « 30 jours », « 1 jour 12 h », « 10 min », « définitif » (durée
+ * négative). Les unités nulles sont omises (« 30 j 0 h » se lisait mal).
+ */
+export function banDurationText(secs: number): string {
+  if (secs < 0) return "définitif";
+  if (secs < 60) return `${Math.max(0, Math.round(secs))} s`;
+  const units: [number, string, string][] = [
+    [7 * 86400, "semaine", "semaines"],
+    [86400, "jour", "jours"],
+    [3600, "h", "h"],
+    [60, "min", "min"],
+  ];
+  // Semaines seulement pour un compte rond (1 semaine, 5 semaines) : « 30 jours » se lit mieux que « 4 semaines 2 jours ».
+  const parts: string[] = [];
+  let rest = Math.round(secs);
+  for (const [size, one, many] of units) {
+    if (size === 7 * 86400 && rest % size !== 0) continue;
+    const n = Math.floor(rest / size);
+    if (!n) continue;
+    parts.push(`${n} ${n > 1 ? many : one}`);
+    rest -= n * size;
+    if (parts.length === 2) break;
+  }
+  return parts.join(" ");
+}
+
+/** Fin du bannissement en cours d'une adresse : date, `null` si définitif, `undefined` si inconnue (fail2ban < 0.11). */
+export function banEnd(jail: F2bJail, ip: string): string | null | undefined {
+  const b = jail.bans?.find((x) => x.ip === ip);
+  if (b) return b.until;
+  return jail.bantime < 0 ? null : undefined;
+}
+
+/** « jusqu'au 4 nov. 2026, 13:13 » / « définitif » ; `time` est l'heure du serveur. */
+export function banEndText(until: string | null | undefined): string | null {
+  if (until === undefined) return null;
+  if (until === null) return "définitif";
+  const d = new Date(until.replace(" ", "T"));
+  if (Number.isNaN(d.getTime())) return `jusqu'au ${until}`;
+  return `jusqu'au ${d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" })}, ${until.slice(11, 16)}`;
+}
+
+/** Adresses bannies au moins une fois, sans doublon (une même IP peut être dans plusieurs jails). */
+export function bannedAddresses(jails: F2bJail[]): Set<string> {
+  return new Set(jails.flatMap((j) => j.banned));
+}
 
 /** Adresse déjà bannie qui recommence. */
 export interface Recidivist {
@@ -76,6 +124,8 @@ export function unbanKinds(events: F2bEvent[], bantimes: Record<string, number>)
     const bantime = bantimes[e.jail];
     let kind: UnbanKind = "unknown";
     if (restored) kind = "restart";
+    // Un bannissement définitif n'expire jamais : s'il est levé, c'est à la main.
+    else if (bantime !== undefined && bantime < 0) kind = "manual";
     else if (banned !== undefined && bantime !== undefined && bantime > 0 && !Number.isNaN(t)) {
       // Deux minutes de marge : fail2ban lève les bannissements à sa prochaine vérification.
       kind = t - banned >= bantime * 1000 - 120_000 ? "expired" : "manual";

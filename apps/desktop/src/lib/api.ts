@@ -230,6 +230,29 @@ export interface F2bJail {
   findtime: number;
   maxretry: number;
   ignoreip: string[];
+  /** Début et fin des bannissements en cours (heures du serveur ; `until` null : définitif). */
+  bans: { ip: string; since: string; until: string | null }[];
+}
+
+/** Règles fail2ban ; `null` : réglage du serveur, non écrit par Zenytt. */
+export interface F2bRules {
+  /** Secondes ; -1 : définitif. */
+  bantime: number | null;
+  findtime: number | null;
+  maxretry: number | null;
+}
+
+export interface F2bJailSettings extends F2bRules {
+  name: string;
+  enabled: boolean | null;
+}
+
+/** Réglages écrits par Zenytt dans jail.d/zz-zenytt-settings.local. */
+export interface F2bSettings {
+  defaults: F2bRules;
+  increment: boolean;
+  incrementMax: number | null;
+  jails: F2bJailSettings[];
 }
 
 /** Durée d'un bannissement manuel : celle du jail, ou une jail Zenytt (7 j, 30 j, définitif). */
@@ -1251,6 +1274,8 @@ export const api = {
   f2bUnban: (serverId: string, jail: string, ip: string) => invoke<void>("f2b_unban", { serverId, jail, ip }),
   f2bSetIgnore: (serverId: string, addresses: string[]) => invoke<string>("f2b_set_ignore", { serverId, addresses }),
   f2bBan: (serverId: string, jail: string, ip: string, duration: BanDuration) => invoke<void>("f2b_ban", { serverId, jail, ip, duration }),
+  f2bSettings: (serverId: string) => invoke<{ settings: F2bSettings; available: string[] }>("f2b_settings", { serverId }),
+  f2bSettingsSet: (serverId: string, settings: F2bSettings) => invoke<string>("f2b_settings_set", { serverId, settings }),
   f2bEvents: (serverId: string, ip: string | null, limit = 500) => invoke<F2bEvent[]>("f2b_events", { serverId, ip, limit }),
   f2bAttempts: (serverId: string, ip: string) => invoke<string[]>("f2b_attempts", { serverId, ip }),
   ipLabels: () => invoke<IpLabel[]>("ip_labels_list"),

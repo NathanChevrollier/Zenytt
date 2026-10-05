@@ -1,20 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Ban, FileSearch, Plus, RefreshCw, ShieldCheck, ShieldOff, Tag, Trash2, TriangleAlert, UserCheck } from "lucide-react";
-import { groupByDay, recidivists, timeOf, unbanKinds } from "../../lib/fail2ban";
-import { api, errorMessage, formatDuration, MANUAL_JAILS, type BanDuration, type F2bEvent, type F2bState } from "../../lib/api";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Ban, FileSearch, Plus, RefreshCw, Settings2, ShieldCheck, ShieldOff, Tag, Trash2, TriangleAlert, UserCheck } from "lucide-react";
+import { banDurationText, banEnd, banEndText, bannedAddresses, groupByDay, recidivists, timeOf, unbanKinds } from "../../lib/fail2ban";
+import { api, errorMessage, MANUAL_JAILS, type BanDuration, type F2bEvent, type F2bState } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
 import { Badge, Button, EmptyState, ErrorState, IconButton, Input, Loading, MenuButton, Segmented, type MenuItem } from "../../components/ui";
 import { useCachedState } from "../../lib/cache";
 import { BanDialog, EventKind, GeoBanner, IpDrawer, IpTags, jailLabel, LabelDialog, useIpInfo } from "./Fail2banParts";
 
+const Fail2banSettings = lazy(() => import("./Fail2banSettings"));
+
 /** Adresses que Zenytt ajoute toujours à la liste (boucle locale). */
 const LOOPBACK = ["127.0.0.1/8", "127.0.0.0/8", "::1"];
 
-function duration(secs: number): string {
-  return secs < 0 ? "définitif" : formatDuration(secs);
-}
-
 type EventFilter = "all" | "ban" | "found";
+
+/** Fin d'un bannissement : date (heure du serveur), ou « définitif ». */
+function BanEnd({ until }: { until: string | null | undefined }) {
+  const text = banEndText(until);
+  if (!text) return null;
+  return until === null ? <Badge tone="danger">définitif</Badge> : <span className="shrink-0 text-xs text-muted" title="Heure du serveur">{text}</span>;
+}
 
 export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: string; onCount?: (n: number) => void; onAudit?: () => void }) {
   const { ask, notify } = useAppPick("ask", "notify");
@@ -29,6 +34,7 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
   const [detail, setDetail] = useState<string | null>(null);
   const [banning, setBanning] = useState<{ ip?: string; duration?: BanDuration } | null>(null);
   const [labeling, setLabeling] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { loadLabels, loadGeo } = useIpInfo();
   const geoInstalled = useIpInfo((s) => !!s.geoStatus?.installed);
 
@@ -58,7 +64,8 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
     if (geoInstalled && allIps.length) void loadGeo(allIps).catch(() => {});
   }, [geoInstalled, allIps, loadGeo]);
 
-  const bannedCount = state ? state.jails.reduce((n, j) => n + j.currentlyBanned, 0) : null;
+  // Adresses distinctes : une même IP peut figurer dans plusieurs jails.
+  const bannedCount = state ? bannedAddresses(state.jails).size : null;
   useEffect(() => {
     if (bannedCount != null) onCount?.(bannedCount);
   }, [bannedCount, onCount]);
@@ -67,7 +74,12 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
   const ignored = [...new Set(state?.jails.flatMap((j) => j.ignoreip) ?? [])].filter((a) => !LOOPBACK.includes(a));
 
   // Adresses déjà bannies qui recommencent : signalées partout, et en tête de page.
-  const recid = useMemo(() => recidivists(events ?? []), [events]);
+  // Celles déjà bannies à la main (7 j, 30 j, définitif) ne peuvent plus recommencer : on ne les
+  // propose plus (elles restaient affichées avec leurs boutons « 30 jours » et « Définitivement »).
+  const recid = useMemo(() => {
+    const manual = new Set(state?.jails.filter((j) => j.name in MANUAL_JAILS).flatMap((j) => j.banned) ?? []);
+    return recidivists(events ?? []).filter((r) => !manual.has(r.ip));
+  }, [events, state]);
   const recidOf = useMemo(() => new Map(recid.map((r) => [r.ip, r])), [recid]);
 
   // Les plus insistants : tentatives repérées par IP dans le journal récent.
@@ -112,10 +124,10 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
     { label: "Détails et tentatives", icon: <FileSearch size={14} />, onClick: () => setDetail(ip) },
     { label: "Étiqueter…", icon: <Tag size={14} />, onClick: () => setLabeling(ip) },
     "separator",
-    { heading: "Bannir plus longtemps" },
-    { label: "7 jours", icon: <Ban size={14} />, onClick: () => setBanning({ ip, duration: "week" }) },
-    { label: "30 jours", icon: <Ban size={14} />, onClick: () => setBanning({ ip, duration: "month" }) },
-    { label: "Définitivement", icon: <Ban size={14} />, danger: true, onClick: () => setBanning({ ip, duration: "forever" }) },
+    { heading: jail in MANUAL_JAILS ? "Changer la durée" : "Bannir plus longtemps" },
+    ...(jail !== "zenytt-7j" ? [{ label: "7 jours", icon: <Ban size={14} />, onClick: () => setBanning({ ip, duration: "week" }) }] : []),
+    ...(jail !== "zenytt-30j" ? [{ label: "30 jours", icon: <Ban size={14} />, onClick: () => setBanning({ ip, duration: "month" }) }] : []),
+    ...(jail !== "zenytt-definitif" ? [{ label: "Définitivement", icon: <Ban size={14} />, danger: true, onClick: () => setBanning({ ip, duration: "forever" }) }] : []),
     "separator",
     { label: "Débloquer", icon: <ShieldCheck size={14} />, onClick: () => void unban(jail, ip) },
   ];
@@ -144,7 +156,10 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
     <div className="flex flex-col gap-5">
       <div className="flex items-center gap-2 text-sm text-muted">
         fail2ban {state.version} · {jails.length} jail(s) actif(s)
-        <Button size="sm" variant="danger" className="ml-auto" icon={<Ban size={13} />} onClick={() => setBanning({})}>
+        <Button size="sm" className="ml-auto" icon={<Settings2 size={13} />} onClick={() => setSettingsOpen(true)}>
+          Réglages…
+        </Button>
+        <Button size="sm" variant="danger" icon={<Ban size={13} />} onClick={() => setBanning({})}>
           Bannir une IP…
         </Button>
         <IconButton title="Actualiser" onClick={() => void load()}>
@@ -204,7 +219,7 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
             <span className="ml-auto text-xs text-muted">
               {j.name in MANUAL_JAILS
                 ? `${j.totalBanned} bannissement(s) manuel(s)`
-                : `Bannissement de ${duration(j.bantime)} après ${j.maxretry} échec(s) en ${duration(j.findtime)} · ${j.totalBanned} bannissement(s) depuis le démarrage · ${j.currentlyFailed} échec(s) en cours`}
+                : `Bannissement de ${banDurationText(j.bantime)} après ${j.maxretry} échec(s) en ${banDurationText(j.findtime)} · ${j.totalBanned} bannissement(s) depuis le démarrage · ${j.currentlyFailed} échec(s) en cours`}
             </span>
           </header>
           {j.banned.length === 0 ? (
@@ -218,6 +233,7 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
                   </button>
                   {ip === myIp && <Badge tone="danger">ton IP</Badge>}
                   <IpTags ip={ip} compact recidivist={recidOf.get(ip)} />
+                  <BanEnd until={banEnd(j, ip)} />
                   <span className="ml-auto flex shrink-0 items-center gap-1">
                     <Button size="sm" onClick={() => void unban(j.name, ip)}>
                       Débloquer
@@ -361,6 +377,11 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
       )}
       {banning && <BanDialog serverId={serverId} jails={state.jails} ip={banning.ip} initialDuration={banning.duration} onClose={() => setBanning(null)} onDone={() => void load()} />}
       {labeling && <LabelDialog ip={labeling} onClose={() => setLabeling(null)} />}
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <Fail2banSettings serverId={serverId} jails={state.jails} onClose={() => setSettingsOpen(false)} onSaved={() => void load()} />
+        </Suspense>
+      )}
     </div>
   );
 }

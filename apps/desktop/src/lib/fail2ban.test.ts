@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { countryName, dayLabel, groupByDay, recidivists, timeOf, unbanKinds } from "./fail2ban";
-import type { F2bEvent } from "./api";
+import { banDurationText, banEnd, banEndText, bannedAddresses, countryName, dayLabel, groupByDay, recidivists, timeOf, unbanKinds } from "./fail2ban";
+import type { F2bEvent, F2bJail } from "./api";
 
 const ev = (time: string, kind: F2bEvent["kind"], ip: string): F2bEvent => ({ time, jail: "sshd", kind, ip });
 
@@ -72,6 +72,44 @@ describe("nature d'un débannissement", () => {
     expect(kinds.get(5)).toBe("expired");
     expect(kinds.get(7)).toBe("manual");
     expect(kinds.get(8)).toBe("unknown");
+  });
+});
+
+describe("bannissements longs (ticket #27)", () => {
+  const jail = (name: string, bantime: number, banned: string[], bans: F2bJail["bans"] = []): F2bJail => ({
+    name, bantime, banned, bans, currentlyFailed: 0, totalFailed: 0, currentlyBanned: banned.length, totalBanned: banned.length, findtime: 600, maxretry: 3, ignoreip: [],
+  });
+
+  it("écrit les durées sans unités nulles", () => {
+    expect(banDurationText(30 * 86400)).toBe("30 jours");
+    expect(banDurationText(7 * 86400)).toBe("1 semaine");
+    expect(banDurationText(86400)).toBe("1 jour");
+    expect(banDurationText(36 * 3600)).toBe("1 jour 12 h");
+    expect(banDurationText(600)).toBe("10 min");
+    expect(banDurationText(-1)).toBe("définitif");
+  });
+
+  it("donne la fin d'un bannissement, ou définitif", () => {
+    const month = jail("zenytt-30j", 2592000, ["203.0.113.30"], [{ ip: "203.0.113.30", since: "2026-10-05 13:13:42", until: "2026-11-04 13:13:42" }]);
+    const forever = jail("zenytt-definitif", -1, ["203.0.113.99"], [{ ip: "203.0.113.99", since: "2026-10-05 13:13:42", until: null }]);
+    expect(banEnd(month, "203.0.113.30")).toBe("2026-11-04 13:13:42");
+    expect(banEndText(banEnd(month, "203.0.113.30"))).toBe("jusqu'au 4 nov. 2026, 13:13");
+    expect(banEnd(forever, "203.0.113.99")).toBeNull();
+    // fail2ban ancien (sans --with-time) : définitif d'après le jail, sinon inconnu.
+    expect(banEnd(jail("zenytt-definitif", -1, ["1.1.1.1"]), "1.1.1.1")).toBeNull();
+    expect(banEnd(jail("sshd", 600, ["1.1.1.1"]), "1.1.1.1")).toBeUndefined();
+  });
+
+  it("compte une adresse une seule fois, même dans deux jails", () => {
+    expect(bannedAddresses([jail("sshd", 600, ["1.1.1.1", "2.2.2.2"]), jail("zenytt-30j", 2592000, ["1.1.1.1"])]).size).toBe(2);
+  });
+
+  it("un débannissement définitif est forcément manuel", () => {
+    const log: F2bEvent[] = [
+      { time: "2026-10-01 10:00:00", jail: "zenytt-definitif", kind: "ban", ip: "9.9.9.9" },
+      { time: "2026-10-05 10:00:00", jail: "zenytt-definitif", kind: "unban", ip: "9.9.9.9" },
+    ];
+    expect(unbanKinds(log, { "zenytt-definitif": -1 }).get(1)).toBe("manual");
   });
 });
 

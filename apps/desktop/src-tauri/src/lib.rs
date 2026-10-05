@@ -359,6 +359,8 @@ pub fn run() {
             security::f2b_unban,
             security::f2b_set_ignore,
             security::f2b_ban,
+            security::f2b_settings,
+            security::f2b_settings_set,
             security::f2b_events,
             security::f2b_attempts,
             security::ip_labels_list,

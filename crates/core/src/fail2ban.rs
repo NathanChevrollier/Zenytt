@@ -22,6 +22,8 @@ for j in $(fail2ban-client status | sed -n 's/.*Jail list:[[:space:]]*//p' | tr 
   echo "@@BANTIME $(fail2ban-client get "$j" bantime 2>/dev/null)"
   echo "@@FINDTIME $(fail2ban-client get "$j" findtime 2>/dev/null)"
   echo "@@MAXRETRY $(fail2ban-client get "$j" maxretry 2>/dev/null)"
+  echo "@@BANS"
+  fail2ban-client get "$j" banip --with-time 2>/dev/null
   echo "@@IGNORE"
   fail2ban-client get "$j" ignoreip 2>/dev/null
   echo "@@END"
@@ -42,6 +44,29 @@ pub struct Jail {
     pub findtime: i64,
     pub maxretry: i64,
     pub ignoreip: Vec<String>,
+    /// Début et fin de chaque bannissement en cours (fail2ban 0.11 et plus ; vide avant).
+    pub bans: Vec<BanInfo>,
+}
+
+/// Bannissement en cours d'une adresse, heures du serveur (« 2026-10-05 13:13:42 »).
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BanInfo {
+    pub ip: String,
+    pub since: String,
+    /// `None` : définitif.
+    pub until: Option<String>,
+}
+
+/// Ligne de `fail2ban-client get <jail> banip --with-time` :
+/// `203.0.113.30 \t2026-10-05 13:13:42 + 2592000 = 2026-11-04 13:13:42` (`+ -1 = 9999-12-31 …` : définitif).
+fn parse_ban_line(line: &str) -> Option<BanInfo> {
+    let (ip, rest) = line.trim().split_once(char::is_whitespace)?;
+    ip.parse::<IpAddr>().ok()?;
+    let (since, rest) = rest.trim().split_once(" + ")?;
+    let (secs, until) = rest.split_once(" = ")?;
+    let forever = secs.trim().parse::<i64>().is_ok_and(|s| s < 0) || until.trim().starts_with("9999-");
+    Some(BanInfo { ip: ip.to_string(), since: since.trim().to_string(), until: (!forever).then(|| until.trim().to_string()) })
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -67,17 +92,24 @@ pub fn parse_state(out: &str) -> State {
     let mut state = State { installed: true, running: true, version: None, jails: vec![] };
     let mut jail: Option<Jail> = None;
     let mut in_ignore = false;
+    let mut in_bans = false;
     for line in out.lines() {
         if let Some(v) = line.strip_prefix("@@VERSION ") {
             state.version = Some(v.trim().to_string()).filter(|v| !v.is_empty());
         } else if let Some(name) = line.strip_prefix("@@JAIL ") {
             jail = Some(Jail { name: name.trim().to_string(), ..Default::default() });
-            in_ignore = false;
+            (in_ignore, in_bans) = (false, false);
+        } else if line == "@@BANS" {
+            (in_ignore, in_bans) = (false, true);
         } else if line == "@@IGNORE" {
-            in_ignore = true;
+            (in_ignore, in_bans) = (true, false);
         } else if line == "@@END" {
             state.jails.extend(jail.take());
-            in_ignore = false;
+            (in_ignore, in_bans) = (false, false);
+        } else if in_bans {
+            if let (Some(j), Some(b)) = (jail.as_mut(), parse_ban_line(line)) {
+                j.bans.push(b);
+            }
         } else if let Some(j) = jail.as_mut() {
             if let Some(v) = line.strip_prefix("@@BANTIME ") {
                 j.bantime = v.trim().parse().unwrap_or(0);
@@ -217,33 +249,46 @@ async fn write_config(conn: &Connection, sudo: Option<&str>, files: &[(&str, &st
     Ok(text.replace("@@OK", "").trim().to_string())
 }
 
+/// Jails à quitter quand une adresse passe dans le jail `target` d'un bannissement manuel : toutes
+/// celles qui la bannissent déjà. Elle n'apparaît plus qu'une fois, avec la durée choisie (sinon
+/// elle restait listée dans sshd, ou à la fois en 30 jours et en définitif).
+pub fn jails_to_leave(st: &State, target: &str, ip: &str) -> Vec<String> {
+    st.jails
+        .iter()
+        .filter(|j| j.name != target && j.banned.iter().any(|b| b == ip))
+        .map(|j| j.name.clone())
+        .filter(|j| valid_jail(j))
+        .collect()
+}
+
 /// Bannit une adresse : dans un jail existant (sa durée), ou pour 7 jours, 30 jours ou toujours
-/// (jails Zenytt, installées au premier usage).
+/// (jails Zenytt, installées au premier usage). Dans ce second cas, la nouvelle durée remplace
+/// les bannissements en cours de l'adresse.
 pub async fn ban(conn: &Connection, sudo: Option<&str>, jail: &str, ip: &str, duration: BanDuration) -> Result<()> {
     if !valid_address(ip) || ip.contains('/') {
         return Err(Error::Other("adresse IP invalide (une seule adresse, pas un réseau)".into()));
     }
-    let target = match duration.manual_jail() {
-        None => {
-            if !valid_jail(jail) {
-                return Err(Error::Other("jail invalide".into()));
-            }
-            jail.to_string()
+    let Some(target) = duration.manual_jail() else {
+        if !valid_jail(jail) {
+            return Err(Error::Other("jail invalide".into()));
         }
-        Some(j) => {
-            let st = state(conn, sudo).await?;
-            if !st.jails.iter().any(|x| x.name == j) {
-                write_config(
-                    conn,
-                    sudo,
-                    &[(MANUAL_FILTER_FILE, MANUAL_FILTER), (MANUAL_JAIL_FILE, &manual_jail_file()), (MANUAL_DB_FILE, MANUAL_DB)],
-                )
-                .await?;
-            }
-            j.to_string()
-        }
+        conn.exec_sudo(&format!("fail2ban-client set {jail} banip {ip}"), sudo, None).await?.into_result()?;
+        return Ok(());
     };
+    let st = state(conn, sudo).await?;
+    if !st.jails.iter().any(|x| x.name == target) {
+        write_config(
+            conn,
+            sudo,
+            &[(MANUAL_FILTER_FILE, MANUAL_FILTER), (MANUAL_JAIL_FILE, &manual_jail_file()), (MANUAL_DB_FILE, MANUAL_DB)],
+        )
+        .await?;
+    }
+    // Bannie d'abord dans son nouveau jail, puis retirée des autres : elle n'est jamais libre entre les deux.
     conn.exec_sudo(&format!("fail2ban-client set {target} banip {ip}"), sudo, None).await?.into_result()?;
+    for other in jails_to_leave(&st, target, ip) {
+        conn.exec_sudo(&format!("fail2ban-client set {other} unbanip {ip}"), sudo, None).await?.into_result()?;
+    }
     Ok(())
 }
 
@@ -365,9 +410,238 @@ pub async fn set_ignore(conn: &Connection, sudo: Option<&str>, addresses: &[Stri
     Ok(text.replace("@@OK", "").trim().to_string())
 }
 
+// ---------- Réglages (règles par défaut, jails, bannissement progressif) ----------
+
+/// Réglages écrits par Zenytt, lus en dernier par fail2ban : ils l'emportent sur `jail.conf`,
+/// `jail.local` et les autres fichiers de `jail.d`, sans les modifier.
+pub const SETTINGS_FILE: &str = "/etc/fail2ban/jail.d/zz-zenytt-settings.local";
+
+/// Durée maximale acceptée (10 ans) : au-delà, autant bannir définitivement.
+const MAX_SECS: i64 = 10 * 365 * 86400;
+
+/// Règles d'un jail ou par défaut ; `None` : réglage du serveur (non écrit par Zenytt).
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Rules {
+    /// Secondes ; -1 : définitif.
+    pub bantime: Option<i64>,
+    pub findtime: Option<i64>,
+    pub maxretry: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct JailSettings {
+    pub name: String,
+    /// `None` : activation laissée au serveur.
+    pub enabled: Option<bool>,
+    #[serde(flatten)]
+    pub rules: Rules,
+}
+
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    pub defaults: Rules,
+    /// Bannissement progressif (`bantime.increment`) : la durée double à chaque récidive.
+    pub increment: bool,
+    /// Plafond du bannissement progressif, en secondes.
+    pub increment_max: Option<i64>,
+    pub jails: Vec<JailSettings>,
+}
+
+impl Rules {
+    fn validate(&self, scope: &str) -> Result<()> {
+        if let Some(b) = self.bantime {
+            if b != -1 && !(1..=MAX_SECS).contains(&b) {
+                return Err(Error::Other(format!("{scope} : durée de bannissement invalide")));
+            }
+        }
+        if self.findtime.is_some_and(|f| !(1..=MAX_SECS).contains(&f)) {
+            return Err(Error::Other(format!("{scope} : fenêtre d'observation invalide")));
+        }
+        if self.maxretry.is_some_and(|m| !(1..=1000).contains(&m)) {
+            return Err(Error::Other(format!("{scope} : nombre d'échecs invalide (1 à 1000)")));
+        }
+        Ok(())
+    }
+
+    fn write(&self, s: &mut String) {
+        for (key, v) in [("bantime", self.bantime), ("findtime", self.findtime), ("maxretry", self.maxretry)] {
+            if let Some(v) = v {
+                s.push_str(&format!("{key} = {v}\n"));
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.bantime.is_none() && self.findtime.is_none() && self.maxretry.is_none()
+    }
+}
+
+impl Settings {
+    pub fn validate(&self) -> Result<()> {
+        self.defaults.validate("par défaut")?;
+        if self.increment_max.is_some_and(|m| !(60..=MAX_SECS).contains(&m)) {
+            return Err(Error::Other("plafond du bannissement progressif invalide".into()));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for j in &self.jails {
+            if !valid_jail(&j.name) || j.name.starts_with("zenytt-") {
+                return Err(Error::Other(format!("jail invalide : {}", j.name)));
+            }
+            if !seen.insert(j.name.as_str()) {
+                return Err(Error::Other(format!("jail en double : {}", j.name)));
+            }
+            j.rules.validate(&j.name)?;
+        }
+        Ok(())
+    }
+}
+
+/// Contenu du fichier de réglages.
+pub fn settings_file(s: &Settings) -> String {
+    let mut out = String::from("# Géré par Zenytt : règles fail2ban choisies dans Zenytt (Sécurité → fail2ban → Réglages).\n# Lu après jail.conf et jail.local : ces valeurs l'emportent. Modifie-les depuis Zenytt.\n");
+    if !s.defaults.is_empty() || s.increment {
+        out.push_str("\n[DEFAULT]\n");
+        s.defaults.write(&mut out);
+        if s.increment {
+            out.push_str("bantime.increment = true\n");
+            if let Some(m) = s.increment_max {
+                out.push_str(&format!("bantime.maxtime = {m}\n"));
+            }
+        }
+    }
+    for j in &s.jails {
+        if j.enabled.is_none() && j.rules.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n[{}]\n", j.name));
+        if let Some(e) = j.enabled {
+            out.push_str(&format!("enabled = {e}\n"));
+        }
+        j.rules.write(&mut out);
+    }
+    if s.increment {
+        // Les bannissements manuels gardent la durée choisie (7 j, 30 j, définitif), sans progression.
+        for (name, _) in MANUAL_JAILS {
+            out.push_str(&format!("\n[{name}]\nbantime.increment = false\n"));
+        }
+    }
+    out
+}
+
+/// Relit le fichier écrit par Zenytt (les autres fichiers ne sont pas interprétés).
+pub fn parse_settings(text: &str) -> Settings {
+    let mut s = Settings::default();
+    let mut section = String::new();
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name.to_string();
+            if section != "DEFAULT" && !section.starts_with("zenytt-") {
+                s.jails.push(JailSettings { name: section.clone(), ..Default::default() });
+            }
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else { continue };
+        let (key, value) = (key.trim(), value.trim());
+        let num = value.parse::<i64>().ok();
+        if section == "DEFAULT" {
+            match key {
+                "bantime" => s.defaults.bantime = num,
+                "findtime" => s.defaults.findtime = num,
+                "maxretry" => s.defaults.maxretry = num,
+                "bantime.increment" => s.increment = value == "true",
+                "bantime.maxtime" => s.increment_max = num,
+                _ => {}
+            }
+        } else if let Some(j) = s.jails.last_mut().filter(|j| j.name == section) {
+            match key {
+                "enabled" => j.enabled = Some(value == "true"),
+                "bantime" => j.rules.bantime = num,
+                "findtime" => j.rules.findtime = num,
+                "maxretry" => j.rules.maxretry = num,
+                _ => {}
+            }
+        }
+    }
+    s
+}
+
+/// Réglages de Zenytt et jails que fail2ban connaît (définies dans sa configuration, actives ou non).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsView {
+    pub settings: Settings,
+    pub available: Vec<String>,
+}
+
+pub async fn settings(conn: &Connection, sudo: Option<&str>) -> Result<SettingsView> {
+    let script = format!(
+        "cat {} 2>/dev/null; echo @@AVAILABLE; cat /etc/fail2ban/jail.conf /etc/fail2ban/jail.d/*.conf /etc/fail2ban/jail.local /etc/fail2ban/jail.d/*.local 2>/dev/null | sed -n 's/^\\[\\([A-Za-z0-9_.-]*\\)\\][[:space:]]*$/\\1/p' | sort -u",
+        shell_quote(SETTINGS_FILE)
+    );
+    let out = conn.exec_sudo(&format!("sh -c {}", shell_quote(&script)), sudo, None).await?.into_result()?;
+    let (file, available) = out.stdout.split_once("@@AVAILABLE").unwrap_or((&out.stdout, ""));
+    Ok(SettingsView {
+        settings: parse_settings(file),
+        available: available
+            .lines()
+            .map(str::trim)
+            .filter(|n| valid_jail(n) && !matches!(*n, "DEFAULT" | "INCLUDES") && !n.starts_with("zenytt-"))
+            .map(str::to_string)
+            .collect(),
+    })
+}
+
+/// Enregistre les réglages : configuration testée par fail2ban avant rechargement, l'ancien
+/// fichier restauré en cas de refus.
+pub async fn set_settings(conn: &Connection, sudo: Option<&str>, s: &Settings) -> Result<String> {
+    s.validate()?;
+    write_config(conn, sudo, &[(SETTINGS_FILE, &settings_file(s))]).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_round_trip() {
+        let s = Settings {
+            defaults: Rules { bantime: Some(3600), findtime: Some(600), maxretry: Some(3) },
+            increment: true,
+            increment_max: Some(30 * 86400),
+            jails: vec![
+                JailSettings { name: "sshd".into(), enabled: None, rules: Rules { maxretry: Some(2), ..Default::default() } },
+                JailSettings { name: "recidive".into(), enabled: Some(true), rules: Rules { bantime: Some(-1), ..Default::default() } },
+                JailSettings { name: "nginx-botsearch".into(), enabled: Some(false), rules: Rules::default() },
+            ],
+        };
+        assert!(s.validate().is_ok());
+        let f = settings_file(&s);
+        assert!(
+            f.contains("[DEFAULT]\nbantime = 3600\nfindtime = 600\nmaxretry = 3\nbantime.increment = true\nbantime.maxtime = 2592000\n")
+        );
+        assert!(f.contains("[recidive]\nenabled = true\nbantime = -1\n"));
+        assert!(f.contains("[zenytt-30j]\nbantime.increment = false\n"), "les bannissements manuels ne progressent pas");
+        assert_eq!(parse_settings(&f), s);
+    }
+
+    #[test]
+    fn settings_validation() {
+        let bad = |s: Settings| s.validate().is_err();
+        assert!(bad(Settings { defaults: Rules { maxretry: Some(0), ..Default::default() }, ..Default::default() }));
+        assert!(bad(Settings { defaults: Rules { bantime: Some(-5), ..Default::default() }, ..Default::default() }));
+        let jail = |name: &str| JailSettings { name: name.into(), enabled: Some(true), rules: Rules::default() };
+        assert!(bad(Settings { jails: vec![jail("sshd]\nenabled = false")], ..Default::default() }), "injection de section");
+        assert!(bad(Settings { jails: vec![jail("zenytt-30j")], ..Default::default() }), "jails de Zenytt réservées");
+        assert!(bad(Settings { jails: vec![jail("sshd"), jail("sshd")], ..Default::default() }));
+        let empty = settings_file(&Settings::default());
+        assert!(!empty.contains('['), "rien d'écrit sans réglage : {empty}");
+    }
 
     const SAMPLE: &str = "@@VERSION 1.0.2
 @@JAIL sshd
@@ -383,6 +657,8 @@ Status for the jail: sshd
 @@BANTIME 86400
 @@FINDTIME 600
 @@MAXRETRY 3
+@@BANS
+198.51.100.23 \t2026-10-05 13:13:42 + 86400 = 2026-10-06 13:13:42
 @@IGNORE
 These IP addresses/networks are ignored:
 |- 127.0.0.0/8
@@ -401,6 +677,42 @@ These IP addresses/networks are ignored:
         assert_eq!(j.banned, vec!["198.51.100.23"]);
         assert_eq!((j.bantime, j.findtime, j.maxretry), (86400, 600, 3));
         assert_eq!(j.ignoreip, vec!["127.0.0.0/8", "198.51.100.23", "::1"]);
+        assert_eq!(
+            j.bans,
+            vec![BanInfo { ip: "198.51.100.23".into(), since: "2026-10-05 13:13:42".into(), until: Some("2026-10-06 13:13:42".into()) }]
+        );
+    }
+
+    #[test]
+    fn ban_end_dates() {
+        // Sortie réelle de fail2ban 1.0.2 (testenv Debian) pour 30 jours et définitif.
+        let month = parse_ban_line("203.0.113.30 \t2026-10-05 13:13:42 + 2592000 = 2026-11-04 13:13:42").unwrap();
+        assert_eq!(month.until.as_deref(), Some("2026-11-04 13:13:42"));
+        let forever = parse_ban_line("2001:db8::7 \t2026-10-05 13:13:42 + -1 = 9999-12-31 23:59:59").unwrap();
+        assert_eq!((forever.ip.as_str(), forever.until), ("2001:db8::7", None));
+        assert!(parse_ban_line("These IP addresses are banned:").is_none());
+    }
+
+    #[test]
+    fn manual_ban_leaves_other_jails() {
+        let jail = |name: &str, banned: &[&str]| Jail {
+            name: name.into(),
+            banned: banned.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        let st = State {
+            installed: true,
+            running: true,
+            version: None,
+            jails: vec![
+                jail("sshd", &["203.0.113.9", "198.51.100.1"]),
+                jail("zenytt-30j", &["203.0.113.9"]),
+                jail("zenytt-definitif", &[]),
+            ],
+        };
+        assert_eq!(jails_to_leave(&st, "zenytt-definitif", "203.0.113.9"), vec!["sshd", "zenytt-30j"]);
+        assert_eq!(jails_to_leave(&st, "zenytt-30j", "203.0.113.9"), vec!["sshd"], "le jail cible est gardé");
+        assert!(jails_to_leave(&st, "zenytt-7j", "192.0.2.1").is_empty());
     }
 
     #[test]
