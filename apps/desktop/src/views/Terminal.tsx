@@ -391,16 +391,19 @@ export default function TerminalView({ visible }: { visible: boolean }) {
                   <GridPanes tab={t} visible={show} />
                 ) : (
                   <>
-                    <div className="min-h-0 min-w-0 flex-1" style={t.split != null ? { flex: `${splitRatios[t.key] ?? 0.5} 1 0%` } : undefined}>
-                      <TerminalPane
-                        serverId={t.serverId}
-                        command={t.command}
-                        tmux={t.tmux}
-                        paneId={`${t.key}:0`}
-                        label={labelOf(t)}
-                        visible={show}
-                        onTitle={(title) => setTitles((x) => ({ ...x, [t.key]: title }))}
-                      />
+                    <div className="flex min-h-0 min-w-0 flex-1 flex-col" style={t.split != null ? { flex: `${splitRatios[t.key] ?? 0.5} 1 0%` } : undefined}>
+                      <PaneHeader serverId={t.serverId} />
+                      <div className="min-h-0 flex-1">
+                        <TerminalPane
+                          serverId={t.serverId}
+                          command={t.command}
+                          tmux={t.tmux}
+                          paneId={`${t.key}:0`}
+                          label={labelOf(t)}
+                          visible={show}
+                          onTitle={(title) => setTitles((x) => ({ ...x, [t.key]: title }))}
+                        />
+                      </div>
                     </div>
                     {t.split != null && (
                       <>
@@ -413,7 +416,7 @@ export default function TerminalView({ visible }: { visible: boolean }) {
                           onPointerDown={startSplitResize(t.key, t.splitDir === "rows")}
                         />
                         <div className="flex min-h-0 min-w-0 flex-col" style={{ flex: `${1 - (splitRatios[t.key] ?? 0.5)} 1 0%` }}>
-                          {t.splitServerId && <PaneHeader serverId={t.splitServerId} />}
+                          <PaneHeader serverId={t.splitServerId ?? t.serverId} />
                           <div className="min-h-0 flex-1">
                             <TerminalPane serverId={t.splitServerId ?? t.serverId} tmux={t.split || undefined} paneId={`${t.key}:1`} label={labelOf(t, true)} visible={show} />
                           </div>
@@ -530,7 +533,7 @@ export default function TerminalView({ visible }: { visible: boolean }) {
   );
 }
 
-/** Nom et couleur du serveur, en tête d'un panneau (grille multi-serveurs, écran divisé sur deux hôtes). */
+/** Nom, couleur et `utilisateur@hôte` du serveur, en tête de chaque terminal (seul, divisé ou en grille). */
 function PaneHeader({ serverId }: { serverId: string }) {
   const s = useApp((st) => st.servers.find((x) => x.id === serverId));
   return (
