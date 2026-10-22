@@ -174,7 +174,7 @@ function SshPanels({ serverId, name }: { serverId: string; name: string }) {
     }
     setWaiting(true);
     try {
-      const secs = await api.systemWaitOnline(serverId);
+      const secs = await api.systemWaitOnline(serverId, info?.bootTime);
       notify(`${name} est de retour après ${formatDuration(secs)}`, "success");
       void refreshServers();
       void load();

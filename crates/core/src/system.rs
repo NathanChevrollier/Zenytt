@@ -330,6 +330,8 @@ pub fn parse_updates(text: &str) -> Result<Vec<Update>> {
             .collect()),
         "dnf" => Ok(rest
             .lines()
+            // dnf4 précède la liste d'une ligne vide.
+            .skip_while(|l| l.trim().is_empty())
             .take_while(|l| !l.trim().is_empty() && !l.starts_with("Obsolete"))
             .filter_map(|l| {
                 let mut it = l.split_whitespace();
@@ -421,7 +423,7 @@ mod tests {
         assert_eq!(u.len(), 2);
         assert_eq!(u[0], Update { name: "nginx".into(), current: "1.22.1-1".into(), candidate: "1.24.0-2".into() });
         assert_eq!(u[1].current, "2.36-9+deb12u3");
-        let dnf = "dnf\nkernel.x86_64   5.14.0-362.el9   baseos\ncurl.x86_64 7.76.1-26 baseos\n\nObsolete Packages\nold.x86_64 1 x\n";
+        let dnf = "dnf\n\nkernel.x86_64   5.14.0-362.el9   baseos\ncurl.x86_64 7.76.1-26 baseos\n\nObsolete Packages\nold.x86_64 1 x\n";
         let u = parse_updates(dnf).unwrap();
         assert_eq!(u.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["kernel.x86_64", "curl.x86_64"]);
         assert!(parse_updates("none\n").is_err());

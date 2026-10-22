@@ -8,7 +8,7 @@ use zenytt_core::provider::{self, Credentials, ProviderAction, ProviderKind, Pro
 use zenytt_core::system::{self, PowerAction, SystemInfo, Update};
 use zenytt_profiles::ServerProfile;
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, need_shell, track};
 use crate::sessions::Sessions;
 use crate::store::{secrets, AuditLog, Store};
 
@@ -18,6 +18,7 @@ fn err(e: impl ToString) -> String {
 
 #[tauri::command]
 pub async fn system_info(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String) -> Result<SystemInfo, String> {
+    need_shell(&store, &server_id)?;
     let conn = sessions.get(&store, &server_id).await?;
     system::info(&conn).await.map_err(err)
 }
@@ -62,20 +63,38 @@ pub async fn system_cancel_power(
 
 /// Après un redémarrage : coupe la session en cache puis tente de se reconnecter toutes les 5 s.
 /// Renvoie le temps écoulé en secondes. Une authentification refusée arrête l'attente.
+/// Avec `boot_time` (relevé avant l'ordre), le serveur n'est « revenu » que s'il a réellement redémarré :
+/// sinon un sshd encore debout, ou un redémarrage bloqué, passerait pour un retour réussi.
 #[tauri::command]
 pub async fn system_wait_online(
     store: State<'_, Store>,
     sessions: State<'_, Sessions>,
     server_id: String,
     timeout_secs: u64,
+    boot_time: Option<u64>,
 ) -> Result<u64, String> {
+    need_shell(&store, &server_id)?;
     let start = Instant::now();
     sessions.disconnect(&server_id).await;
     // Laisse au serveur le temps de s'arrêter vraiment (l'ordre est différé de 2 s).
     tokio::time::sleep(Duration::from_secs(8)).await;
     loop {
-        match sessions.get(&store, &server_id).await {
-            Ok(_) => return Ok(start.elapsed().as_secs()),
+        let back = match sessions.get(&store, &server_id).await {
+            Ok(conn) => match boot_time {
+                None => Ok(()),
+                Some(before) => match system::info(&conn).await {
+                    Ok(info) if info.boot_time != before => Ok(()),
+                    // Toujours l'ancien démarrage : le serveur n'est pas encore tombé.
+                    _ => {
+                        sessions.disconnect(&server_id).await;
+                        Err("pas encore redémarré".to_string())
+                    }
+                },
+            },
+            Err(e) => Err(e),
+        };
+        match back {
+            Ok(()) => return Ok(start.elapsed().as_secs()),
             Err(e) if e.starts_with("AUTH_BLOCKED") || e.starts_with("Authentification échouée") => return Err(e),
             Err(_) if start.elapsed() < Duration::from_secs(timeout_secs) => tokio::time::sleep(Duration::from_secs(5)).await,
             Err(e) => return Err(format!("le serveur n'est pas revenu après {timeout_secs} s ({e})")),
@@ -101,6 +120,7 @@ pub async fn system_set_hostname(
 
 #[tauri::command]
 pub async fn system_timezones(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String) -> Result<Vec<String>, String> {
+    need_shell(&store, &server_id)?;
     let conn = sessions.get(&store, &server_id).await?;
     system::timezones(&conn).await.map_err(err)
 }

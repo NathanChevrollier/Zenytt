@@ -1622,7 +1622,8 @@ export const api = {
   systemPower: (serverId: string, action: "reboot" | "poweroff", delayMinutes: number) => invoke<void>("system_power", { serverId, action, delayMinutes }),
   systemCancelPower: (serverId: string) => invoke<void>("system_cancel_power", { serverId }),
   /** Attend le retour du serveur après un redémarrage ; renvoie la durée en secondes. */
-  systemWaitOnline: (serverId: string, timeoutSecs = 600) => invoke<number>("system_wait_online", { serverId, timeoutSecs }),
+  systemWaitOnline: (serverId: string, bootTime?: number, timeoutSecs = 600) =>
+    invoke<number>("system_wait_online", { serverId, timeoutSecs, bootTime }),
   systemSetHostname: (serverId: string, name: string) => invoke<void>("system_set_hostname", { serverId, name }),
   systemTimezones: (serverId: string) => invoke<string[]>("system_timezones", { serverId }),
   systemSetTimezone: (serverId: string, timezone: string) => invoke<void>("system_set_timezone", { serverId, timezone }),
