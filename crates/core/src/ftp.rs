@@ -33,23 +33,42 @@ fn io_err(e: impl std::fmt::Display) -> Error {
     Error::Other(e.to_string())
 }
 
-/// Accepte tout certificat : les serveurs FTPS auto-hébergés sont presque toujours auto-signés.
-/// shortcut: pas de vérification du certificat ni d'épinglage, à ajouter si FTPS sert sur Internet public.
+/// Empreinte d'un certificat, au même format que les clés d'hôte SSH (`SHA256:` + base64 sans remplissage).
+pub fn cert_fingerprint(cert: &[u8]) -> String {
+    use base64::Engine;
+    let digest = ::ring::digest::digest(&::ring::digest::SHA256, cert);
+    format!("SHA256:{}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest.as_ref()))
+}
+
+/// Épinglage du certificat comme pour les clés d'hôte SSH : les serveurs FTPS auto-hébergés sont
+/// presque toujours auto-signés, une autorité de certification ne prouverait donc rien. Le premier
+/// contact est approuvé par l'utilisateur, ensuite tout autre certificat est refusé.
 #[derive(Debug)]
-struct AcceptAny(Arc<CryptoProvider>);
+struct Pinned {
+    provider: Arc<CryptoProvider>,
+    expected: Option<String>,
+    seen: Arc<std::sync::Mutex<Option<String>>>,
+}
 
 type TlsResult<T> = std::result::Result<T, suppaftp::tokio_rustls::rustls::Error>;
 
-impl ServerCertVerifier for AcceptAny {
+impl ServerCertVerifier for Pinned {
     fn verify_server_cert(
         &self,
-        _: &CertificateDer<'_>,
+        cert: &CertificateDer<'_>,
         _: &[CertificateDer<'_>],
         _: &ServerName<'_>,
         _: &[u8],
         _: UnixTime,
     ) -> TlsResult<ServerCertVerified> {
-        Ok(ServerCertVerified::assertion())
+        let fingerprint = cert_fingerprint(cert);
+        let trusted = self.expected.as_deref() == Some(fingerprint.as_str());
+        *self.seen.lock().unwrap() = Some(fingerprint);
+        if trusted {
+            Ok(ServerCertVerified::assertion())
+        } else {
+            Err(suppaftp::tokio_rustls::rustls::Error::General("certificat non approuvé".into()))
+        }
     }
 
     fn verify_tls12_signature(
@@ -58,7 +77,7 @@ impl ServerCertVerifier for AcceptAny {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> TlsResult<HandshakeSignatureValid> {
-        verify_tls12_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+        verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
     }
 
     fn verify_tls13_signature(
@@ -67,30 +86,43 @@ impl ServerCertVerifier for AcceptAny {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> TlsResult<HandshakeSignatureValid> {
-        verify_tls13_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+        verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
+        self.provider.signature_verification_algorithms.supported_schemes()
     }
 }
 
-/// Se connecte et s'authentifie ; avec `secure`, passe en TLS explicite (`AUTH TLS`) avant l'identification.
-pub async fn connect(host: &str, port: u16, user: &str, password: &str, secure: bool) -> Result<Ftp> {
+/// Se connecte et s'authentifie ; avec `secure`, passe en TLS explicite (`AUTH TLS`) avant l'identification
+/// et n'accepte que le certificat d'empreinte `known_fingerprint` (sinon `UnknownHostKey`/`HostKeyMismatch`).
+pub async fn connect(host: &str, port: u16, user: &str, password: &str, secure: bool, known_fingerprint: Option<&str>) -> Result<Ftp> {
     let mut ftp = tokio::time::timeout(Duration::from_secs(15), Ftp::connect((host, port)))
         .await
         .map_err(|_| Error::Connection(format!("{host}:{port} ne répond pas")))?
         .map_err(|e| Error::Connection(e.to_string()))?;
     if secure {
         let provider = Arc::new(ring::default_provider());
-        let config = ClientConfig::builder_with_provider(provider.clone())
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let verifier = Pinned { provider: provider.clone(), expected: known_fingerprint.map(str::to_string), seen: seen.clone() };
+        let config = ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
             .map_err(ftp_err)?
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(AcceptAny(provider)))
+            .with_custom_certificate_verifier(Arc::new(verifier))
             .with_no_client_auth();
         let connector = AsyncRustlsConnector::from(TlsConnector::from(Arc::new(config)));
-        ftp = ftp.into_secure(connector, host).await.map_err(|e| Error::Connection(e.to_string()))?;
+        ftp = match ftp.into_secure(connector, host).await {
+            Ok(ftp) => ftp,
+            Err(e) => {
+                let seen = seen.lock().unwrap().clone();
+                return Err(match (seen, known_fingerprint) {
+                    (Some(got), None) => Error::UnknownHostKey(got),
+                    (Some(got), Some(expected)) if got != expected => Error::HostKeyMismatch { expected: expected.into(), got },
+                    _ => Error::Connection(e.to_string()),
+                });
+            }
+        };
     }
     ftp.login(user, password).await.map_err(|e| Error::Auth(e.to_string()))?;
     ftp.set_mode(Mode::Passive);
@@ -380,6 +412,12 @@ async fn upload_file(ftp: &mut Ftp, local: &Path, remote: &str, on_progress: &(d
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cert_fingerprint_matches_ssh_format() {
+        // SHA-256 de "abc", encodé comme `ssh-keygen -l` (base64 sans `=`).
+        assert_eq!(cert_fingerprint(b"abc"), "SHA256:ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0");
+    }
 
     #[test]
     fn list_unix_format() {
