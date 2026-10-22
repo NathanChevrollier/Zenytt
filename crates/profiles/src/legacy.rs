@@ -91,16 +91,19 @@ fn migrate_config_from(old: &Path, dir: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+#[cfg(feature = "keyring")]
 fn old_entry(server_id: &str, kind: &str) -> Option<keyring::Entry> {
     keyring::Entry::new(OLD_APP_ID, &format!("{server_id}:{kind}")).ok()
 }
 
 /// Secret enregistré sous l'ancien nom, s'il existe encore.
+#[cfg(feature = "keyring")]
 pub(crate) fn secret(server_id: &str, kind: &str) -> Option<String> {
     old_entry(server_id, kind)?.get_password().ok()
 }
 
 /// Efface l'ancien secret, une fois recopié sous le nouveau nom.
+#[cfg(feature = "keyring")]
 pub(crate) fn forget_secret(server_id: &str, kind: &str) {
     if let Some(e) = old_entry(server_id, kind) {
         let _ = e.delete_credential();

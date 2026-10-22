@@ -34,10 +34,12 @@ const edit = (path, from, to) => {
 edit("Cargo.toml", /(\[workspace\.package\][^[]*?version = ")[^"]+"/, `${version}"`);
 edit("apps/desktop/package.json", /("version": ")[^"]+"/, `${version}"`);
 edit("apps/desktop/src-tauri/tauri.conf.json", /("version": ")[^"]+"/, `${version}"`);
+edit("apps/mobile/package.json", /("version": ")[^"]+"/, `${version}"`);
+edit("apps/mobile/src-tauri/tauri.conf.json", /("version": ")[^"]+"/, `${version}"`);
 // Répercute la nouvelle version des crates du workspace dans Cargo.lock.
 execFileSync("cargo", ["update", "--workspace", "--offline"], { stdio: "inherit" });
 
-git("add", "Cargo.toml", "Cargo.lock", "apps/desktop/package.json", "apps/desktop/src-tauri/tauri.conf.json");
+git("add", "Cargo.toml", "Cargo.lock", "apps/desktop/package.json", "apps/desktop/src-tauri/tauri.conf.json", "apps/mobile/package.json", "apps/mobile/src-tauri/tauri.conf.json");
 git("commit", "-m", `chore(release): ${tag}`);
 git("tag", "-a", tag, "-m", `Zenytt ${tag}`);
 execFileSync("git", ["push", "--atomic", "origin", "main", tag], { stdio: "inherit" });
