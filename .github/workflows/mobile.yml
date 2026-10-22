@@ -8,6 +8,16 @@ on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+  # Sur une PR : l'APK seulement, et seulement si le mobile ou ce qu'il embarque change.
+  pull_request:
+    paths:
+      - apps/mobile/**
+      - crates/core/**
+      - crates/profiles/**
+      - crates/protocol/**
+      - Cargo.lock
+      - pnpm-lock.yaml
+      - .github/workflows/mobile.yml
 
 permissions:
   contents: read
@@ -22,6 +32,7 @@ env:
 jobs:
   android:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -44,6 +55,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: android
+          save-if: ${{ github.event_name != 'pull_request' }}
       - run: pnpm install --frozen-lockfile
       # Icônes Android et iOS, produites à partir de l'icône du bureau.
       - run: pnpm --filter zenytt-mobile tauri icon ../desktop/app-icon.svg
@@ -62,7 +74,10 @@ jobs:
           if-no-files-found: error
 
   ios:
+    # Minutes macOS coûteuses : tags et lancement manuel uniquement.
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
+    timeout-minutes: 60
     # Le chemin iOS n'a jamais tourné sur un Mac : en attendant le premier essai, son échec ne bloque rien.
     continue-on-error: true
     steps:
