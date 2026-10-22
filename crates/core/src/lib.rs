@@ -25,6 +25,7 @@ pub mod search;
 pub mod security;
 pub mod sftp;
 pub mod shell_history;
+pub mod provider;
 pub mod ssh;
 pub mod sync_server;
 pub mod system;
