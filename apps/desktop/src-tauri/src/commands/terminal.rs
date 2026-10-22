@@ -5,7 +5,7 @@ use tauri::State;
 use zenytt_core::shell_history;
 
 use crate::sessions::{Sessions, TermEvent};
-use crate::store::Store;
+use crate::store::{secrets, Store};
 
 #[tauri::command]
 pub async fn term_open(
@@ -19,17 +19,37 @@ pub async fn term_open(
     on_event: Channel<TermEvent>,
 ) -> Result<u64, String> {
     let conn = sessions.get(&store, &server_id).await?;
+    // Mot de passe sudo enregistré : une commande `sudo …` lancée dans l'onglet ne le redemande pas.
+    let sudo_pw = command.as_deref().filter(|c| c.contains("sudo")).and_then(|_| secrets::get(&server_id, "sudo"));
     // Une session tmux remplace le shell : elle survit aux coupures et à la fermeture de l'app.
     let command = match (command, tmux_session) {
         // Onglet ouvert sur une commande (mises à jour, journal…) : elle est lancée par un shell
         // qui annonce son PID, sinon Zenytt perdrait le dossier courant de cet onglet.
+        (Some(c), _) if sudo_pw.is_some() => Some(announcing_pid(&with_sudo_primed(&c))),
         (Some(c), _) => Some(announcing_pid(&c)),
         (None, Some(name)) => Some(zenytt_core::tmux::attach_command(&name).map_err(|e| e.to_string())?),
         // Shell simple : il annonce son PID (séquence OSC ignorée par l'affichage) pour que
         // Zenytt retrouve son dossier courant (panneau Fichiers, glisser-déposer).
         (None, None) => Some(announcing_pid(LOGIN_SHELL)),
     };
-    sessions.open_terminal(&conn, cols, rows, command, on_event).await
+    sessions.open_terminal(&conn, cols, rows, command, sudo_pw, on_event).await
+}
+
+/// Séquence OSC privée émise quand le terminal attend le mot de passe sudo (écho déjà coupé).
+pub const SUDO_READY: &str = "\x1b]7771;\x07";
+
+/// Fait précéder la commande d'une amorce de sudo : l'autorisation sudo est liée au terminal, donc
+/// elle doit être obtenue dans ce terminal. Le script coupe l'écho, signale [`SUDO_READY`], lit le
+/// mot de passe que Zenytt écrit alors (jamais dans la ligne de commande ni à l'écran), l'envoie
+/// à `sudo -S -v`, puis lance la commande. Rien à faire pour root ou NOPASSWD ; si le mot de
+/// passe est refusé, sudo le redemande normalement.
+fn with_sudo_primed(command: &str) -> String {
+    format!(
+        "if [ \"$(id -u)\" != 0 ] && ! sudo -n true 2>/dev/null; then \
+           stty -echo; printf '\\033]7771;\\007'; IFS= read -r zpw; stty echo; \
+           printf '%s\\n' \"$zpw\" | sudo -S -p '' -v >/dev/null 2>&1; unset zpw; \
+         fi; {command}"
+    )
 }
 
 /// Shell de connexion de l'utilisateur (`exec` : il garde le PID annoncé).
@@ -218,6 +238,16 @@ mod tests {
         // Aucune apostrophe de la commande ne doit fermer la chaîne du `sh -c`.
         assert!(c.contains(r"'\''salut'\''"), "{c}");
         assert!(c.ends_with("-l'"), "{c}");
+    }
+
+    #[test]
+    fn amorce_sudo_sans_mot_de_passe_en_clair() {
+        let c = announcing_pid(&super::with_sudo_primed("sudo apt-get update; exec \"$SHELL\" -l"));
+        assert!(c.contains("stty -echo") && c.contains("sudo -S -p"), "{c}");
+        assert!(c.contains("7771"), "{c}");
+        // Le script d'amorce passe avant la commande de l'utilisateur.
+        assert!(c.find("sudo -S").unwrap() < c.find("apt-get").unwrap(), "{c}");
+        assert!(c.starts_with("exec sh -c '") && c.ends_with("-l'"), "{c}");
     }
 
     #[test]

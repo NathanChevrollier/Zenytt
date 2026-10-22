@@ -258,6 +258,8 @@ impl Sessions {
         cols: u32,
         rows: u32,
         command: Option<String>,
+        // Mot de passe sudo à écrire dès que le terminal le réclame (voir `commands::terminal`).
+        mut sudo_pw: Option<String>,
         events: Channel<TermEvent>,
     ) -> Result<u64, String> {
         let channel = match command {
@@ -268,7 +270,8 @@ impl Sessions {
 
         let id = self.next_term.fetch_add(1, Ordering::Relaxed);
         let (mut reader, writer) = channel.split();
-        self.terminals.lock().await.insert(id, Arc::new(writer));
+        let writer = Arc::new(writer);
+        self.terminals.lock().await.insert(id, writer.clone());
 
         let terminals = self.terminals.clone();
         let mirrors = self.mirrors.clone();
@@ -276,6 +279,7 @@ impl Sessions {
             let b64 = base64::engine::general_purpose::STANDARD;
             let mut code = None;
             let mut next = None;
+            let mut sudo_seen = 0usize;
             loop {
                 let msg = match next.take() {
                     Some(m) => m,
@@ -299,6 +303,19 @@ impl Sessions {
                                 }
                                 Ok(None) | Err(_) => break,
                             }
+                        }
+                        let ready = crate::commands::terminal::SUDO_READY.as_bytes();
+                        if sudo_pw.is_some() && buf.windows(ready.len()).any(|w| w == ready) {
+                            if let Some(pw) = sudo_pw.take() {
+                                let _ = writer.data(format!("{pw}\n").as_bytes()).await;
+                            }
+                        }
+                        // L'amorce s'annonce avant toute sortie de la commande : passé le début, le
+                        // marqueur ne peut venir que de la commande elle-même (fichier affiché…),
+                        // qui ne doit jamais recevoir le mot de passe.
+                        sudo_seen += buf.len();
+                        if sudo_seen > 4096 {
+                            sudo_pw = None;
                         }
                         // Terminal partagé : la même sortie part vers les invités.
                         if let Some(mirror) = mirrors.lock().await.get(&id) {
