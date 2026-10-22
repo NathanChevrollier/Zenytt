@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Zenytt Compagnon",
+  "version": "1.1.7",
+  "identifier": "dev.zenytt.companion",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1430",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Zenytt Compagnon",
+        "width": 420,
+        "height": 860
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../../desktop/src-tauri/icons/32x32.png",
+      "../../desktop/src-tauri/icons/128x128.png",
+      "../../desktop/src-tauri/icons/128x128@2x.png",
+      "../../desktop/src-tauri/icons/icon.icns",
+      "../../desktop/src-tauri/icons/icon.ico",
+      "../../desktop/src-tauri/icons/icon.png"
+    ],
+    "publisher": "Nathan Chevrollier",
+    "copyright": "Copyright (c) 2026 Nathan Chevrollier",
+    "license": "LicenseRef-PolyForm-Shield-1.0.0",
+    "homepage": "https://github.com/NathanChevrollier/Zenytt",
+    "category": "DeveloperTool",
+    "shortDescription": "Compagnon mobile de Zenytt : état des serveurs et gestes rapides"
+  }
+}
