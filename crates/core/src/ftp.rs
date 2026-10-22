@@ -14,7 +14,7 @@ use suppaftp::tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, Unix
 use suppaftp::tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
 use suppaftp::tokio_rustls::TlsConnector;
 use suppaftp::types::FileType;
-use suppaftp::{FtpError, Mode};
+use suppaftp::{FtpError, Mode, Status};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::sftp::{
@@ -27,6 +27,20 @@ pub type Ftp = ImplAsyncFtpStream<suppaftp::tokio::AsyncRustlsStream>;
 
 fn ftp_err(e: impl std::fmt::Display) -> Error {
     Error::Ftp(e.to_string())
+}
+
+/// Délai maximal d'une opération FTP (une commande, ou un bloc de données) avant d'abandonner.
+const IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Message d'une opération FTP restée sans réponse : l'appelant jette alors le client (canal désynchronisé).
+pub const TIMEOUT_MSG: &str = "délai dépassé : le serveur FTP ne répond plus";
+
+/// Exécute une opération FTP avec un délai : un serveur bloqué fait échouer l'appel au lieu de le figer.
+pub async fn op<T, E: std::fmt::Display>(f: impl std::future::Future<Output = std::result::Result<T, E>>) -> Result<T> {
+    match tokio::time::timeout(IO_TIMEOUT, f).await {
+        Ok(r) => r.map_err(ftp_err),
+        Err(_) => Err(Error::Ftp(TIMEOUT_MSG.into())),
+    }
 }
 
 fn io_err(e: impl std::fmt::Display) -> Error {
@@ -124,16 +138,24 @@ pub async fn connect(host: &str, port: u16, user: &str, password: &str, secure: 
             }
         };
     }
-    ftp.login(user, password).await.map_err(|e| Error::Auth(e.to_string()))?;
+    // Seul le 530 (identifiants refusés) est une erreur d'authentification ; un 421 « trop de connexions » est passager.
+    match tokio::time::timeout(IO_TIMEOUT, ftp.login(user, password)).await {
+        Err(_) => return Err(Error::Connection(TIMEOUT_MSG.into())),
+        Ok(Err(FtpError::UnexpectedResponse(r))) if r.status == Status::NotLoggedIn => {
+            return Err(Error::Auth(format!("{} {}", r.status.code(), r.as_string().unwrap_or_default().trim())))
+        }
+        Ok(Err(e)) => return Err(Error::Connection(e.to_string())),
+        Ok(Ok(())) => {}
+    }
     ftp.set_mode(Mode::Passive);
     // Serveurs derrière un NAT ou Docker qui annoncent leur adresse privée en mode passif.
     ftp.set_passive_nat_workaround(true);
-    ftp.transfer_type(FileType::Binary).await.map_err(ftp_err)?;
+    op(ftp.transfer_type(FileType::Binary)).await?;
     Ok(ftp)
 }
 
 pub async fn home(ftp: &mut Ftp) -> Result<String> {
-    ftp.pwd().await.map_err(ftp_err)
+    op(ftp.pwd()).await
 }
 
 /// Convertit une ligne `MLSD` ou `LIST` déjà analysée en entrée de l'explorateur.
@@ -174,18 +196,25 @@ fn parse_listing(lines: &[String], mlsd: bool) -> Vec<File> {
         .collect()
 }
 
-/// Un dossier existe-t-il ? (`CWD` est la seule question portable.)
+/// Un dossier existe-t-il ? (`CWD` est la seule question portable.) Le dossier courant est rétabli,
+/// sinon `home()` (un simple `PWD`) dériverait.
 async fn is_dir(ftp: &mut Ftp, path: &str) -> bool {
-    ftp.cwd(path).await.is_ok()
+    let Ok(cur) = op(ftp.pwd()).await else { return false };
+    let ok = op(ftp.cwd(path)).await.is_ok();
+    if ok {
+        let _ = op(ftp.cwd(&cur)).await;
+    }
+    ok
 }
 
 /// Liste un dossier : dossiers d'abord, puis tri alphabétique insensible à la casse.
 pub async fn list(ftp: &mut Ftp, path: &str) -> Result<Listing> {
     let path = if path.starts_with('/') { path.to_string() } else { join(&home(ftp).await?, path.trim_start_matches("./")) };
     let path = if path.len() > 1 { path.trim_end_matches('/').to_string() } else { path };
-    let files = match ftp.mlsd(Some(&path)).await {
+    let mlsd = tokio::time::timeout(IO_TIMEOUT, ftp.mlsd(Some(&path))).await.map_err(|_| Error::Ftp(TIMEOUT_MSG.into()))?;
+    let files = match mlsd {
         Ok(lines) => parse_listing(&lines, true),
-        Err(FtpError::UnexpectedResponse(_)) => parse_listing(&ftp.list(Some(&path)).await.map_err(ftp_err)?, false),
+        Err(FtpError::UnexpectedResponse(_)) => parse_listing(&op(ftp.list(Some(&path))).await?, false),
         Err(e) => return Err(ftp_err(e)),
     };
     let mut entries: Vec<Entry> = files.iter().map(|f| to_entry(f, &path)).collect();
@@ -203,23 +232,25 @@ pub async fn list(ftp: &mut Ftp, path: &str) -> Result<Listing> {
 /// Lit au plus `max` octets à partir de `offset`.
 async fn read_from(ftp: &mut Ftp, path: &str, offset: u64, max: u64) -> Result<Vec<u8>> {
     if offset > 0 {
-        ftp.resume_transfer(offset as usize).await.map_err(ftp_err)?;
+        op(ftp.resume_transfer(offset as usize)).await?;
     }
-    let mut stream = ftp.retr_as_stream(path).await.map_err(ftp_err)?;
+    let mut stream = op(ftp.retr_as_stream(path)).await?;
     let mut buf = Vec::new();
-    (&mut stream).take(max).read_to_end(&mut buf).await.map_err(io_err)?;
-    if buf.len() as u64 >= max {
-        // Fichier plus long que demandé : le transfert est interrompu, pas terminé.
-        let _ = ftp.abort(stream).await;
+    // Un octet de plus que demandé : seul un flux qui en a encore est interrompu (ABOR après un
+    // transfert fini laisserait une réponse en trop sur le canal de contrôle).
+    op((&mut stream).take(max + 1).read_to_end(&mut buf)).await?;
+    if buf.len() as u64 > max {
+        buf.truncate(max as usize);
+        let _ = op(ftp.abort(stream)).await;
     } else {
-        stream.finish().await.map_err(ftp_err)?;
+        op(stream.finish()).await?;
     }
     Ok(buf)
 }
 
 /// Lit un fichier texte pour l'éditeur (mêmes erreurs `TOO_BIG` et `NOT_UTF8` que SFTP).
 pub async fn read_text(ftp: &mut Ftp, path: &str) -> Result<Vec<u8>> {
-    if let Ok(size) = ftp.size(path).await {
+    if let Ok(size) = op(ftp.size(path)).await {
         if size as u64 > MAX_EDIT_SIZE {
             return Err(Error::Other(format!("TOO_BIG:{size}")));
         }
@@ -234,7 +265,7 @@ pub async fn read_text(ftp: &mut Ftp, path: &str) -> Result<Vec<u8>> {
 
 /// Lit `len` octets (au plus `MAX_WINDOW`) à partir de `offset`.
 pub async fn read_range(ftp: &mut Ftp, path: &str, offset: u64, len: u64) -> Result<TextWindow> {
-    let size = ftp.size(path).await.map_err(ftp_err)? as u64;
+    let size = op(ftp.size(path)).await? as u64;
     let offset = offset.min(size);
     let len = len.min(MAX_WINDOW).min(size - offset);
     if len == 0 {
@@ -247,11 +278,11 @@ pub async fn read_range(ftp: &mut Ftp, path: &str, offset: u64, len: u64) -> Res
 /// Écrit des octets dans un fichier distant (créé ou tronqué).
 /// shortcut: écriture en place, sans fichier temporaire ni conservation des permissions (FTP ne sait pas renommer par-dessus).
 pub async fn write_bytes(ftp: &mut Ftp, remote: &str, bytes: &[u8]) -> Result<()> {
-    let mut dst = ftp.put_with_stream(remote).await.map_err(ftp_err)?;
+    let mut dst = op(ftp.put_with_stream(remote)).await?;
     for chunk in bytes.chunks(CHUNK) {
-        dst.write_all(chunk).await.map_err(io_err)?;
+        op(dst.write_all(chunk)).await?;
     }
-    dst.finish().await.map_err(ftp_err)
+    op(dst.finish()).await
 }
 
 pub async fn write_text(ftp: &mut Ftp, path: &str, content: &str) -> Result<()> {
@@ -259,35 +290,35 @@ pub async fn write_text(ftp: &mut Ftp, path: &str, content: &str) -> Result<()> 
 }
 
 pub async fn mkdir(ftp: &mut Ftp, path: &str) -> Result<()> {
-    ftp.mkdir(path).await.map_err(ftp_err)
+    op(ftp.mkdir(path)).await
 }
 
 pub async fn create_file(ftp: &mut Ftp, path: &str) -> Result<()> {
-    if ftp.size(path).await.is_ok() || is_dir(ftp, path).await {
+    if op(ftp.size(path)).await.is_ok() || is_dir(ftp, path).await {
         return Err(Error::Other("un fichier porte déjà ce nom".into()));
     }
     write_bytes(ftp, path, &[]).await
 }
 
 pub async fn rename(ftp: &mut Ftp, from: &str, to: &str) -> Result<()> {
-    ftp.rename(from, to).await.map_err(ftp_err)
+    op(ftp.rename(from, to)).await
 }
 
 /// Meilleur effort : `SITE CHMOD` n'est pas standard et beaucoup de serveurs le refusent.
 pub async fn chmod(ftp: &mut Ftp, path: &str, mode: u32) -> Result<()> {
-    ftp.site(format!("CHMOD {:o} {path}", mode & 0o7777)).await.map(|_| ()).map_err(ftp_err)
+    op(ftp.site(format!("CHMOD {:o} {path}", mode & 0o7777))).await.map(|_| ())
 }
 
 /// Supprime un fichier, un lien ou un dossier (récursivement).
 pub async fn remove(ftp: &mut Ftp, path: &str) -> Result<()> {
-    if ftp.rm(path).await.is_ok() {
+    if op(ftp.rm(path)).await.is_ok() {
         return Ok(());
     }
     // Pas un fichier : on vide les dossiers avant de les supprimer.
     let mut stack = vec![(path.to_string(), false)];
     while let Some((dir, emptied)) = stack.pop() {
         if emptied {
-            ftp.rmdir(&dir).await.map_err(ftp_err)?;
+            op(ftp.rmdir(&dir)).await?;
             continue;
         }
         stack.push((dir.clone(), true));
@@ -295,7 +326,7 @@ pub async fn remove(ftp: &mut Ftp, path: &str) -> Result<()> {
             if e.kind == EntryKind::Dir {
                 stack.push((e.path, false));
             } else {
-                ftp.rm(&e.path).await.map_err(ftp_err)?;
+                op(ftp.rm(&e.path)).await?;
             }
         }
     }
@@ -313,7 +344,7 @@ pub async fn download(
     // Jamais d'écrasement silencieux d'un fichier local : « nom (1).ext » si besoin.
     let target = unique_local(local_dir, &local_name(name));
     if !is_dir(ftp, remote).await {
-        let total = ftp.size(remote).await.unwrap_or(0) as u64;
+        let total = op(ftp.size(remote)).await.unwrap_or(0) as u64;
         download_file(ftp, remote, &target, total, on_progress).await?;
         return Ok(target);
     }
@@ -339,23 +370,23 @@ async fn download_file(
     total: u64,
     on_progress: &(dyn Fn(Progress) -> bool + Send + Sync),
 ) -> Result<()> {
-    let mut src = ftp.retr_as_stream(remote).await.map_err(ftp_err)?;
+    let mut src = op(ftp.retr_as_stream(remote)).await?;
     let mut dst = tokio::fs::File::create(local).await.map_err(io_err)?;
     let mut buf = vec![0u8; CHUNK];
     let mut done = 0u64;
     loop {
-        let n = src.read(&mut buf).await.map_err(io_err)?;
+        let n = op(src.read(&mut buf)).await?;
         if n == 0 {
             break;
         }
         dst.write_all(&buf[..n]).await.map_err(io_err)?;
         done += n as u64;
         if !on_progress(Progress { file: remote.to_string(), done, total }) {
-            let _ = ftp.abort(src).await;
+            let _ = op(ftp.abort(src)).await;
             return Err(cancelled());
         }
     }
-    src.finish().await.map_err(ftp_err)?;
+    op(src.finish()).await?;
     dst.flush().await.map_err(io_err)?;
     let _ = on_progress(Progress { file: remote.to_string(), done, total: total.max(done) });
     Ok(())
@@ -390,7 +421,7 @@ pub async fn upload(ftp: &mut Ftp, local: &Path, remote_dir: &str, on_progress: 
 async fn upload_file(ftp: &mut Ftp, local: &Path, remote: &str, on_progress: &(dyn Fn(Progress) -> bool + Send + Sync)) -> Result<()> {
     let mut src = tokio::fs::File::open(local).await.map_err(io_err)?;
     let total = src.metadata().await.map(|m| m.len()).unwrap_or(0);
-    let mut dst = ftp.put_with_stream(remote).await.map_err(ftp_err)?;
+    let mut dst = op(ftp.put_with_stream(remote)).await?;
     let mut buf = vec![0u8; CHUNK];
     let mut done = 0u64;
     let label = local.display().to_string();
@@ -399,14 +430,14 @@ async fn upload_file(ftp: &mut Ftp, local: &Path, remote: &str, on_progress: &(d
         if n == 0 {
             break;
         }
-        dst.write_all(&buf[..n]).await.map_err(io_err)?;
+        op(dst.write_all(&buf[..n])).await?;
         done += n as u64;
         if !on_progress(Progress { file: label.clone(), done, total }) {
-            let _ = ftp.abort(dst).await;
+            let _ = op(ftp.abort(dst)).await;
             return Err(cancelled());
         }
     }
-    dst.finish().await.map_err(ftp_err)
+    op(dst.finish()).await
 }
 
 #[cfg(test)]

@@ -69,6 +69,7 @@ pub async fn server_save(
         profile.auth_kind = AuthKind::Password;
         profile.key_path = None;
         profile.jump_id = None;
+        profile.identity_id = None;
     }
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();

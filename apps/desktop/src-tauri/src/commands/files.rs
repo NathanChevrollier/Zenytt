@@ -21,11 +21,19 @@ fn err(e: impl ToString) -> String {
     e.to_string()
 }
 
+/// Résultat d'une opération FTP ; après un délai dépassé le canal est désynchronisé : on jette le client pour se reconnecter.
+async fn ftp_res<T>(sessions: &Sessions, server_id: &str, r: zenytt_core::Result<T>) -> Result<T, String> {
+    if matches!(&r, Err(zenytt_core::Error::Ftp(m)) if m == ftp::TIMEOUT_MSG) {
+        sessions.drop_ftp(server_id).await;
+    }
+    r.map_err(err)
+}
+
 #[tauri::command]
 pub async fn fs_home(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String) -> Result<String, String> {
     match sessions.fs(&store, &server_id).await? {
         Fs::Sftp(sftp) => sftp::home(&sftp).await.map_err(err),
-        Fs::Ftp(f) => ftp::home(&mut *f.lock().await).await.map_err(err),
+        Fs::Ftp(f) => ftp_res(&sessions, &server_id, ftp::home(&mut *f.lock().await).await).await,
     }
 }
 
@@ -33,7 +41,7 @@ pub async fn fs_home(store: State<'_, Store>, sessions: State<'_, Sessions>, ser
 pub async fn fs_list(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String, path: String) -> Result<Listing, String> {
     let sftp = match sessions.fs(&store, &server_id).await? {
         Fs::Sftp(sftp) => sftp,
-        Fs::Ftp(f) => return ftp::list(&mut *f.lock().await, &path).await.map_err(err),
+        Fs::Ftp(f) => return ftp_res(&sessions, &server_id, ftp::list(&mut *f.lock().await, &path).await).await,
     };
     let mut listing = sftp::list(&sftp, &path).await.map_err(err)?;
     let conn = sessions.get(&store, &server_id).await?;
@@ -105,7 +113,7 @@ pub async fn fs_read(
     } else {
         match sessions.fs(&store, &server_id).await? {
             Fs::Sftp(sftp) => sftp::read_text(&sftp, &path).await.map_err(err)?,
-            Fs::Ftp(f) => ftp::read_text(&mut *f.lock().await, &path).await.map_err(err)?,
+            Fs::Ftp(f) => ftp_res(&sessions, &server_id, ftp::read_text(&mut *f.lock().await, &path).await).await?,
         }
     };
     Ok(tauri::ipc::Response::new(bytes))
@@ -130,7 +138,7 @@ pub async fn fs_read_range(
     }
     match sessions.fs(&store, &server_id).await? {
         Fs::Sftp(sftp) => sftp::read_range(&sftp, &path, offset, len).await.map_err(err),
-        Fs::Ftp(f) => ftp::read_range(&mut *f.lock().await, &path, offset, len).await.map_err(err),
+        Fs::Ftp(f) => ftp_res(&sessions, &server_id, ftp::read_range(&mut *f.lock().await, &path, offset, len).await).await,
     }
 }
 
@@ -204,7 +212,7 @@ pub async fn fs_write(
                     if store.server(&server_id)?.protocol.has_shell() { Some(sessions.get(&store, &server_id).await?) } else { None };
                 sftp::write_text(&sftp, conn.as_ref(), &path, &content).await.map_err(err)
             }
-            Fs::Ftp(f) => ftp::write_text(&mut *f.lock().await, &path, &content).await.map_err(err),
+            Fs::Ftp(f) => ftp_res(&sessions, &server_id, ftp::write_text(&mut *f.lock().await, &path, &content).await).await,
         }
     }
     .await;
@@ -225,7 +233,7 @@ pub async fn fs_mkdir(
     let r: Result<(), String> = async {
         match sessions.fs(&store, &server_id).await? {
             Fs::Sftp(sftp) => sftp::mkdir(&sftp, &path).await.map_err(err),
-            Fs::Ftp(f) => ftp::mkdir(&mut *f.lock().await, &path).await.map_err(err),
+            Fs::Ftp(f) => ftp_res(&sessions, &server_id, ftp::mkdir(&mut *f.lock().await, &path).await).await,
         }
     }
     .await;
@@ -244,7 +252,7 @@ pub async fn fs_create(
     let r: Result<(), String> = async {
         match sessions.fs(&store, &server_id).await? {
             Fs::Sftp(sftp) => sftp::create_file(&sftp, &path).await.map_err(err),
-            Fs::Ftp(f) => ftp::create_file(&mut *f.lock().await, &path).await.map_err(err),
+            Fs::Ftp(f) => ftp_res(&sessions, &server_id, ftp::create_file(&mut *f.lock().await, &path).await).await,
         }
     }
     .await;
@@ -264,7 +272,7 @@ pub async fn fs_rename(
     let r: Result<(), String> = async {
         match sessions.fs(&store, &server_id).await? {
             Fs::Sftp(sftp) => sftp::rename(&sftp, &from, &to).await.map_err(err),
-            Fs::Ftp(f) => ftp::rename(&mut *f.lock().await, &from, &to).await.map_err(err),
+            Fs::Ftp(f) => ftp_res(&sessions, &server_id, ftp::rename(&mut *f.lock().await, &from, &to).await).await,
         }
     }
     .await;
@@ -285,7 +293,7 @@ pub async fn fs_remove(
         for p in paths {
             match &fs {
                 Fs::Sftp(sftp) => sftp::remove(sftp, &p).await.map_err(err)?,
-                Fs::Ftp(f) => ftp::remove(&mut *f.lock().await, &p).await.map_err(err)?,
+                Fs::Ftp(f) => ftp_res(&sessions, &server_id, ftp::remove(&mut *f.lock().await, &p).await).await?,
             }
         }
         Ok(())
@@ -307,7 +315,7 @@ pub async fn fs_chmod(
     let r: Result<(), String> = async {
         match sessions.fs(&store, &server_id).await? {
             Fs::Sftp(sftp) => sftp::chmod(&sftp, &path, mode).await.map_err(err),
-            Fs::Ftp(f) => ftp::chmod(&mut *f.lock().await, &path, mode).await.map_err(err),
+            Fs::Ftp(f) => ftp_res(&sessions, &server_id, ftp::chmod(&mut *f.lock().await, &path, mode).await).await,
         }
     }
     .await;
@@ -370,7 +378,7 @@ pub async fn fs_download(
         for p in &paths {
             match &fs {
                 Fs::Sftp(sftp) => sftp::download(sftp, p, &dir, &report).await.map_err(err)?,
-                Fs::Ftp(f) => ftp::download(&mut *f.lock().await, p, &dir, &report).await.map_err(err)?,
+                Fs::Ftp(f) => ftp_res(&sessions, &server_id, ftp::download(&mut *f.lock().await, p, &dir, &report).await).await?,
             };
         }
         Ok(dir.display().to_string())
@@ -401,7 +409,9 @@ pub async fn fs_upload(
         for p in &local_paths {
             match &fs {
                 Fs::Sftp(sftp) => sftp::upload(sftp, &PathBuf::from(p), &remote_dir, &report).await.map_err(err)?,
-                Fs::Ftp(f) => ftp::upload(&mut *f.lock().await, &PathBuf::from(p), &remote_dir, &report).await.map_err(err)?,
+                Fs::Ftp(f) => {
+                    ftp_res(&sessions, &server_id, ftp::upload(&mut *f.lock().await, &PathBuf::from(p), &remote_dir, &report).await).await?
+                }
             }
         }
         Ok(())

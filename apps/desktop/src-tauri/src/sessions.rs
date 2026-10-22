@@ -123,15 +123,23 @@ impl Sessions {
         if matches!(protocol, Protocol::Ssh | Protocol::Sftp) {
             return Ok(Fs::Sftp(self.sftp(store, server_id).await?));
         }
-        let gate = self.connecting.lock().unwrap().entry(server_id.to_string()).or_default().clone();
-        let _guard = gate.lock().await;
         let cached = self.ftp.lock().await.get(server_id).cloned();
         if let Some(c) = cached {
+            // Client occupé (transfert, listing) : il vit, inutile d'attendre ni de le sonder.
+            let Ok(mut guard) = c.try_lock() else { return Ok(Fs::Ftp(c)) };
             // Le serveur coupe les connexions inactives : un `NOOP` dit si elle vit encore.
-            if c.lock().await.noop().await.is_ok() {
+            let alive = ftp::op(guard.noop()).await.is_ok();
+            drop(guard);
+            if alive {
                 return Ok(Fs::Ftp(c));
             }
-            self.ftp.lock().await.remove(server_id);
+            self.drop_ftp(server_id).await;
+        }
+        let gate = self.connecting.lock().unwrap().entry(server_id.to_string()).or_default().clone();
+        let _guard = gate.lock().await;
+        // Une autre demande a peut-être reconnecté le serveur pendant l'attente.
+        if let Some(c) = self.ftp.lock().await.get(server_id).cloned() {
+            return Ok(Fs::Ftp(c));
         }
         if let Some(reason) = self.auth_blocked.lock().unwrap().get(server_id) {
             return Err(format!("AUTH_BLOCKED: {reason} — reconnexion automatique suspendue, clique « Connecter » pour réessayer"));
@@ -164,6 +172,11 @@ impl Sessions {
         let client = Arc::new(Mutex::new(client));
         self.ftp.lock().await.insert(server_id.to_string(), client.clone());
         Ok(Fs::Ftp(client))
+    }
+
+    /// Oublie le client FTP (coupé, ou canal désynchronisé après un délai dépassé) : le prochain accès se reconnecte.
+    pub async fn drop_ftp(&self, server_id: &str) {
+        self.ftp.lock().await.remove(server_id);
     }
 
     /// Renvoie la connexion du serveur, en la (re)créant si elle n'existe pas ou a été coupée.
