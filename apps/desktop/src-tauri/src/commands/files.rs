@@ -8,11 +8,12 @@ use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 use zenytt_core::sftp::{self, Listing, Progress};
+use zenytt_profiles::Protocol;
 use zenytt_core::ssh::shell_quote;
-use zenytt_core::{archive, search};
+use zenytt_core::{archive, ftp, search};
 
-use crate::commands::{admin, track};
-use crate::sessions::Sessions;
+use crate::commands::{admin, need_shell, track};
+use crate::sessions::{Fs, Sessions};
 use crate::store::AuditLog;
 use crate::store::Store;
 
@@ -22,16 +23,21 @@ fn err(e: impl ToString) -> String {
 
 #[tauri::command]
 pub async fn fs_home(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String) -> Result<String, String> {
-    let sftp = sessions.sftp(&store, &server_id).await?;
-    sftp::home(&sftp).await.map_err(err)
+    match sessions.fs(&store, &server_id).await? {
+        Fs::Sftp(sftp) => sftp::home(&sftp).await.map_err(err),
+        Fs::Ftp(f) => ftp::home(&mut *f.lock().await).await.map_err(err),
+    }
 }
 
 #[tauri::command]
 pub async fn fs_list(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String, path: String) -> Result<Listing, String> {
-    let sftp = sessions.sftp(&store, &server_id).await?;
+    let sftp = match sessions.fs(&store, &server_id).await? {
+        Fs::Sftp(sftp) => sftp,
+        Fs::Ftp(f) => return ftp::list(&mut *f.lock().await, &path).await.map_err(err),
+    };
     let mut listing = sftp::list(&sftp, &path).await.map_err(err)?;
     let conn = sessions.get(&store, &server_id).await?;
-    let names = sessions.id_names(&conn, &server_id).await;
+    let names = sessions.id_names(&store, &conn, &server_id).await;
     let resolve = |v: &mut Option<String>, map: &std::collections::HashMap<u32, String>| {
         if let Some(name) = v.as_deref().and_then(|s| s.parse::<u32>().ok()).and_then(|id| map.get(&id)) {
             *v = Some(name.clone());
@@ -54,6 +60,7 @@ pub async fn fs_exec(
     cwd: String,
     command: String,
 ) -> Result<zenytt_core::ExecOutput, String> {
+    need_shell(&store, &server_id)?;
     let cwd = if cwd.trim().is_empty() { "/" } else { cwd.trim() };
     let command = command.trim();
     if command.is_empty() {
@@ -96,8 +103,10 @@ pub async fn fs_read(
         sftp::check_text(&bytes).map_err(err)?;
         bytes
     } else {
-        let sftp = sessions.sftp(&store, &server_id).await?;
-        sftp::read_text(&sftp, &path).await.map_err(err)?
+        match sessions.fs(&store, &server_id).await? {
+            Fs::Sftp(sftp) => sftp::read_text(&sftp, &path).await.map_err(err)?,
+            Fs::Ftp(f) => ftp::read_text(&mut *f.lock().await, &path).await.map_err(err)?,
+        }
     };
     Ok(tauri::ipc::Response::new(bytes))
 }
@@ -119,8 +128,10 @@ pub async fn fs_read_range(
         let (size, bytes) = sudo_read(&conn, pw.as_deref(), &path, offset, len).await?;
         return sftp::text_window(&bytes, offset.min(size), size).map_err(err);
     }
-    let sftp = sessions.sftp(&store, &server_id).await?;
-    sftp::read_range(&sftp, &path, offset, len).await.map_err(err)
+    match sessions.fs(&store, &server_id).await? {
+        Fs::Sftp(sftp) => sftp::read_range(&sftp, &path, offset, len).await.map_err(err),
+        Fs::Ftp(f) => ftp::read_range(&mut *f.lock().await, &path, offset, len).await.map_err(err),
+    }
 }
 
 /// Date de modification et taille d'un fichier, pour détecter une modification concurrente.
@@ -131,6 +142,10 @@ pub struct FileStamp {
 }
 
 async fn stamp(store: &Store, sessions: &Sessions, server_id: &str, path: &str, sudo: bool) -> Result<Option<FileStamp>, String> {
+    // Sans shell, pas de `stat` : l'enregistrement n'a simplement pas de détection de conflit.
+    if !store.server(server_id)?.protocol.has_shell() {
+        return Ok(None);
+    }
     let cmd = format!("stat -L -c '%Y %s' -- {} 2>/dev/null", shell_quote(path));
     let out = if sudo {
         let (conn, pw) = admin(store, sessions, server_id).await?;
@@ -183,9 +198,13 @@ pub async fn fs_write(
             let (conn, pw) = admin(&store, &sessions, &server_id).await?;
             return conn.write_file_sudo(&path, &content, pw.as_deref()).await.map_err(err);
         }
-        let conn = sessions.get(&store, &server_id).await?;
-        let sftp = sessions.sftp(&store, &server_id).await?;
-        sftp::write_text(&sftp, Some(&conn), &path, &content).await.map_err(err)
+        match sessions.fs(&store, &server_id).await? {
+            Fs::Sftp(sftp) => {
+                let conn = if store.server(&server_id)?.protocol.has_shell() { Some(sessions.get(&store, &server_id).await?) } else { None };
+                sftp::write_text(&sftp, conn.as_ref(), &path, &content).await.map_err(err)
+            }
+            Fs::Ftp(f) => ftp::write_text(&mut *f.lock().await, &path, &content).await.map_err(err),
+        }
     }
     .await;
     track(&audit, &store, &server_id, "file.write", &detail, r)?;
@@ -203,8 +222,10 @@ pub async fn fs_mkdir(
 ) -> Result<(), String> {
     let detail = path.clone();
     let r: Result<(), String> = async {
-        let sftp = sessions.sftp(&store, &server_id).await?;
-        sftp::mkdir(&sftp, &path).await.map_err(err)
+        match sessions.fs(&store, &server_id).await? {
+            Fs::Sftp(sftp) => sftp::mkdir(&sftp, &path).await.map_err(err),
+            Fs::Ftp(f) => ftp::mkdir(&mut *f.lock().await, &path).await.map_err(err),
+        }
     }
     .await;
     track(&audit, &store, &server_id, "file.mkdir", &detail, r)
@@ -220,8 +241,10 @@ pub async fn fs_create(
 ) -> Result<(), String> {
     let detail = path.clone();
     let r: Result<(), String> = async {
-        let sftp = sessions.sftp(&store, &server_id).await?;
-        sftp::create_file(&sftp, &path).await.map_err(err)
+        match sessions.fs(&store, &server_id).await? {
+            Fs::Sftp(sftp) => sftp::create_file(&sftp, &path).await.map_err(err),
+            Fs::Ftp(f) => ftp::create_file(&mut *f.lock().await, &path).await.map_err(err),
+        }
     }
     .await;
     track(&audit, &store, &server_id, "file.create", &detail, r)
@@ -238,8 +261,10 @@ pub async fn fs_rename(
 ) -> Result<(), String> {
     let detail = format!("{from} → {to}");
     let r: Result<(), String> = async {
-        let sftp = sessions.sftp(&store, &server_id).await?;
-        sftp::rename(&sftp, &from, &to).await.map_err(err)
+        match sessions.fs(&store, &server_id).await? {
+            Fs::Sftp(sftp) => sftp::rename(&sftp, &from, &to).await.map_err(err),
+            Fs::Ftp(f) => ftp::rename(&mut *f.lock().await, &from, &to).await.map_err(err),
+        }
     }
     .await;
     track(&audit, &store, &server_id, "file.rename", &detail, r)
@@ -255,9 +280,12 @@ pub async fn fs_remove(
 ) -> Result<(), String> {
     let detail = paths.join(", ");
     let r: Result<(), String> = async {
-        let sftp = sessions.sftp(&store, &server_id).await?;
+        let fs = sessions.fs(&store, &server_id).await?;
         for p in paths {
-            sftp::remove(&sftp, &p).await.map_err(err)?;
+            match &fs {
+                Fs::Sftp(sftp) => sftp::remove(sftp, &p).await.map_err(err)?,
+                Fs::Ftp(f) => ftp::remove(&mut *f.lock().await, &p).await.map_err(err)?,
+            }
         }
         Ok(())
     }
@@ -276,8 +304,10 @@ pub async fn fs_chmod(
 ) -> Result<(), String> {
     let detail = format!("{path} {mode:o}");
     let r: Result<(), String> = async {
-        let sftp = sessions.sftp(&store, &server_id).await?;
-        sftp::chmod(&sftp, &path, mode).await.map_err(err)
+        match sessions.fs(&store, &server_id).await? {
+            Fs::Sftp(sftp) => sftp::chmod(&sftp, &path, mode).await.map_err(err),
+            Fs::Ftp(f) => ftp::chmod(&mut *f.lock().await, &path, mode).await.map_err(err),
+        }
     }
     .await;
     track(&audit, &store, &server_id, "file.chmod", &detail, r)
@@ -330,14 +360,17 @@ pub async fn fs_download(
 ) -> Result<String, String> {
     let cancel = transfers.start(transfer_id);
     let r = async {
-        let sftp = sessions.sftp(&store, &server_id).await?;
+        let fs = sessions.fs(&store, &server_id).await?;
         let dir = match local_dir {
             Some(d) => PathBuf::from(d),
             None => app.path().download_dir().map_err(err)?,
         };
         let report = reporter(&on_progress, cancel.clone());
         for p in &paths {
-            sftp::download(&sftp, p, &dir, &report).await.map_err(err)?;
+            match &fs {
+                Fs::Sftp(sftp) => sftp::download(sftp, p, &dir, &report).await.map_err(err)?,
+                Fs::Ftp(f) => ftp::download(&mut *f.lock().await, p, &dir, &report).await.map_err(err)?,
+            };
         }
         Ok(dir.display().to_string())
     }
@@ -362,10 +395,13 @@ pub async fn fs_upload(
     let detail = format!("{} → {remote_dir}", local_paths.len());
     let cancel = transfers.start(transfer_id);
     let r: Result<(), String> = async {
-        let sftp = sessions.sftp(&store, &server_id).await?;
+        let fs = sessions.fs(&store, &server_id).await?;
         let report = reporter(&on_progress, cancel.clone());
         for p in &local_paths {
-            sftp::upload(&sftp, &PathBuf::from(p), &remote_dir, &report).await.map_err(err)?;
+            match &fs {
+                Fs::Sftp(sftp) => sftp::upload(sftp, &PathBuf::from(p), &remote_dir, &report).await.map_err(err)?,
+                Fs::Ftp(f) => ftp::upload(&mut *f.lock().await, &PathBuf::from(p), &remote_dir, &report).await.map_err(err)?,
+            }
         }
         Ok(())
     }
@@ -394,7 +430,11 @@ pub async fn fs_copy_between(
     let detail = format!("{} élément(s) → {dst_name}:{dst_dir}", paths.len());
     let cancel = transfers.start(transfer_id);
     let r: Result<(), String> = async {
+        if [&src_server, &dst_server].iter().any(|id| matches!(store.server(id).map(|s| s.protocol), Ok(Protocol::Ftp | Protocol::Ftps))) {
+            return Err("indisponible : la copie entre serveurs ne gère pas le FTP".into());
+        }
         if src_server == dst_server {
+            need_shell(&store, &src_server)?;
             let conn = sessions.get(&store, &src_server).await?;
             for p in &paths {
                 let name = p.trim_end_matches('/').rsplit('/').next().unwrap_or("");

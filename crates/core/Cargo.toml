@@ -13,6 +13,7 @@ zenytt-protocol.workspace = true
 ring = "0.17"
 russh = { version = "0.63.3", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "3.0.0"
+suppaftp = { version = "12.2.1", default-features = false, features = ["tokio-rustls-ring"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

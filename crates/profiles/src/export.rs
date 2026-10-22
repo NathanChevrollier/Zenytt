@@ -553,6 +553,7 @@ mod tests {
                 ai_access: false,
                 jump_id: None,
                 identity_id: None,
+                protocol: Default::default(),
                 auto_connect: false,
             });
             d.known_hosts.insert("h:22".into(), "SHA256:x".into());
@@ -724,6 +725,7 @@ mod tests {
                 ai_access: false,
                 jump_id: None,
                 identity_id: Some("moi".into()),
+                protocol: Default::default(),
                 auto_connect: false,
             });
         });

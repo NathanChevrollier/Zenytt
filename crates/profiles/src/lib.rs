@@ -32,6 +32,26 @@ pub enum AuthKind {
     Agent,
 }
 
+/// Protocole d'accès à un serveur. Seul `Ssh` ouvre un shell : les autres ne servent qu'aux fichiers.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Protocol {
+    #[default]
+    Ssh,
+    /// Transport et authentification SSH, mais jamais de commande (`internal-sftp`, chroot).
+    Sftp,
+    Ftp,
+    /// FTP avec TLS explicite.
+    Ftps,
+}
+
+impl Protocol {
+    /// Peut-on exécuter des commandes sur ce serveur ?
+    pub fn has_shell(self) -> bool {
+        self == Protocol::Ssh
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerProfile {
@@ -41,6 +61,8 @@ pub struct ServerProfile {
     pub port: u16,
     pub username: String,
     pub auth_kind: AuthKind,
+    #[serde(default)]
+    pub protocol: Protocol,
     #[serde(default)]
     pub key_path: Option<String>,
     #[serde(default)]
@@ -525,6 +547,8 @@ mod tests {
         let v1 = r#"{"servers":[{"id":"a","name":"VPS","host":"h","port":22,"username":"root","authKind":"password"}],"knownHosts":{},"snippets":[]}"#;
         let d: Data = serde_json::from_str(v1).unwrap();
         assert!(!d.servers[0].ai_access);
+        assert_eq!(d.servers[0].protocol, Protocol::Ssh);
+        assert_eq!(serde_json::to_string(&Protocol::Ftps).unwrap(), "\"ftps\"");
         assert!(d.tunnels.is_empty());
     }
 
@@ -561,6 +585,7 @@ mod tests {
             ai_access: false,
             jump_id: jump.map(str::to_string),
             identity_id: None,
+            protocol: Default::default(),
             auto_connect: false,
         };
         s.write(|d| d.servers.extend([p("a", Some("b")), p("b", Some("c")), p("c", None), p("x", Some("y")), p("y", Some("x"))])).unwrap();
@@ -594,6 +619,7 @@ mod tests {
                 ai_access: false,
                 jump_id: None,
                 identity_id: Some("i".into()),
+                protocol: Default::default(),
                 auto_connect: false,
             });
         })

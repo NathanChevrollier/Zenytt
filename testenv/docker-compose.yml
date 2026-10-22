@@ -6,6 +6,7 @@
 #   Second VPS « Debian réaliste » : 127.0.0.1:2223   admin / admin (sudo avec mot de passe, fail2ban actif)
 #   Hôte de VM (libvirt) : 127.0.0.1:2224   root / zenytt, kvm / kvm (groupe libvirt), nokvm / nokvm
 #   Réseau privé : 127.0.0.1:2225 (mesh-a) et 127.0.0.1:2226 (mesh-b), root / zenytt ou deploy / deploy
+#   SFTP seul : 127.0.0.1:2227  sftp / sftp (dossier upload) ; FTP : 127.0.0.1:2121  ftp / ftp
 #   Débannir le PC après des tests fail2ban :  docker exec zenytt-test-debian fail2ban-client unban --all
 #   Tout supprimer :  docker compose -f testenv/docker-compose.yml down -v
 services:
@@ -70,6 +71,25 @@ services:
     privileged: true
     ports:
       - "127.0.0.1:2224:22"
+
+  # Comptes « fichiers seulement » : SFTP sans shell (chroot) et FTP, voir les profils SFTP seul / FTP.
+  sftp:
+    image: atmoz/sftp
+    container_name: zenytt-test-sftp
+    command: sftp:sftp:::upload
+    ports:
+      - "127.0.0.1:2227:22"
+
+  ftp:
+    image: delfer/alpine-ftp-server
+    container_name: zenytt-test-ftp
+    environment:
+      USERS: "ftp|ftp"
+      MIN_PORT: "21100"
+      MAX_PORT: "21110"
+    ports:
+      - "127.0.0.1:2121:21"
+      - "127.0.0.1:21100-21110:21100-21110"
 
 volumes:
   dind-run:

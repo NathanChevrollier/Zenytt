@@ -27,8 +27,18 @@ use zenytt_core::Connection;
 use crate::sessions::Sessions;
 use crate::store::{secrets, Store};
 
+/// Refuse l'action sur un compte SFTP seul ou FTP : il n'y a aucun shell pour l'exécuter.
+pub fn need_shell(store: &Store, server_id: &str) -> Result<(), String> {
+    if store.server(server_id)?.protocol.has_shell() {
+        Ok(())
+    } else {
+        Err("indisponible : compte sans shell".into())
+    }
+}
+
 /// Connexion + mot de passe sudo éventuel, pour les actions d'administration.
 pub async fn admin(store: &Store, sessions: &Sessions, server_id: &str) -> Result<(Connection, Option<String>), String> {
+    need_shell(store, server_id)?;
     let conn = sessions.get(store, server_id).await?;
     Ok((conn, secrets::get(server_id, "sudo")))
 }
