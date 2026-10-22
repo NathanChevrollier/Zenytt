@@ -222,7 +222,17 @@ export default function ServerForm({ server, folders, onClose, onSaved }: { serv
                 </>
               )}
               {p.authKind === "agent" && (
-                <p className="rounded-lg border border-border bg-subtle p-3 text-xs text-muted">Zenytt utilisera les clés chargées dans l'agent OpenSSH du système ou dans Pageant (PuTTY).</p>
+                <>
+                  <p className="rounded-lg border border-border bg-subtle p-3 text-xs text-muted">Zenytt utilisera les clés chargées dans l'agent OpenSSH du système (dont 1Password) ou dans Pageant (PuTTY).</p>
+                  <Field label="Clé publique (recommandé)" hint="Fichier .pub exporté depuis 1Password : seule cette clé est proposée au serveur, sans essayer les autres clés de l'agent.">
+                    <div className="flex gap-2">
+                      <Input className="font-mono" value={p.keyPath ?? ""} placeholder="~/.ssh/mon-serveur.pub" onChange={(e) => set("keyPath", e.target.value)} />
+                      <Button icon={<KeyRound size={14} />} onClick={() => void pickKey()}>
+                        Parcourir
+                      </Button>
+                    </div>
+                  </Field>
+                </>
               )}
               <div className="flex flex-col gap-2">
                 <Checkbox

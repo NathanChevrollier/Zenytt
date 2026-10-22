@@ -474,7 +474,10 @@ pub fn public_key_from_file(path: &str) -> Option<keys::PublicKey> {
         let blob = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
         return keys::PublicKey::from_bytes(&blob).ok();
     }
-    if let Ok(k) = keys::load_public_key(format!("{path}.pub")) {
+    // Le chemin peut être directement un `.pub` (export 1Password) ou la clé privée avec son `.pub` voisin.
+    if let Ok(k) = keys::parse_public_key_base64(text.split_whitespace().nth(1).unwrap_or(""))
+        .or_else(|_| keys::load_public_key(format!("{path}.pub")))
+    {
         return Some(k);
     }
     keys::decode_secret_key(&text, None).ok().map(|k| k.public_key().clone())
@@ -536,6 +539,14 @@ sudo: 3 incorrect password attempts"
         assert!(sudo_failure("sudo: a password is required").is_some());
         assert!(sudo_failure("admin is not in the sudoers file.").unwrap().contains("droits sudo"));
         assert!(sudo_failure("cat: /x: No such file or directory").is_none());
+    }
+
+    #[test]
+    fn public_key_from_pub_file() {
+        let path = std::env::temp_dir().join("zenytt-test-1password.pub");
+        std::fs::write(&path, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl 1password\n").unwrap();
+        assert!(public_key_from_file(path.to_str().unwrap()).is_some());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
