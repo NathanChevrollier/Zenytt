@@ -24,7 +24,8 @@ fn known_format(format: &str) -> bool {
     format == FORMAT || format == crate::legacy::OLD_EXPORT_FORMAT
 }
 const ITERATIONS: u32 = 600_000;
-pub(crate) const SECRET_KINDS: &[&str] = &["password", "passphrase", "sudo", "restic", "token", "ovh-app-key", "ovh-app-secret", "ovh-consumer-key"];
+pub(crate) const SECRET_KINDS: &[&str] =
+    &["password", "passphrase", "sudo", "restic", "token", "ovh-app-key", "ovh-app-secret", "ovh-consumer-key"];
 
 /// Réglages transportés par un export ou une synchronisation. Les tables sont triées
 /// (`BTreeMap`) : deux contenus identiques donnent le même JSON, donc la même empreinte.

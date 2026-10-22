@@ -7,18 +7,12 @@ use serde::Serialize;
 use tauri::State;
 use tokio::sync::Mutex;
 use zenytt_core::docker::{self, Access, Container};
-use zenytt_core::{agent, fail2ban};
+use zenytt_core::{agent, fail2ban, system};
 use zenytt_profiles::{secrets, Store};
 use zenytt_protocol::proc::{parse_collect, COLLECT_SCRIPT};
 use zenytt_protocol::{ActiveAlert, Metrics, RawSample};
 
 use crate::sessions::Sessions;
-
-// TODO(redémarrage du serveur) : à brancher après la fusion de la branche qui ajoute
-// `zenytt_core::system::{power, PowerAction}`. Il manque une commande Tauri `server_power`
-// (connexion via `Sessions::get`, mot de passe sudo via `secrets::get(id, "sudo")`, puis
-// `system::power`), son enregistrement dans `lib.rs`, son wrapper dans `src/lib/api.ts`, et l'activation
-// du bouton « Redémarrer » (désactivé) de `src/views/Dashboard.tsx`, avec une confirmation.
 
 /// Relevé précédent de chaque serveur, pour calculer le CPU et le débit entre deux relevés.
 #[derive(Default)]
@@ -142,6 +136,15 @@ pub async fn f2b_unban(
 ) -> Result<(), String> {
     let conn = sessions.get(&store, &server_id).await?;
     fail2ban::unban(&conn, secrets::get(&server_id, "sudo").as_deref(), &jail, &ip).await.map_err(|e| e.to_string())
+}
+
+/// Redémarre le serveur tout de suite ; la connexion tombe ensuite, les écrans se reconnectent seuls.
+#[tauri::command]
+pub async fn server_reboot(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String) -> Result<(), String> {
+    let conn = sessions.get(&store, &server_id).await?;
+    system::power(&conn, system::PowerAction::Reboot, 0, secrets::get(&server_id, "sudo").as_deref()).await.map_err(|e| e.to_string())?;
+    sessions.disconnect(&server_id).await;
+    Ok(())
 }
 
 #[tauri::command]

@@ -139,7 +139,16 @@ impl Sessions {
         let params = store.connect_params(server_id)?;
         let Auth::Password { password } = params.auth else { return Err("FTP : un mot de passe est requis".into()) };
         let target = format!("{}@{}:{}", params.username, params.host, params.port);
-        let client = match ftp::connect(&params.host, params.port, &params.username, &password, protocol == Protocol::Ftps, params.known_fingerprint.as_deref()).await {
+        let client = match ftp::connect(
+            &params.host,
+            params.port,
+            &params.username,
+            &password,
+            protocol == Protocol::Ftps,
+            params.known_fingerprint.as_deref(),
+        )
+        .await
+        {
             Ok(c) => c,
             Err(zenytt_core::Error::Auth(reason)) => {
                 log::warn!("{target} : authentification refusée ({reason}), reconnexions automatiques suspendues");

@@ -7,8 +7,8 @@ use crate::commands::track;
 use crate::sessions::Sessions;
 use crate::store::AuditLog;
 use crate::store::{secrets, ServerProfile, Snippet, Store};
-use zenytt_profiles::Protocol;
 use zenytt_profiles::AuthKind;
+use zenytt_profiles::Protocol;
 
 /// Secrets transmis avec un profil : `None` = inchangé, `Some("")` = supprimé.
 #[derive(Deserialize)]
@@ -158,7 +158,11 @@ pub async fn ssh_connect(
     if matches!(protocol, Protocol::Ftp | Protocol::Ftps) {
         // Pas de SSH : se connecter, c'est ouvrir le client FTP.
         sessions.fs(&store, &id).await?;
-        return Ok(ConnectInfo { fingerprint: String::new(), hostname: store.server(&id)?.host, os: format!("{protocol:?}").to_uppercase() });
+        return Ok(ConnectInfo {
+            fingerprint: String::new(),
+            hostname: store.server(&id)?.host,
+            os: format!("{protocol:?}").to_uppercase(),
+        });
     }
     let conn = sessions.get(&store, &id).await?;
     if !protocol.has_shell() {

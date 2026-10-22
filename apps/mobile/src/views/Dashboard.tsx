@@ -1,10 +1,12 @@
 import { Power } from "lucide-react";
+import { useState } from "react";
 import { api, type Server } from "../lib/api";
 import { ago, formatBytes, formatUptime, percent } from "../lib/format";
 import { usePolled } from "../lib/hooks";
-import { Gauge, ProblemCard } from "../ui";
+import { Confirm, Gauge, ProblemCard } from "../ui";
 
 export function Dashboard({ server, onEdit }: { server: Server; onEdit: () => void }) {
+  const [rebooting, setRebooting] = useState(false);
   const { data, error, refresh } = usePolled(() => api.summary(server.id), 5000, [server.id]);
   const problem = error ?? data?.error ?? null;
   const m = data?.metrics;
@@ -48,10 +50,23 @@ export function Dashboard({ server, onEdit }: { server: Server; onEdit: () => vo
         </>
       )}
       <div className="section-title">Serveur</div>
-      {/* Bouton volontairement désactivé : voir le TODO « redémarrage du serveur » dans src-tauri/src/ops.rs. */}
-      <button className="btn danger" disabled title="Bientôt disponible">
-        <Power size={18} /> Redémarrer le serveur (bientôt)
+      <button className="btn danger" onClick={() => setRebooting(true)}>
+        <Power size={18} /> Redémarrer le serveur
       </button>
+      {rebooting && (
+        <Confirm
+          title={`Redémarrer « ${server.name} » ?`}
+          message="Les sites et conteneurs seront coupés le temps du redémarrage. Tape le nom du serveur pour confirmer."
+          initial=""
+          label="Redémarrer"
+          danger
+          onConfirm={async (typed) => {
+            if (typed.trim() !== server.name) throw new Error("Le nom saisi ne correspond pas.");
+            await api.reboot(server.id);
+          }}
+          onClose={() => setRebooting(false)}
+        />
+      )}
     </div>
   );
 }

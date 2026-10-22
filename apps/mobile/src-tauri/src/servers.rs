@@ -28,7 +28,13 @@ fn auth_ready(p: &ServerProfile) -> bool {
 
 #[tauri::command]
 pub fn servers_list(store: State<'_, Store>) -> Vec<ServerView> {
-    store.read(|d| d.servers.clone()).into_iter().map(|profile| ServerView { auth_ready: auth_ready(&profile), profile }).collect()
+    // shortcut: les serveurs sans shell (SFTP seul, FTP) sont masqués, l'app ne sait parler que SSH ; à ouvrir si un onglet Fichiers seul est demandé.
+    store
+        .read(|d| d.servers.clone())
+        .into_iter()
+        .filter(|p| p.protocol.has_shell())
+        .map(|profile| ServerView { auth_ready: auth_ready(&profile), profile })
+        .collect()
 }
 
 /// Formulaire d'un serveur. Secrets : `None` = inchangé, `Some("")` = supprimé.
@@ -112,6 +118,8 @@ pub async fn server_save(
             jump_id: None,
             identity_id: None,
             auto_connect: false,
+            protocol: Default::default(),
+            provider: None,
         })
     };
     store.write(|d| match d.servers.iter_mut().find(|s| s.id == id) {
@@ -128,6 +136,7 @@ pub async fn server_save(
 pub async fn server_delete(store: State<'_, Store>, sessions: State<'_, Sessions>, id: String) -> Result<(), String> {
     sessions.disconnect(&id).await;
     secrets::delete_all(&id);
+    secrets::delete_all(&ServerProfile::provider_owner(&id));
     store.write(|d| d.servers.retain(|s| s.id != id))
 }
 

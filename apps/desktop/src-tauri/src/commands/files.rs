@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 use zenytt_core::sftp::{self, Listing, Progress};
-use zenytt_profiles::Protocol;
 use zenytt_core::ssh::shell_quote;
 use zenytt_core::{archive, ftp, search};
+use zenytt_profiles::Protocol;
 
 use crate::commands::{admin, need_shell, track};
 use crate::sessions::{Fs, Sessions};
@@ -200,7 +200,8 @@ pub async fn fs_write(
         }
         match sessions.fs(&store, &server_id).await? {
             Fs::Sftp(sftp) => {
-                let conn = if store.server(&server_id)?.protocol.has_shell() { Some(sessions.get(&store, &server_id).await?) } else { None };
+                let conn =
+                    if store.server(&server_id)?.protocol.has_shell() { Some(sessions.get(&store, &server_id).await?) } else { None };
                 sftp::write_text(&sftp, conn.as_ref(), &path, &content).await.map_err(err)
             }
             Fs::Ftp(f) => ftp::write_text(&mut *f.lock().await, &path, &content).await.map_err(err),

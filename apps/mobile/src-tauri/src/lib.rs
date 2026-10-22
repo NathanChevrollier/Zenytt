@@ -45,6 +45,7 @@ pub fn run() {
             ops::docker_logs,
             ops::f2b_state,
             ops::f2b_unban,
+            ops::server_reboot,
             ops::term_open,
             ops::term_write,
             ops::term_resize,

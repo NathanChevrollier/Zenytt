@@ -137,7 +137,9 @@ pub fn build(link: &ProviderLink, cred: &Credentials, action: ProviderAction, no
         }
         ProviderKind::DigitalOcean => {
             let h = vec![("Authorization".into(), format!("Bearer {}", cred.token))];
-            let act = |t: &str| ("POST", format!("https://api.digitalocean.com/v2/droplets/{id}/actions"), json(&format!(r#"{{"type":"{t}"}}"#)), h.clone());
+            let act = |t: &str| {
+                ("POST", format!("https://api.digitalocean.com/v2/droplets/{id}/actions"), json(&format!(r#"{{"type":"{t}"}}"#)), h.clone())
+            };
             match action {
                 Status => ("GET", format!("https://api.digitalocean.com/v2/droplets/{id}"), None, h.clone()),
                 Reboot => act("reboot"),

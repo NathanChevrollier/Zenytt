@@ -10,3 +10,4 @@ dist
 # Projets Android / iOS générés par `tauri android init` / `tauri ios init` (recréés en CI)
 apps/mobile/src-tauri/gen/
 apps/mobile/src-tauri/icons/
+graphify-out/

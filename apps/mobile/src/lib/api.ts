@@ -125,6 +125,7 @@ export const api = {
   containerLogs: (serverId: string, container: string, tail = 150) => invoke<string>("docker_logs", { serverId, container, tail }),
   fail2ban: (serverId: string) => invoke<Fail2banState>("f2b_state", { serverId }),
   unban: (serverId: string, jail: string, ip: string) => invoke<void>("f2b_unban", { serverId, jail, ip }),
+  reboot: (serverId: string) => invoke<void>("server_reboot", { serverId }),
 
   files: (serverId: string, path?: string) => invoke<{ path: string; entries: FileEntry[] }>("files_list", { serverId, path }),
   download: (serverId: string, path: string) => invoke<string>("files_download", { serverId, path }),
