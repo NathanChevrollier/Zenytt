@@ -1,0 +1,84 @@
+name: Mobile
+
+# Zenytt Compagnon (apps/mobile) : APK Android et app iOS. Lancé à la main ou par un tag vX.Y.Z, à côté
+# de release.yml. Les dossiers `gen/` (projets Gradle et Xcode) ne sont pas dans le dépôt : ils sont
+# générés ici par `tauri android init` / `tauri ios init`. Aucune signature de publication : l'APK est
+# signé avec la clé de débogage (installable à la main), l'app iOS est compilée pour le simulateur.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 27.0.12077973
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - name: NDK
+        run: |
+          sdkmanager "ndk;${NDK_VERSION}"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: android
+      - run: pnpm install --frozen-lockfile
+      # Icônes Android et iOS, produites à partir de l'icône du bureau.
+      - run: pnpm --filter zenytt-mobile tauri icon ../desktop/app-icon.svg
+      - run: pnpm --filter zenytt-mobile tauri android init --ci
+      - run: pnpm --filter zenytt-mobile tauri android build --apk --debug
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zenytt-compagnon-android
+          path: apps/mobile/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
+  ios:
+    runs-on: macos-latest
+    # Le chemin iOS n'a jamais tourné sur un Mac : en attendant le premier essai, son échec ne bloque rien.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: aarch64-apple-ios-sim,aarch64-apple-ios
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: ios
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter zenytt-mobile tauri icon ../desktop/app-icon.svg
+      - run: pnpm --filter zenytt-mobile tauri ios init --ci
+      # Simulateur : pas de compte Apple Developer ni de certificat nécessaires.
+      - run: pnpm --filter zenytt-mobile tauri ios build --debug --target aarch64-sim
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zenytt-compagnon-ios-simulateur
+          path: apps/mobile/src-tauri/gen/apple/build
+          if-no-files-found: warn
