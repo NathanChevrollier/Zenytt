@@ -60,6 +60,17 @@ pub struct ServerProfile {
     /// Se connecter automatiquement au démarrage de Zenytt (une fois déverrouillé).
     #[serde(default)]
     pub auto_connect: bool,
+    /// Compte chez l'hébergeur, pour piloter l'alimentation par son API quand SSH ne répond plus.
+    /// Les identifiants sont dans le keyring, sous [`ServerProfile::provider_owner`].
+    #[serde(default)]
+    pub provider: Option<zenytt_core::provider::ProviderLink>,
+}
+
+impl ServerProfile {
+    /// Propriétaire des identifiants de l'hébergeur dans le keyring.
+    pub fn provider_owner(id: &str) -> String {
+        format!("provider-{id}")
+    }
 }
 
 /// Identifiant réutilisable (banque de logins) : utilisateur + mot de passe ou clé, partagé
@@ -562,6 +573,7 @@ mod tests {
             jump_id: jump.map(str::to_string),
             identity_id: None,
             auto_connect: false,
+            provider: None,
         };
         s.write(|d| d.servers.extend([p("a", Some("b")), p("b", Some("c")), p("c", None), p("x", Some("y")), p("y", Some("x"))])).unwrap();
         assert_eq!(s.jump_chain("a").unwrap(), vec!["b", "c"]);
@@ -595,6 +607,7 @@ mod tests {
                 jump_id: None,
                 identity_id: Some("i".into()),
                 auto_connect: false,
+                provider: None,
             });
         })
         .unwrap();

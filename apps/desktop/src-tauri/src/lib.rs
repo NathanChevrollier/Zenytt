@@ -12,7 +12,7 @@ mod vnc_bridge;
 
 use commands::{
     assistant, backups, dashboard, databases, deploy, docker, files, identities, logs, mesh, monitoring, rdp, redis, security, servers,
-    share, sites, sync, terminal, tunnels, vms, workspace,
+    share, sites, sync, system, terminal, tunnels, vms, workspace,
 };
 use tauri::Manager;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
@@ -232,6 +232,19 @@ pub fn run() {
             files::fs_cancel,
             files::fs_copy_between,
             monitoring::mon_metrics,
+            system::system_info,
+            system::system_power,
+            system::system_cancel_power,
+            system::system_wait_online,
+            system::system_set_hostname,
+            system::system_timezones,
+            system::system_set_timezone,
+            system::system_updates,
+            system::system_apply_updates,
+            system::provider_get,
+            system::provider_set,
+            system::provider_test,
+            system::provider_action,
             monitoring::mon_processes,
             monitoring::mon_kill,
             monitoring::mon_services,

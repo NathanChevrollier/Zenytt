@@ -73,6 +73,7 @@ pub fn parse(text: &str) -> Vec<ServerProfile> {
                 jump_id: jump,
                 identity_id: None,
                 auto_connect: false,
+                provider: None,
             });
         }
     }

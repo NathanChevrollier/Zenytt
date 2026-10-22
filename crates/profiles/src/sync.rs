@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::export::{self, Payload};
-use crate::{secrets, Identity, Registry, RemoteDesktop, Store};
+use crate::{secrets, Identity, Registry, RemoteDesktop, ServerProfile, Store};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -278,6 +278,7 @@ fn apply(store: &Store, p: &Payload, include_secrets: bool) -> Result<(Vec<Strin
     }
     for id in &removed_servers {
         secrets::delete_all(id);
+        secrets::delete_all(&ServerProfile::provider_owner(id));
     }
     for id in &removed_identities {
         secrets::delete_all(&Identity::secret_owner(id));
@@ -450,6 +451,7 @@ mod tests {
             jump_id: None,
             identity_id: None,
             auto_connect: false,
+            provider: None,
         }
     }
 

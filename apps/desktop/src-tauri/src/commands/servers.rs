@@ -68,6 +68,8 @@ pub async fn server_save(
         profile.id = uuid::Uuid::new_v4().to_string();
     }
     let id = profile.id.clone();
+    // Le lien avec l'hébergeur se règle dans la page Système, pas ici.
+    profile.provider = store.server(&id).ok().and_then(|s| s.provider);
     if profile.jump_id.as_deref() == Some("") {
         profile.jump_id = None;
     }
@@ -113,6 +115,7 @@ pub fn servers_set_group(store: State<'_, Store>, ids: Vec<String>, group: Optio
 pub async fn server_delete(store: State<'_, Store>, sessions: State<'_, Sessions>, id: String) -> Result<(), String> {
     sessions.disconnect(&id).await;
     secrets::delete_all(&id);
+    secrets::delete_all(&ServerProfile::provider_owner(&id));
     store.write(|d| d.servers.retain(|s| s.id != id))
 }
 
@@ -249,6 +252,7 @@ fn read_putty_sessions() -> Option<Vec<ServerProfile>> {
             jump_id: None,
             identity_id: None,
             auto_connect: false,
+            provider: None,
         });
     }
     Some(out)
