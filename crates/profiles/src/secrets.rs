@@ -65,7 +65,7 @@ pub fn set(server_id: &str, kind: &str, value: &str) -> Result<(), String> {
 }
 
 pub fn delete_all(server_id: &str) {
-    for kind in ["password", "passphrase", "sudo", "restic"] {
+    for kind in crate::export::SECRET_KINDS {
         let _ = set(server_id, kind, "");
     }
 }

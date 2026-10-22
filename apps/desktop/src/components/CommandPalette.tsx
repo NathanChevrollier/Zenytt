@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Box, Cable, CircleHelp, FolderOpen, Globe, History, Layers, Monitor, Plug, RotateCw, ScrollText, Search, Server, SquareTerminal, Star, Stethoscope, Zap } from "lucide-react";
+import { Box, Cable, CircleHelp, FolderOpen, Globe, History, Layers, Monitor, Plug, Power, RotateCw, ScrollText, Search, Server, SquareTerminal, Star, Stethoscope, Zap } from "lucide-react";
 import { useDoctor } from "./ConnectionDoctor";
 import { focusedTerminal } from "../lib/focus";
 import { api, errorMessage, hasShell, shellQuote, type DesktopView, type DockerOverview, type Snippet, type TunnelView, type WebEngine } from "../lib/api";
@@ -140,6 +140,22 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
         run: async () => {
           const r = await api.sitesTest(sid, peekCached<WebEngine>(`sitesEngine:${sid}`) ?? "nginx").catch((e) => ({ ok: false, output: errorMessage(e) }));
           notify(r.ok ? "Configuration du serveur web valide" : r.output, r.ok ? "success" : "error");
+        },
+      });
+      list.push({
+        group: "Actions", id: "system:reboot",
+        label: "Redémarrer le serveur",
+        hint: server.name,
+        icon: <Power size={15} />,
+        run: async () => {
+          if (!(await ask({ title: `Redémarrer ${server.name} ?`, body: "Toutes les sessions et services seront interrompus le temps du redémarrage.", confirmLabel: "Redémarrer", danger: true }))) return;
+          try {
+            await api.systemPower(sid, "reboot", 0);
+            notify(`Redémarrage de ${server.name} en cours…`, "info");
+            notify(`${server.name} est de retour (${await api.systemWaitOnline(sid)} s)`, "success");
+          } catch (e) {
+            notify(errorMessage(e), "error");
+          }
         },
       });
       for (const c of docker?.containers ?? []) {

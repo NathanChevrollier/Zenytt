@@ -74,6 +74,7 @@ pub fn parse(text: &str) -> Vec<ServerProfile> {
                 identity_id: None,
                 protocol: Default::default(),
                 auto_connect: false,
+                provider: None,
             });
         }
     }

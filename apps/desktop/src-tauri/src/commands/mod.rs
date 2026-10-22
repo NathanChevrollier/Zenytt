@@ -16,6 +16,7 @@ pub mod security;
 pub mod servers;
 pub mod share;
 pub mod sites;
+pub mod system;
 pub mod sync;
 pub mod terminal;
 pub mod tunnels;

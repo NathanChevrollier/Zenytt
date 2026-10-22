@@ -52,10 +52,13 @@ pub struct Report {
     pub findings: Vec<Finding>,
 }
 
-fn section<'a>(out: &'a str, name: &str) -> &'a str {
+pub(crate) fn section<'a>(out: &'a str, name: &str) -> &'a str {
     let marker = format!("@@{name}\n");
     let Some(start) = out.find(&marker) else { return "" };
     let rest = &out[start + marker.len()..];
+    if rest.starts_with("@@") {
+        return "";
+    }
     &rest[..rest.find("\n@@").map(|i| i + 1).unwrap_or(rest.len())]
 }
 

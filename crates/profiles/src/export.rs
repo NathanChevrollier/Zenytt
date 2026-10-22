@@ -24,7 +24,7 @@ fn known_format(format: &str) -> bool {
     format == FORMAT || format == crate::legacy::OLD_EXPORT_FORMAT
 }
 const ITERATIONS: u32 = 600_000;
-pub(crate) const SECRET_KINDS: &[&str] = &["password", "passphrase", "sudo", "restic"];
+pub(crate) const SECRET_KINDS: &[&str] = &["password", "passphrase", "sudo", "restic", "token", "ovh-app-key", "ovh-app-secret", "ovh-consumer-key"];
 
 /// Réglages transportés par un export ou une synchronisation. Les tables sont triées
 /// (`BTreeMap`) : deux contenus identiques donnent le même JSON, donc la même empreinte.
@@ -73,6 +73,7 @@ pub(crate) fn snapshot(store: &Store, include_secrets: bool) -> Payload {
             .servers
             .iter()
             .map(|s| s.id.clone())
+            .chain(payload.servers.iter().filter(|s| s.provider.is_some()).map(|s| ServerProfile::provider_owner(&s.id)))
             .chain(payload.identities.iter().map(|i| Identity::secret_owner(&i.id)))
             .chain(payload.desktops.iter().map(|r| RemoteDesktop::secret_owner(&r.id)))
             .chain(payload.registries.iter().flatten().map(|r| Registry::secret_owner(&r.id)))
@@ -251,7 +252,9 @@ pub fn share(store: &Store, ids: &[String], password: &str, include_secrets: boo
         }
         i += 1;
     }
-    let servers: Vec<ServerProfile> = full.servers.into_iter().filter(|s| wanted.contains(&s.id)).collect();
+    // Le compte chez l'hébergeur reste personnel : il n'est pas partagé.
+    let servers: Vec<ServerProfile> =
+        full.servers.into_iter().filter(|s| wanted.contains(&s.id)).map(|s| ServerProfile { provider: None, ..s }).collect();
     if servers.is_empty() {
         return Err("aucun serveur à partager".into());
     }
@@ -555,6 +558,7 @@ mod tests {
                 identity_id: None,
                 protocol: Default::default(),
                 auto_connect: false,
+                provider: None,
             });
             d.known_hosts.insert("h:22".into(), "SHA256:x".into());
         })
@@ -727,6 +731,7 @@ mod tests {
                 identity_id: Some("moi".into()),
                 protocol: Default::default(),
                 auto_connect: false,
+                provider: None,
             });
         });
         let summary = import(&target, &text, "").unwrap();

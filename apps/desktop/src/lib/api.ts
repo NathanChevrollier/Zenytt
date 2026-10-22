@@ -506,6 +506,52 @@ export interface Process {
   command: string;
 }
 
+export interface SystemInfo {
+  hostname: string;
+  os: string;
+  kernel: string;
+  uptimeSecs: number;
+  /** Secondes Unix. */
+  bootTime: number;
+  timezone: string;
+  rebootRequired: boolean;
+  scheduled: { at: number; mode: string } | null;
+  packageManager: string | null;
+  cpuModel: string;
+  cpuCount: number;
+  /** Octets. */
+  memoryTotal: number;
+}
+
+export interface SystemUpdate {
+  name: string;
+  current: string;
+  candidate: string;
+}
+
+export type ProviderKind = "hetzner" | "scaleway" | "digitalOcean" | "ovh";
+export type ProviderAction = "status" | "reboot" | "reset" | "powerOn" | "powerOff";
+
+export interface ProviderLink {
+  kind: ProviderKind;
+  serverRef: string;
+  /** Scaleway : zone ; OVH : région de l'API (ovh-eu, ovh-ca, ovh-us). */
+  zone?: string | null;
+}
+
+/** Secrets en écriture seule : seule leur présence est renvoyée. */
+export interface ProviderView {
+  link: ProviderLink | null;
+  hasToken: boolean;
+  hasSecret: boolean;
+  hasConsumer: boolean;
+}
+
+export interface ProviderStatus {
+  state: "running" | "off" | "starting" | "stopping" | "unknown";
+  raw: string;
+}
+
 export interface Service {
   unit: string;
   load: string;
@@ -1571,6 +1617,23 @@ export const api = {
   services: (serverId: string) => invoke<Service[] | null>("mon_services", { serverId }),
   serviceAction: (serverId: string, unit: string, action: string) => invoke<void>("mon_service_action", { serverId, unit, action }),
   serviceLogs: (serverId: string, unit: string, lines = 300) => invoke<string>("mon_service_logs", { serverId, unit, lines }),
+
+  systemInfo: (serverId: string) => invoke<SystemInfo>("system_info", { serverId }),
+  systemPower: (serverId: string, action: "reboot" | "poweroff", delayMinutes: number) => invoke<void>("system_power", { serverId, action, delayMinutes }),
+  systemCancelPower: (serverId: string) => invoke<void>("system_cancel_power", { serverId }),
+  /** Attend le retour du serveur après un redémarrage ; renvoie la durée en secondes. */
+  systemWaitOnline: (serverId: string, timeoutSecs = 600) => invoke<number>("system_wait_online", { serverId, timeoutSecs }),
+  systemSetHostname: (serverId: string, name: string) => invoke<void>("system_set_hostname", { serverId, name }),
+  systemTimezones: (serverId: string) => invoke<string[]>("system_timezones", { serverId }),
+  systemSetTimezone: (serverId: string, timezone: string) => invoke<void>("system_set_timezone", { serverId, timezone }),
+  systemUpdates: (serverId: string, refresh: boolean) => invoke<SystemUpdate[]>("system_updates", { serverId, refresh }),
+  systemApplyUpdates: (serverId: string) => invoke<string>("system_apply_updates", { serverId }),
+  providerGet: (serverId: string) => invoke<ProviderView>("provider_get", { serverId }),
+  /** `undefined` = secret inchangé, `""` = supprimé. Sans `link`, le compte est délié. */
+  providerSet: (serverId: string, link: ProviderLink | null, secrets: { token?: string; secret?: string; consumer?: string }) =>
+    invoke<void>("provider_set", { serverId, link, ...secrets }),
+  providerTest: (serverId: string) => invoke<ProviderStatus>("provider_test", { serverId }),
+  providerAction: (serverId: string, action: ProviderAction) => invoke<ProviderStatus>("provider_action", { serverId, action }),
   agentInfo: (serverId: string) => invoke<AgentInfo>("agent_info", { serverId }),
   agentHistory: (serverId: string, rangeSecs: number, points = 400) =>
     invoke<HistoryPoint[]>("agent_history", { serverId, rangeSecs, points }),
