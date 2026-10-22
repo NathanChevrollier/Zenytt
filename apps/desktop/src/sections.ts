@@ -52,6 +52,9 @@ export interface Section {
   perServer?: boolean;
 }
 
+/** Sections qui exécutent des commandes sur le serveur : absentes pour un compte SFTP seul ou FTP. */
+export const needsShell = (id: SectionId) => !!SECTIONS.find((s) => s.id === id)?.perServer && id !== "files";
+
 /** Toujours dans la barre latérale : on ne peut pas se retrouver sans accueil ni réglages. */
 export const ALWAYS_VISIBLE: SectionId[] = ["home", "help", "settings"];
 

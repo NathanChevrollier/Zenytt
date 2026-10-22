@@ -10,7 +10,7 @@
 // reste au clic droit.
 import { useEffect, useMemo, useState } from "react";
 import { Activity, ChevronDown, ChevronRight, ExternalLink, FolderTree, Monitor, MonitorPlay, Search, SquareTerminal, TerminalSquare, X } from "lucide-react";
-import { api, errorMessage, type DesktopView, type ServerView, type Vm } from "../../lib/api";
+import { api, errorMessage, hasShell, protocolBadge, type DesktopView, type ServerView, type Vm } from "../../lib/api";
 import { ensureConnected, useApp } from "../../lib/store";
 import { navigate, useShell } from "../../lib/shell";
 import { openVmScreen, useRdp, type ScreenMode } from "../../lib/rdp";
@@ -277,7 +277,12 @@ function ServerEntry({
   return (
     <div className="flex flex-col">
       <div className="group flex items-center gap-1 rounded-lg hover:bg-hover">
-        <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-1.5 text-left" title="Prendre la main : son terminal (ou un nouveau)" onClick={onTakeOver}>
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-1.5 text-left"
+          title={hasShell(s) ? "Prendre la main : son terminal (ou un nouveau)" : "Ses fichiers"}
+          onClick={hasShell(s) ? onTakeOver : () => navigate("files", undefined, s.id)}
+        >
           <span className="relative shrink-0">
             <Avatar name={s.name} color={s.color} size={26} />
             <StatusDot tone={s.connected ? "ok" : "muted"} className="absolute -right-0.5 -bottom-0.5 size-[8px]! border-2 border-panel" />
@@ -285,6 +290,7 @@ function ServerEntry({
           <span className="flex min-w-0 flex-col">
             <span className="truncate text-[13px] font-medium">{s.name}</span>
             <span className="truncate font-mono text-[10.5px] text-muted">
+              {protocolBadge(s) && `${protocolBadge(s)} · `}
               {s.username}@{s.host}
             </span>
           </span>
@@ -293,12 +299,16 @@ function ServerEntry({
           <IconButton size="sm" title="Fichiers" onClick={() => navigate("files", undefined, s.id)}>
             <FolderTree size={13} />
           </IconButton>
-          <IconButton size="sm" title="Supervision" onClick={() => navigate("monitoring", undefined, s.id)}>
-            <Activity size={13} />
-          </IconButton>
-          <IconButton size="sm" title={open ? "Masquer ses machines virtuelles" : "Ses machines virtuelles"} onClick={onToggle}>
-            {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </IconButton>
+          {hasShell(s) && (
+            <>
+              <IconButton size="sm" title="Supervision" onClick={() => navigate("monitoring", undefined, s.id)}>
+                <Activity size={13} />
+              </IconButton>
+              <IconButton size="sm" title={open ? "Masquer ses machines virtuelles" : "Ses machines virtuelles"} onClick={onToggle}>
+                {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              </IconButton>
+            </>
+          )}
         </span>
       </div>
       {open && (

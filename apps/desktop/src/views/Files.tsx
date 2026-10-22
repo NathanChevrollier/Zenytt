@@ -6,7 +6,7 @@ import {
   ArrowLeftRight, ArrowUp, ChevronRight, Container, Copy, Download, Eye, File, FileArchive, FileDiff, FilePlus, Filter, Folder, FolderOpen, FolderPlus, HardDrive, History, House, Link2,
   PackageOpen, PanelLeft, Pencil, PenLine, Plus, RefreshCw, Search, Shield, SlidersHorizontal, SquareTerminal, Star, Trash2, Upload, X,
 } from "lucide-react";
-import { api, ARCHIVE_EXTENSIONS, errorMessage, formatBytes, shellQuote, type ArchiveFormat, type FsEntry, type Listing } from "../lib/api";
+import { api, ARCHIVE_EXTENSIONS, errorMessage, formatBytes, hasShell, shellQuote, type ArchiveFormat, type FsEntry, type Listing } from "../lib/api";
 import { track } from "../lib/transfers";
 import { composeFileIn, isComposeFile } from "../lib/compose";
 import TransfersBar from "../components/TransfersBar";
@@ -157,6 +157,7 @@ function Explorer({
 }) {
   const { notify, ask, openTab, servers, filesPaths, setFilesPath, addBookmark, removeBookmark, renameBookmark, settings, setSettings } = useAppPick("notify", "ask", "openTab", "servers", "filesPaths", "setFilesPath", "addBookmark", "removeBookmark", "renameBookmark", "settings", "setSettings");
   const bookmarks = useApp((s) => s.bookmarks[serverId]) ?? [];
+  const shell = hasShell(servers.find((s) => s.id === serverId));
   const root = useRef<HTMLDivElement>(null);
   const version = usePanes((s) => s.version[pane]);
   const [listing, setListing] = useState<Listing | null>(null);
@@ -519,13 +520,13 @@ function Explorer({
             { label: "Permissions…", icon: <Shield size={14} />, onClick: () => setChmodOf(e) },
             { label: "Copier le chemin", icon: <Copy size={14} />, onClick: () => copyPath(e.path) },
           ] as MenuItem[])),
-      { label: "Compresser…", icon: <FileArchive size={14} />, onClick: () => setArchiving(sel.map((x) => x.path)) },
-      ...(!many && isArchive(e) ? [{ label: "Extraire ici", icon: <PackageOpen size={14} />, onClick: () => void extract(e) }] : []),
-      ...(!many && !isDir(e) && isComposeFile(e.name) ? [{ label: "Docker Compose…", icon: <Container size={14} />, onClick: () => setComposeFile(e.path) }] : []),
+      ...(shell ? [{ label: "Compresser…", icon: <FileArchive size={14} />, onClick: () => setArchiving(sel.map((x) => x.path)) }] : []),
+      ...(shell && !many && isArchive(e) ? [{ label: "Extraire ici", icon: <PackageOpen size={14} />, onClick: () => void extract(e) }] : []),
+      ...(shell && !many && !isDir(e) && isComposeFile(e.name) ? [{ label: "Docker Compose…", icon: <Container size={14} />, onClick: () => setComposeFile(e.path) }] : []),
       ...(pair && selected.has(e.path) ? [{ label: "Comparer les deux fichiers", icon: <FileDiff size={14} />, onClick: () => void compare(pair[0], pair[1]) }] : []),
       ...(!many && isDir(e)
         ? ([
-            { label: "Terminal dans ce dossier", icon: <SquareTerminal size={14} />, onClick: () => terminalHere(e.path) },
+            ...(shell ? [{ label: "Terminal dans ce dossier", icon: <SquareTerminal size={14} />, onClick: () => terminalHere(e.path) }] : []),
             ...(!bookmarks.some((b) => b.path === e.path) ? [{ label: "Ajouter aux raccourcis", icon: <Star size={14} />, onClick: () => addBookmark(serverId, e.path) }] : []),
           ] as MenuItem[])
         : []),
@@ -593,7 +594,7 @@ function Explorer({
         if (e.key === "F5") refresh();
         if (e.key === "Escape" && selected.size) setSelected(new Set());
         // Ctrl+P : chercher un fichier ou du texte dans toute l'arborescence.
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+        if (shell && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
           e.preventDefault();
           setSearchOpen(true);
         }
@@ -688,9 +689,11 @@ function Explorer({
         >
           {dual ? null : "Envoyer"}
         </Button>
-        <IconButton title="Chercher un fichier ou du texte dans l'arborescence (Ctrl+P)" onClick={() => setSearchOpen(true)}>
-          <Search size={15} />
-        </IconButton>
+        {shell && (
+          <IconButton title="Chercher un fichier ou du texte dans l'arborescence (Ctrl+P)" onClick={() => setSearchOpen(true)}>
+            <Search size={15} />
+          </IconButton>
+        )}
         <IconButton title="Actualiser (F5)" onClick={refresh}>
           <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
         </IconButton>
@@ -700,18 +703,22 @@ function Explorer({
           items={[
             { label: "Fichiers cachés", checked: showHidden, onClick: () => setSettings({ showHiddenFiles: !showHidden }) },
             { label: "Double panneau (copie entre serveurs)", checked: dual, onClick: onToggleDual },
-            {
-              label: "Mini terminal dans ce dossier",
-              checked: miniTerminalOpen,
-              onClick: () => {
-                setMiniTerminalOpen((v) => !v);
-                setTimeout(() => miniInputRef.current?.focus(), 0);
-              },
-            },
-            "separator",
-            { label: "Ouvrir un terminal ici", icon: <SquareTerminal size={14} />, disabled: !cwd, onClick: () => terminalHere(cwd) },
+            ...(shell
+              ? ([
+                  {
+                    label: "Mini terminal dans ce dossier",
+                    checked: miniTerminalOpen,
+                    onClick: () => {
+                      setMiniTerminalOpen((v) => !v);
+                      setTimeout(() => miniInputRef.current?.focus(), 0);
+                    },
+                  },
+                  "separator",
+                  { label: "Ouvrir un terminal ici", icon: <SquareTerminal size={14} />, disabled: !cwd, onClick: () => terminalHere(cwd) },
+                ] as MenuItem[])
+              : []),
             { label: "Copier le chemin du dossier", icon: <Copy size={14} />, disabled: !cwd, onClick: () => copyPath(cwd) },
-            ...(composeInCwd ? [{ label: `Docker Compose (${composeInCwd})…`, icon: <Container size={14} />, onClick: () => setComposeFile(join(composeInCwd)) }] : []),
+            ...(shell && composeInCwd ? [{ label: `Docker Compose (${composeInCwd})…`, icon: <Container size={14} />, onClick: () => setComposeFile(join(composeInCwd)) }] : []),
           ]}
         />
       </div>
@@ -805,10 +812,12 @@ function Explorer({
                   Éditer
                 </Button>
               )}
-              <Button size="sm" variant="ghost" icon={<FileArchive size={13} />} onClick={() => setArchiving(selectedEntries.map((e) => e.path))}>
-                Compresser
-              </Button>
-              {single && isArchive(single) && (
+              {shell && (
+                <Button size="sm" variant="ghost" icon={<FileArchive size={13} />} onClick={() => setArchiving(selectedEntries.map((e) => e.path))}>
+                  Compresser
+                </Button>
+              )}
+              {shell && single && isArchive(single) && (
                 <Button size="sm" variant="ghost" icon={<PackageOpen size={13} />} onClick={() => void extract(single)}>
                   Extraire
                 </Button>

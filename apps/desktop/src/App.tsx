@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect, useState, type ComponentType } from "react";
 import { ShipWheel } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { api, type AppNotice } from "./lib/api";
+import { api, hasShell, type AppNotice } from "./lib/api";
 import { useApp, useAppPick } from "./lib/store";
-import type { SectionId } from "./sections";
+import { needsShell, type SectionId } from "./sections";
 import { DialogHost, EmptyState, Toasts } from "./components/ui";
 import LockScreen from "./components/LockScreen";
 import ConnectionDoctor from "./components/ConnectionDoctor";
@@ -59,7 +59,7 @@ const VIEWS: Partial<Record<SectionId, ComponentType>> = {
 };
 
 export default function App() {
-  const { section, activeServerId, refreshServers, hydrated, hydrate } = useAppPick("section", "activeServerId", "refreshServers", "hydrated", "hydrate");
+  const { section, setSection, activeServerId, refreshServers, hydrated, hydrate } = useAppPick("section", "setSection", "activeServerId", "refreshServers", "hydrated", "hydrate");
   const [version, setVersion] = useState<string>();
   const paletteOpen = useShell((s) => s.paletteOpen);
   const View = VIEWS[section];
@@ -160,7 +160,12 @@ export default function App() {
   }, [autoRefreshSecs]);
   // Santé du serveur actif (badges de la barre latérale), seulement s'il est déjà connecté.
   const activeConnected = useApp((s) => s.servers.find((x) => x.id === s.activeServerId)?.connected ?? false);
-  usePolling(() => (activeServerId ? fetchHealth(activeServerId, 30_000) : undefined), 60_000, [activeServerId], activeConnected);
+  const activeShell = useApp((s) => hasShell(s.servers.find((x) => x.id === s.activeServerId)));
+  usePolling(() => (activeServerId ? fetchHealth(activeServerId, 30_000) : undefined), 60_000, [activeServerId], activeConnected && activeShell);
+  // Un compte sans shell n'a que les fichiers : on n'affiche pas une page qui ne peut rien faire.
+  useEffect(() => {
+    if (!activeShell && needsShell(section)) setSection("files");
+  }, [activeShell, section, setSection]);
 
   const assistantOpen = useAssistant((s) => s.open);
   const machinesOpen = useShell((s) => s.machinesOpen);

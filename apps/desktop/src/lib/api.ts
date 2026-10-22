@@ -2,6 +2,17 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 
 export type AuthKind = "password" | "key" | "agent";
 
+/** Protocole d'accès : seul `ssh` ouvre un shell, les autres ne servent qu'aux fichiers. */
+export type Protocol = "ssh" | "sftp" | "ftp" | "ftps";
+
+export const PROTOCOL_LABELS: Record<Protocol, string> = { ssh: "SSH complet", sftp: "SFTP seul", ftp: "FTP", ftps: "FTPS" };
+
+/** Ce serveur accepte-t-il des commandes (terminal, Docker, supervision…) ? Les anciens profils sont en SSH. */
+export const hasShell = (s?: { protocol?: Protocol } | null) => !s || !s.protocol || s.protocol === "ssh";
+
+/** Pastille « SFTP » / « FTP » / « FTPS » des serveurs sans shell (rien pour le SSH). */
+export const protocolBadge = (s?: { protocol?: Protocol } | null) => (hasShell(s) ? null : (s!.protocol as Protocol).toUpperCase());
+
 export interface ServerProfile {
   id: string;
   name: string;
@@ -9,6 +20,8 @@ export interface ServerProfile {
   port: number;
   username: string;
   authKind: AuthKind;
+  /** Absent des anciens profils : SSH. */
+  protocol?: Protocol;
   keyPath?: string | null;
   color?: string | null;
   group?: string | null;

@@ -3,9 +3,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Box, Cable, CircleHelp, FolderOpen, Globe, History, Layers, Monitor, Plug, RotateCw, ScrollText, Search, Server, SquareTerminal, Star, Stethoscope, Zap } from "lucide-react";
 import { useDoctor } from "./ConnectionDoctor";
 import { focusedTerminal } from "../lib/focus";
-import { api, errorMessage, shellQuote, type DesktopView, type DockerOverview, type Snippet, type TunnelView, type WebEngine } from "../lib/api";
+import { api, errorMessage, hasShell, shellQuote, type DesktopView, type DockerOverview, type Snippet, type TunnelView, type WebEngine } from "../lib/api";
 import { openDesktop } from "./RemoteDesktops";
-import { SECTIONS } from "../sections";
+import { needsShell, SECTIONS } from "../sections";
 import { GUIDES } from "../lib/guides";
 import { ensureConnected, useApp, useAppPick } from "../lib/store";
 import { useShell } from "../lib/shell";
@@ -103,14 +103,14 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
   }, [server?.id, server?.connected]);
 
   const actions = useMemo<Action[]>(() => {
-    const list: Action[] = SECTIONS.map((s) => ({ group: "Navigation", id: `go:${s.id}`, label: `Aller à ${s.label}`, icon: <s.icon size={15} />, run: () => setSection(s.id) }));
+    const list: Action[] = SECTIONS.filter((s) => hasShell(server) || !needsShell(s.id)).map((s) => ({ group: "Navigation", id: `go:${s.id}`, label: `Aller à ${s.label}`, icon: <s.icon size={15} />, run: () => setSection(s.id) }));
     // Les fiches d'aide sont cherchables ici : « tmux », « compose », « restic »… mènent droit au mode d'emploi.
     for (const g of GUIDES) {
       list.push({ group: "Aide", id: `guide:${g.id}`, label: `Aide : ${g.title}`, hint: g.summary, icon: <CircleHelp size={15} />, run: () => useApp.getState().openHelpPage(g.id) });
     }
     for (const s of servers) {
       list.push({ group: "Serveurs", id: `server:${s.id}`, label: `Serveur : ${s.name}`, hint: s.host, icon: <Server size={15} />, run: () => setActiveServer(s.id) });
-      list.push({ group: "Serveurs", id: `term:${s.id}`, label: `Terminal sur ${s.name}`, icon: <SquareTerminal size={15} />, run: () => openTab(s.id) });
+      if (hasShell(s)) list.push({ group: "Serveurs", id: `term:${s.id}`, label: `Terminal sur ${s.name}`, icon: <SquareTerminal size={15} />, run: () => openTab(s.id) });
       list.push({
         group: "Serveurs", id: `doctor:${s.id}`,
         label: `Diagnostiquer la connexion à ${s.name}`,
@@ -129,7 +129,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
         });
       }
     }
-    if (server) {
+    if (server && hasShell(server)) {
       const sid = server.id;
       const dk = `${docker?.access === "sudo" ? "sudo " : ""}${docker?.engine ?? "docker"}`;
       list.push({

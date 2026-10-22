@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Activity, ArrowRight, ChevronRight, LayoutDashboard, LayoutGrid, List, Plus, RotateCw, SquareTerminal, TriangleAlert } from "lucide-react";
 import { useDoctor } from "../components/ConnectionDoctor";
-import { api, mainDisk, errorMessage, formatBytes, formatDuration, type AuditEntry, type ContainerCondition, type DashboardSummary, type ServerView } from "../lib/api";
+import { api, hasShell, mainDisk, errorMessage, formatBytes, formatDuration, type AuditEntry, type ContainerCondition, type DashboardSummary, type ServerView } from "../lib/api";
 import { ensureConnected, useAppPick } from "../lib/store";
 import { navigate, useShell } from "../lib/shell";
 import { fetchHealth, useHealth } from "../lib/health";
@@ -62,7 +62,7 @@ export default function HomeView({ visible }: { visible: boolean }) {
     }
   });
   const [folder, setFolder] = useState("");
-  const ids = servers.map((s) => s.id).join(",");
+  const ids = servers.filter((s) => hasShell(s)).map((s) => s.id).join(",");
   const running = useRef(false);
 
   useEffect(() => {

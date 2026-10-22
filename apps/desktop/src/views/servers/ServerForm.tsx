@@ -3,13 +3,13 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { IdCard, KeyRound, Link2Off } from "lucide-react";
-import { api, errorMessage, type ServerProfile, type ServerView } from "../../lib/api";
+import { api, errorMessage, PROTOCOL_LABELS, type Protocol, type ServerProfile, type ServerView } from "../../lib/api";
 import { useApp } from "../../lib/store";
 import { AUTH_LABELS, filterIdentities, IdentitySuggestions, useIdentities } from "../../components/Identities";
 import { Button, Checkbox, ColorPicker, Drawer, Eyebrow, Field, Input, PROFILE_COLORS, Segmented, Select } from "../../components/ui";
 
 function emptyProfile(): ServerProfile {
-  return { id: "", name: "", host: "", port: 22, username: "root", authKind: "password", keyPath: null, color: PROFILE_COLORS[0], group: null };
+  return { id: "", name: "", host: "", port: 22, username: "root", authKind: "password", protocol: "ssh", keyPath: null, color: PROFILE_COLORS[0], group: null };
 }
 
 export default function ServerForm({ server, folders, onClose, onSaved }: { server: ServerView | null; folders: string[]; onClose: () => void; onSaved: (id: string) => void }) {
@@ -28,8 +28,18 @@ export default function ServerForm({ server, folders, onClose, onSaved }: { serv
   const identities = useIdentities((s) => s.list);
   const identity = identities.find((i) => i.id === p.identityId);
   const suggestions = filterIdentities(identities, p.username === "root" && !server ? "" : p.username);
+  const protocol = p.protocol ?? "ssh";
+  const ftp = protocol === "ftp" || protocol === "ftps";
   const hostError = p.host.trim() && /\s/.test(p.host.trim()) ? "L'hôte ne doit pas contenir d'espace." : undefined;
   const portError = p.port < 1 || p.port > 65535 ? "Port entre 1 et 65535." : undefined;
+
+  // FTP/FTPS : mot de passe uniquement, ni clé ni rebond ; le port par défaut suit le protocole.
+  const setProtocol = (next: Protocol) =>
+    setP((prev) => {
+      const toFtp = next === "ftp" || next === "ftps";
+      const port = toFtp && prev.port === 22 ? 21 : !toFtp && prev.port === 21 ? 22 : prev.port;
+      return toFtp ? { ...prev, protocol: next, port, authKind: "password", keyPath: null, jumpId: null } : { ...prev, protocol: next, port };
+    });
 
   const linkIdentity = (i: (typeof identities)[number]) => {
     setP((prev) => ({ ...prev, identityId: i.id, username: i.username, authKind: i.authKind, keyPath: i.keyPath ?? null }));
@@ -98,12 +108,15 @@ export default function ServerForm({ server, folders, onClose, onSaved }: { serv
           <Field label="Nom">
             <Input value={p.name} placeholder="Mon VPS" onChange={(e) => set("name", e.target.value)} autoFocus />
           </Field>
+          <Field label="Protocole" hint={protocol === "sftp" ? "Pour un compte limité au transfert de fichiers (internal-sftp, chroot) : aucune commande n'est lancée." : ftp ? "Fichiers uniquement, sans SSH. FTPS chiffre la connexion (TLS explicite)." : undefined}>
+            <Select value={protocol} onChange={(v) => setProtocol(v as Protocol)} options={(Object.keys(PROTOCOL_LABELS) as Protocol[]).map((k) => ({ value: k, label: PROTOCOL_LABELS[k] }))} />
+          </Field>
           <div className="grid grid-cols-[minmax(0,1fr)_110px] gap-3">
             <Field label="Hôte" error={hostError}>
               <Input className="font-mono" value={p.host} placeholder="vps.exemple.fr ou 51.xx.xx.xx" onChange={(e) => set("host", e.target.value)} />
             </Field>
             <Field label="Port" error={portError}>
-              <Input className="font-mono" type="number" value={p.port} onChange={(e) => set("port", Number(e.target.value) || 22)} />
+              <Input className="font-mono" type="number" value={p.port} onChange={(e) => set("port", Number(e.target.value) || (ftp ? 21 : 22))} />
             </Field>
           </div>
           <Field
@@ -175,17 +188,19 @@ export default function ServerForm({ server, folders, onClose, onSaved }: { serv
             </p>
           ) : (
             <>
-              <Segmented
-                label="Méthode d'authentification"
-                value={p.authKind}
-                onChange={(k) => set("authKind", k)}
-                className="self-start"
-                options={[
-                  { value: "key", label: "Clé privée" },
-                  { value: "password", label: "Mot de passe" },
-                  { value: "agent", label: "Agent SSH / Pageant" },
-                ]}
-              />
+              {!ftp && (
+                <Segmented
+                  label="Méthode d'authentification"
+                  value={p.authKind}
+                  onChange={(k) => set("authKind", k)}
+                  className="self-start"
+                  options={[
+                    { value: "key", label: "Clé privée" },
+                    { value: "password", label: "Mot de passe" },
+                    { value: "agent", label: "Agent SSH / Pageant" },
+                  ]}
+                />
+              )}
               {p.authKind === "password" && (
                 <Field label="Mot de passe" hint={keptHint(server?.hasPassword) ?? "Tu peux aussi le laisser vide : il sera demandé à la connexion."}>
                   <Input type="password" value={password} autoComplete="new-password" onChange={(e) => setPassword(e.target.value)} />
@@ -224,7 +239,7 @@ export default function ServerForm({ server, folders, onClose, onSaved }: { serv
 
         <section className="flex flex-col gap-4">
           <Eyebrow>Avancé</Eyebrow>
-          {others.length > 0 && (
+          {others.length > 0 && !ftp && (
             <Field label="Serveur de rebond" hint="Pour un serveur joignable seulement à travers un autre (bastion, réseau privé) : équivalent de ssh -J.">
               <Select
                 value={p.jumpId ?? ""}
@@ -233,9 +248,11 @@ export default function ServerForm({ server, folders, onClose, onSaved }: { serv
               />
             </Field>
           )}
-          <Field label="Mot de passe sudo (optionnel)" hint={keptHint(server?.hasSudoPassword) ?? "Pour les actions d'administration (nginx, services…) si tu ne te connectes pas en root."}>
-            <Input type="password" value={sudo} onChange={(e) => setSudo(e.target.value)} />
-          </Field>
+          {protocol === "ssh" && (
+            <Field label="Mot de passe sudo (optionnel)" hint={keptHint(server?.hasSudoPassword) ?? "Pour les actions d'administration (nginx, services…) si tu ne te connectes pas en root."}>
+              <Input type="password" value={sudo} onChange={(e) => setSudo(e.target.value)} />
+            </Field>
+          )}
           <Checkbox
             checked={p.autoConnect ?? false}
             onChange={(v) => set("autoConnect", v)}

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { api, errorMessage, type ServerView } from "./api";
+import { api, errorMessage, hasShell, type ServerView } from "./api";
 import type { SectionId } from "../sections";
 import type { GuideId } from "./guides";
 import type { ThemeSetting } from "./theme";
@@ -318,6 +318,10 @@ export const useApp = create<State>((set, get) => ({
   tabs: [],
   activeTab: null,
   openTab: (serverId, opts = {}) => {
+    if (!hasShell(get().servers.find((s) => s.id === serverId))) {
+      get().notify("Ce serveur n'a pas de shell : il n'offre que les fichiers.", "warn");
+      return;
+    }
     const { servers, settings } = get();
     const server = servers.find((s) => s.id === serverId);
     const key = newId();

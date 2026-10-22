@@ -1,4 +1,5 @@
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { hasShell } from "./api";
 import { fetchHealth } from "./health";
 import { setServerAlerts } from "./desktop";
 import { useApp } from "./store";
@@ -27,7 +28,7 @@ export function watchAlerts(): () => void {
   const tick = async () => {
     const { servers, settings } = useApp.getState();
     if (stopped || !settings.alertNotifications) return;
-    for (const s of servers.filter((x) => x.connected)) {
+    for (const s of servers.filter((x) => x.connected && hasShell(x))) {
       const summary = await fetchHealth(s.id, 20_000).catch(() => null);
       if (!summary?.connected) continue;
       setServerAlerts(s.id, summary.alerts.length);

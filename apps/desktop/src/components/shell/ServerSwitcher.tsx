@@ -7,7 +7,7 @@ import { badgesOf, useHealth } from "../../lib/health";
 import { fuzzyMatch } from "../../lib/fuzzy";
 import { useShell } from "../../lib/shell";
 import { display, shortcutOf } from "../../lib/shortcuts";
-import type { ServerView } from "../../lib/api";
+import { protocolBadge, type ServerView } from "../../lib/api";
 import { FOCUS_RING, IconButton, Kbd, StatusDot } from "../ui";
 
 export default function ServerSwitcher({ onClose }: { onClose: () => void }) {
@@ -116,7 +116,7 @@ export default function ServerSwitcher({ onClose }: { onClose: () => void }) {
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-[13px] font-medium">{s.name}</span>
                   <span className="truncate font-mono text-[10.5px] text-muted">
-                    {s.username}@{s.host}
+                    {s.username}@{s.host}{protocolBadge(s) ? ` · ${protocolBadge(s)}` : ""}
                   </span>
                 </span>
                 {hint && <span className={`shrink-0 text-[11px] ${hint.tone}`}>{hint.text}</span>}
