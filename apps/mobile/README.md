@@ -69,7 +69,9 @@ publiable sur le Play Store) et une app pour le simulateur iOS. Pas de signature
   propose de se reconnecter (il repart sur un shell neuf). Pour être prévenu à tout moment : notifications ntfy de l'agent.
 - **Secrets hors trousseau** : mots de passe et clés sont dans le stockage privé de l'app (`secrets.json`, dossier `keys/`),
   protégé par le bac à sable du système, mais pas dans Android Keystore ni dans le Trousseau iOS. À remplacer par un plugin
-  de trousseau avant toute publication sur les magasins.
+  de trousseau avant toute publication sur les magasins. Les fichiers sont en 0600 ; la sauvegarde Android est désactivée par
+  le workflow (`android:allowBackup="false"`). **iOS** : le dossier de données de l'app est inclus dans les sauvegardes
+  iTunes/iCloud (l'exclusion demande `NSURLIsExcludedFromBackupKey`, côté natif), donc les secrets aussi.
 - **Pas d'agent SSH** sur téléphone, pas de fichier de clé du PC : les clés sont collées et copiées dans l'app.
 - **Téléchargements** rangés dans le dossier privé de l'app (pas de feuille de partage pour l'instant) ; envois de 25 Mo maximum.
 - Rien de tout cela n'a encore tourné sur un vrai téléphone : seule la partie Rust et l'interface ont été compilées et testées sur PC.

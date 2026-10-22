@@ -21,6 +21,26 @@ fn remember(server_id: &str, kind: &str, present: bool) {
     presence().lock().unwrap_or_else(|e| e.into_inner()).insert(format!("{server_id}:{kind}"), present);
 }
 
+/// Écrit un fichier lisible par l'app seule (0600 sous Unix : Android et iOS le sont déjà par le
+/// bac à sable, mais pas une copie de sauvegarde ni un appareil rooté).
+pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    opts.open(path)?.write_all(bytes)
+}
+
+/// Secret propre au téléphone : chemin de la clé privée collée sur cet appareil. Jamais exporté ni
+/// synchronisé (absent de `SECRET_KINDS`), pour ne pas écraser le `key_path` du PC.
+pub const MOBILE_KEY: &str = "mobile-key";
+
+/// Les secrets sont-ils dans un fichier (app mobile) plutôt que dans le coffre de l'OS ?
+pub fn is_file() -> bool {
+    FILE.get().is_some()
+}
+
 /// Secrets dans un fichier JSON (`id:type` → valeur), pour les plateformes sans keyring.
 struct FileSecrets {
     path: PathBuf,
@@ -46,7 +66,7 @@ impl FileSecrets {
             map.insert(key.to_string(), value.to_string());
         }
         let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec(&*map).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        write_private(&tmp, &serde_json::to_vec(&*map).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())
     }
 }
@@ -55,7 +75,7 @@ static FILE: OnceLock<FileSecrets> = OnceLock::new();
 
 /// Range les secrets dans ce fichier plutôt que dans le coffre de l'OS (app mobile, où le
 /// coffre n'est pas disponible). À appeler une fois, au démarrage.
-// shortcut: secrets in app-private storage, not Android Keystore/iOS Keychain; upgrade to a keystore plugin before store release
+// shortcut: secrets in app-private storage (0600), not Android Keystore/iOS Keychain, and iOS backups include them; upgrade to a keystore plugin before store release
 pub fn use_file(path: PathBuf) {
     let _ = FILE.set(FileSecrets::open(path));
 }

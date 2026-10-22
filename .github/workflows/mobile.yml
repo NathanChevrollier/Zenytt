@@ -48,6 +48,12 @@ jobs:
       # Icônes Android et iOS, produites à partir de l'icône du bureau.
       - run: pnpm --filter zenytt-mobile tauri icon ../desktop/app-icon.svg
       - run: pnpm --filter zenytt-mobile tauri android init --ci
+      # Les secrets de l'app (secrets.json, keys/) ne doivent pas partir dans les sauvegardes Android.
+      - name: Désactiver la sauvegarde Android
+        run: |
+          manifest=apps/mobile/src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          sed -i -E 's/ android:allowBackup="[a-z]*"//; s/<application/<application android:allowBackup="false"/' "$manifest"
+          grep -q 'android:allowBackup="false"' "$manifest"
       - run: pnpm --filter zenytt-mobile tauri android build --apk --debug
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

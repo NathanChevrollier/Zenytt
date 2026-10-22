@@ -23,6 +23,10 @@ const FORMAT: &str = "zenytt-export";
 fn known_format(format: &str) -> bool {
     format == FORMAT || format == crate::legacy::OLD_EXPORT_FORMAT
 }
+/// Version écrite des exports et du contenu synchronisé. La 2 ajoute `protocol` et `provider` aux
+/// serveurs : une version qui ne lit que la 1 refuse le fichier au lieu de les perdre en silence
+/// puis de les renvoyer effacés par la synchronisation.
+const VERSION: u32 = 2;
 const ITERATIONS: u32 = 600_000;
 pub(crate) const SECRET_KINDS: &[&str] =
     &["password", "passphrase", "sudo", "restic", "token", "ovh-app-key", "ovh-app-secret", "ovh-consumer-key"];
@@ -90,9 +94,30 @@ pub(crate) fn snapshot(store: &Store, include_secrets: bool) -> Payload {
     payload
 }
 
-/// Enregistre dans le coffre les secrets d'un export (types connus uniquement).
-pub(crate) fn store_secrets(from: &BTreeMap<String, BTreeMap<String, String>>) -> Result<(), String> {
-    for (owner, kinds) in from {
+/// Propriétaires de secrets que ce contenu a le droit de renseigner : ses propres éléments.
+/// Jamais `sync` ni un autre propriétaire réservé : un export piégé ne doit pas pouvoir remplacer
+/// le jeton de synchronisation ni les secrets d'un élément absent du contenu.
+fn own_owners(p: &Payload) -> Vec<String> {
+    // Un identifiant de serveur qui imiterait un propriétaire réservé (`sync`, `identity-…`) n'ouvre aucun droit.
+    let reserved =
+        |id: &str| id == crate::sync::SECRET_OWNER || ["provider-", "identity-", "rdp-", "registry-"].iter().any(|p| id.starts_with(p));
+    p.servers
+        .iter()
+        .filter(|s| !reserved(&s.id))
+        .flat_map(|s| [s.id.clone(), ServerProfile::provider_owner(&s.id)])
+        .chain(p.identities.iter().map(|i| Identity::secret_owner(&i.id)))
+        .chain(p.desktops.iter().map(|r| RemoteDesktop::secret_owner(&r.id)))
+        .chain(p.registries.iter().flatten().map(|r| Registry::secret_owner(&r.id)))
+        .collect()
+}
+
+/// Enregistre dans le coffre les secrets d'un export (types connus et propriétaires du contenu uniquement).
+pub(crate) fn store_secrets(p: &Payload) -> Result<(), String> {
+    store_owned_secrets(&p.secrets, &own_owners(p))
+}
+
+fn store_owned_secrets(from: &BTreeMap<String, BTreeMap<String, String>>, owners: &[String]) -> Result<(), String> {
+    for (owner, kinds) in from.iter().filter(|(o, _)| owners.contains(o)) {
         for (kind, value) in kinds {
             if SECRET_KINDS.contains(&kind.as_str()) {
                 secrets::set(owner, kind, value)?;
@@ -162,7 +187,7 @@ pub(crate) fn seal(payload: &Payload, password: &str) -> Result<String, String> 
     let envelope = if password.is_empty() {
         Envelope {
             format: FORMAT.into(),
-            version: 1,
+            version: VERSION,
             encrypted: false,
             iterations: None,
             salt: None,
@@ -180,7 +205,7 @@ pub(crate) fn seal(payload: &Payload, password: &str) -> Result<String, String> 
             .map_err(|_| "chiffrement impossible")?;
         Envelope {
             format: FORMAT.into(),
-            version: 1,
+            version: VERSION,
             encrypted: true,
             iterations: Some(ITERATIONS),
             salt: Some(B64.encode(salt)),
@@ -302,7 +327,7 @@ pub fn is_encrypted(text: &str) -> Result<bool, String> {
 
 pub(crate) fn open(text: &str, password: &str) -> Result<Payload, String> {
     let e: Envelope = serde_json::from_str(text).map_err(|_| "ce fichier n'est pas un export de Zenytt")?;
-    if !known_format(&e.format) || e.version != 1 {
+    if !known_format(&e.format) || !(1..=VERSION).contains(&e.version) {
         return Err("format d'export inconnu (fichier d'une version plus récente de Zenytt ?)".into());
     }
     if !e.encrypted {
@@ -346,6 +371,7 @@ pub fn import(store: &Store, text: &str, password: &str) -> Result<ImportSummary
         identity_links_removed,
         rejected,
     };
+    let (owners, secrets) = (own_owners(&p), std::mem::take(&mut p.secrets));
     store.write(|d| {
         fn merge<T>(into: &mut Vec<T>, from: Vec<T>, id: impl Fn(&T) -> &str) {
             for item in from {
@@ -370,7 +396,7 @@ pub fn import(store: &Store, text: &str, password: &str) -> Result<ImportSummary
             d.known_hosts.entry(host).or_insert(fingerprint);
         }
     })?;
-    store_secrets(&p.secrets)?;
+    store_owned_secrets(&secrets, &owners)?;
     Ok(summary)
 }
 
@@ -405,8 +431,10 @@ fn rekey_conflicting_servers(p: &mut Payload, existing: &[ServerProfile]) -> usi
         for f in p.ignored_findings.iter_mut().filter(|f| &f.server_id == old) {
             f.server_id = new.clone();
         }
-        if let Some(secrets) = p.secrets.remove(old) {
-            p.secrets.insert(new.clone(), secrets);
+        for (from, to) in [(old.clone(), new.clone()), (ServerProfile::provider_owner(old), ServerProfile::provider_owner(new))] {
+            if let Some(secrets) = p.secrets.remove(&from) {
+                p.secrets.insert(to, secrets);
+            }
         }
     }
     renamed.len()
@@ -774,5 +802,42 @@ mod tests {
         let summary = import(&target, &text, "").unwrap();
         assert_eq!(summary.rejected, 3);
         assert_eq!(target.read(|d| d.desktops.iter().map(|r| r.id.clone()).collect::<Vec<_>>()), vec!["d3".to_string()]);
+    }
+
+    #[test]
+    fn rekey_deplace_aussi_les_identifiants_de_l_hebergeur() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = store_with_server(dir.path()).read(|d| d.servers.clone());
+        let mut other = existing[0].clone();
+        other.host = "ailleurs".into();
+        let mut p = Payload { servers: vec![other], ..Default::default() };
+        p.secrets.insert("a".into(), BTreeMap::from([("password".into(), "x".into())]));
+        p.secrets.insert("provider-a".into(), BTreeMap::from([("token".into(), "t".into())]));
+        assert_eq!(rekey_conflicting_servers(&mut p, &existing), 1);
+        let new = p.servers[0].id.clone();
+        assert_ne!(new, "a");
+        assert!(p.secrets.contains_key(&new) && p.secrets.contains_key(&ServerProfile::provider_owner(&new)));
+        assert!(!p.secrets.contains_key("a") && !p.secrets.contains_key("provider-a"), "rien ne reste sous l'ancien identifiant");
+    }
+
+    #[test]
+    fn un_contenu_ne_renseigne_que_ses_propres_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Payload { servers: store_with_server(dir.path()).read(|d| d.servers.clone()), ..Default::default() };
+        let owners = own_owners(&p);
+        assert!(owners.contains(&"a".to_string()) && owners.contains(&"provider-a".to_string()));
+        assert!(!owners.iter().any(|o| o == "sync" || o == "b"), "ni le jeton de synchronisation ni un autre serveur");
+        let mut sneaky = p.servers[0].clone();
+        sneaky.id = "sync".into();
+        assert!(!own_owners(&Payload { servers: vec![sneaky], ..Default::default() }).iter().any(|o| o == "sync"));
+    }
+
+    #[test]
+    fn la_version_ecrite_est_la_2_et_la_1_reste_lisible() {
+        let text = seal(&Payload::default(), "").unwrap();
+        assert!(text.contains("\"version\": 2"), "{text}");
+        assert!(open(&text, "").is_ok());
+        assert!(open(&text.replace("\"version\": 2", "\"version\": 1"), "").is_ok());
+        assert!(open(&text.replace("\"version\": 2", "\"version\": 3"), "").is_err());
     }
 }

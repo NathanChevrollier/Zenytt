@@ -284,7 +284,7 @@ fn apply(store: &Store, p: &Payload, include_secrets: bool) -> Result<(Vec<Strin
         secrets::delete_all(&Identity::secret_owner(id));
     }
     if include_secrets {
-        export::store_secrets(&p.secrets)?;
+        export::store_secrets(p)?;
     }
     Ok((removed_servers, removed_tunnels))
 }

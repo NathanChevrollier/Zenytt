@@ -503,6 +503,18 @@ impl Store {
             }
             None => (profile.username, profile.auth_kind, profile.key_path, server_id.to_string(), "ce serveur"),
         };
+        // Mobile : la clé collée sur le téléphone prime (son chemin n'est jamais dans le profil
+        // synchronisé), et un mot de passe saisi ici vaut mieux qu'une clé du PC absente du téléphone.
+        let phone_key = secrets::is_file().then(|| secrets::get(server_id, secrets::MOBILE_KEY)).flatten();
+        let phone_password = secrets::is_file() && auth_kind != AuthKind::Password && secrets::get(&owner, "password").is_some();
+        let auth_kind = if phone_key.is_some() {
+            AuthKind::Key
+        } else if phone_password {
+            AuthKind::Password
+        } else {
+            auth_kind
+        };
+        let key_path = phone_key.or(key_path);
         let auth = match auth_kind {
             AuthKind::Password => Auth::Password {
                 password: secrets::get(&owner, "password").ok_or(format!("NEED_PASSWORD: aucun mot de passe enregistré pour {what}"))?,

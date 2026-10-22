@@ -17,10 +17,17 @@ pub struct ServerView {
     auth_ready: bool,
 }
 
+/// Clé privée collée sur ce téléphone (son chemin vit dans les secrets, pas dans le profil synchronisé).
+fn phone_key(id: &str) -> Option<String> {
+    secrets::get(id, secrets::MOBILE_KEY).filter(|k| Path::new(k).is_file())
+}
+
 fn auth_ready(p: &ServerProfile) -> bool {
+    // Un mot de passe saisi sur le téléphone vaut pour une clé du PC (voir `Store::connect_params`).
     match p.auth_kind {
         AuthKind::Password => secrets::has(&p.id, "password"),
-        AuthKind::Key => p.key_path.as_deref().is_some_and(|k| Path::new(k).is_file()),
+        AuthKind::Key if phone_key(&p.id).is_none() => secrets::has(&p.id, "password"),
+        AuthKind::Key => phone_key(&p.id).is_some(),
         // Pas d'agent SSH sur un téléphone.
         AuthKind::Agent => false,
     }
@@ -77,17 +84,30 @@ pub async fn server_save(
     let existing = store.server(&id).ok();
 
     // La clé collée est rangée dans un fichier privé de l'app (le SSH de Zenytt lit une clé par son chemin).
+    // Son chemin reste dans les secrets du téléphone : `key_path` et `auth_kind` d'un profil existant
+    // sont synchronisés avec le PC et ne doivent jamais recevoir de valeur propre au téléphone.
     // shortcut: secrets in app-private storage, not Android Keystore/iOS Keychain; upgrade to a keystore plugin before store release
-    let mut key_path = existing.as_ref().and_then(|s| s.key_path.clone());
     if let Some(key) = input.private_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
         let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("keys");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let path = dir.join(&id);
-        std::fs::write(&path, format!("{key}\n")).map_err(|e| e.to_string())?;
-        key_path = Some(path.to_string_lossy().into_owned());
+        secrets::write_private(
+            &path,
+            format!(
+                "{key}
+"
+            )
+            .as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
+        secrets::set(&id, secrets::MOBILE_KEY, &path.to_string_lossy())?;
     }
-    if input.auth_kind == AuthKind::Key && !key_path.as_deref().is_some_and(|k| Path::new(k).is_file()) {
+    if input.auth_kind == AuthKind::Key && phone_key(&id).is_none() {
         return Err("colle la clé privée du serveur".into());
+    }
+    // Mot de passe choisi : la clé du téléphone ne doit plus primer.
+    if input.auth_kind == AuthKind::Password {
+        secrets::set(&id, secrets::MOBILE_KEY, "")?;
     }
 
     for (kind, value) in [("password", &input.password), ("passphrase", &input.passphrase), ("sudo", &input.sudo_password)] {
@@ -101,8 +121,9 @@ pub async fn server_save(
         host,
         port: input.port,
         username: input.username.trim().to_string(),
-        auth_kind: input.auth_kind,
-        key_path,
+        // Profil existant : type d'authentification et chemin de clé restent ceux du PC.
+        auth_kind: existing.as_ref().map_or(input.auth_kind, |e| e.auth_kind),
+        key_path: existing.as_ref().and_then(|e| e.key_path.clone()),
         // Le reste (groupe, rebond…) vient du PC et ne se règle pas ici.
         ..existing.unwrap_or(ServerProfile {
             id: String::new(),
@@ -133,9 +154,13 @@ pub async fn server_save(
 }
 
 #[tauri::command]
-pub async fn server_delete(store: State<'_, Store>, sessions: State<'_, Sessions>, id: String) -> Result<(), String> {
+pub async fn server_delete(app: AppHandle, store: State<'_, Store>, sessions: State<'_, Sessions>, id: String) -> Result<(), String> {
     sessions.disconnect(&id).await;
     secrets::delete_all(&id);
+    let _ = secrets::set(&id, secrets::MOBILE_KEY, "");
+    if let Ok(dir) = app.path().app_data_dir() {
+        let _ = std::fs::remove_file(dir.join("keys").join(&id));
+    }
     secrets::delete_all(&ServerProfile::provider_owner(&id));
     store.write(|d| d.servers.retain(|s| s.id != id))
 }
