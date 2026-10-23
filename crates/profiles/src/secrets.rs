@@ -8,6 +8,9 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(feature = "keyring")]
 use crate::APP_ID;
 
+/// Propriétaire du jeton GitHub (page GitHub). Jamais exporté ni synchronisé, jamais accepté d'un contenu reçu.
+pub const GITHUB_OWNER: &str = "github";
+
 /// Présence connue de chaque secret (`id:type` → présent ?). Lister les serveurs demande trois
 /// lectures du coffre par serveur, à chaque actualisation ; le coffre (surtout Secret Service via
 /// D-Bus) répond en plusieurs millisecondes. Le cache n'est tenu que pour les écritures faites par
