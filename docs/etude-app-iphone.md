@@ -1,6 +1,6 @@
 # Étude : une application iPhone pour Zenytt
 
-*Ticket #26 · 5 octobre 2026 · statut : **proposition, décision à prendre** · étape 2 « Zenytt Compagnon » démarrée : [`apps/mobile`](../apps/mobile/README.md)*
+*Ticket #26 · 5 octobre 2026 · statut : **proposition, décision à prendre** · étape 2 « Zenytt Compagnon » démarrée : [`apps/mobile`](../apps/mobile/README.md) ; IPA non signée jointe aux releases, installable sans compte payant via AltStore / SideStore*
 
 ## La demande
 
