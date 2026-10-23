@@ -3,23 +3,32 @@
 // Le jeton reste dans le coffre de l'OS : l'interface ne le relit jamais.
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
-  Container, ExternalLink, Eye, EyeOff, FolderGit2, FolderOpen, GitBranch, GitCommitHorizontal, GitPullRequestArrow, KeyRound, Loader2, Lock, LogOut, RefreshCw, Rocket, Search, Server, SquareTerminal, UserRound,
+  Container, ExternalLink, Eye, EyeOff, FolderGit2, FolderOpen, GitBranch, GitCommitHorizontal, GitPullRequestArrow, KeyRound, Loader2, Lock, LogOut, RefreshCw, Rocket, Search, Server, ShieldAlert, SquareTerminal, UserRound,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, errorMessage, hasShell, shellQuote, type GithubClone, type GithubDeployment, type GithubRepo, type GithubStatus, type ServerView } from "../lib/api";
+import { api, errorMessage, hasShell, shellQuote, type GithubCiRun, type GithubClone, type GithubDeployment, type GithubRepo, type GithubStatus, type ServerView } from "../lib/api";
 import {
-  agoOf, browseRepos, certainDeployments, clonePath, cloneSync, containerTone, githubError, otherDeployments, repoUrl, validFolder, validToken, type RepoFilter, type RepoSort,
+  agoOf, browseRepos, certainDeployments, ciState, clonePath, cloneSync, containerTone, githubError, otherDeployments, repoUrl, urgentAlerts, validFolder, validToken, type InsightKind, type RepoFilter, type RepoSort,
 } from "../lib/github";
+import {
+  AlertBadges, AlertsSection, CiSection, Fold, fetchInsight, GhDeploymentsBlock, INSIGHT_KINDS, IssuesSection, PullsSection, type Insights, type Slot,
+} from "./GithubInsights";
 import { navigate } from "../lib/shell";
 import { useApp, useAppPick } from "../lib/store";
 import { useCachedState } from "../lib/cache";
 import {
-  Avatar, Badge, Button, Card, EmptyState, ErrorState, Field, FOCUS_RING, IconButton, Input, Loading, MenuButton, Modal, ResultBanner, Section, Segmented, Select, Skeleton, StatTile,
+  Avatar, Badge, Button, Card, EmptyState, ErrorState, Field, FOCUS_RING, IconButton, Input, Loading, MenuButton, Modal, ResultBanner, Segmented, Select, Skeleton, StatTile, StatusDot,
 } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 
 const NEW_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
 const FOLDERS = ["/srv", "/opt", "/var/www"];
+/** Pastilles de CI de la liste : seulement les premiers dépôts affichés, 3 requêtes à la fois, pour ménager la limite de GitHub. */
+const DOT_LIMIT = 15;
+const DOT_PARALLEL = 3;
+/** Dernier run de la branche par défaut d'un dépôt (null : aucun workflow). */
+type Dots = Record<string, Slot<GithubCiRun | null>>;
+type InsightsByRepo = Record<string, Insights>;
 
 interface ServerScan {
   loading: boolean;
@@ -54,6 +63,8 @@ export default function GithubView() {
   const [repos, setRepos] = useCachedState<GithubRepo[] | null>("github:repos", null);
   const [scans, setScans] = useCachedState<Scans>("github:scans", {});
   const [deps, setDeps] = useCachedState<Deps>("github:deps", {});
+  const [insights, setInsights] = useCachedState<InsightsByRepo>("github:insights", {});
+  const [dots, setDots] = useCachedState<Dots>("github:dots", {});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
@@ -63,19 +74,24 @@ export default function GithubView() {
   const [tokenOpen, setTokenOpen] = useState(false);
   const [cloneFor, setCloneFor] = useState<GithubRepo | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (reset = false) => {
     setError(null);
     setLoading(true);
     try {
       const st = await api.githubStatus();
       setStatus(st);
       setRepos(st.configured ? await api.githubRepos() : null);
+      // Actualiser (ou changer de jeton) repart de zéro : CI, PR, tickets, alertes seront relus.
+      if (reset) {
+        setInsights({});
+        setDots({});
+      }
     } catch (e) {
       setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
-  }, [setStatus, setRepos]);
+  }, [setStatus, setRepos, setInsights, setDots]);
   useEffect(() => void load(), [load]);
 
   const scan = useCallback(
@@ -147,6 +163,68 @@ export default function GithubView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.fullName, targetIds]);
 
+  // Chaque donnée (CI, PR, tickets, alertes, déploiements, version) se charge seule, à la sélection, puis reste en cache pour la session.
+  const loadInsight = useCallback(
+    async (repo: GithubRepo, kind: InsightKind) => {
+      const put = (change: (old: Slot<unknown> | undefined) => Slot<unknown>) =>
+        setInsights((all) => {
+          const cur = all[repo.fullName] as Record<string, Slot<unknown> | undefined> | undefined;
+          return { ...all, [repo.fullName]: { ...cur, [kind]: change(cur?.[kind]) } };
+        });
+      put((old) => ({ loading: true, data: old?.data })); // l'ancien contenu reste affiché pendant l'actualisation
+      try {
+        const data = await fetchInsight(kind, repo);
+        put(() => ({ loading: false, data }));
+      } catch (e) {
+        put(() => ({ loading: false, error: errorMessage(e) }));
+      }
+    },
+    [setInsights],
+  );
+  useEffect(() => {
+    if (!current) return;
+    const t = setTimeout(() => {
+      const known = insights[current.fullName] ?? {};
+      for (const k of INSIGHT_KINDS) if (!known[k]) void loadInsight(current, k);
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.fullName, !insights[current?.fullName ?? ""]]);
+
+  // Pastille de CI : les premiers dépôts de la liste seulement, 3 requêtes à la fois. La première erreur (permission, limite) arrête le reste.
+  const dotsOff = Object.values(dots).some((d) => d.error);
+  const dotKey = shown.slice(0, DOT_LIMIT).map((r) => r.fullName).join(",");
+  const dotQueue = useRef(new Set<string>());
+  useEffect(() => {
+    if (dotsOff || !repos) return;
+    const todo = shown.slice(0, DOT_LIMIT).filter((r) => !dots[r.fullName] && !dotQueue.current.has(r.fullName));
+    if (!todo.length) return;
+    let live = true;
+    const t = setTimeout(async () => {
+      const queue = [...todo];
+      const worker = async () => {
+        for (let r = queue.shift(); r && live; r = queue.shift()) {
+          dotQueue.current.add(r.fullName);
+          try {
+            const run = (await api.githubCi(r.owner, r.name, r.defaultBranch, 1))[0] ?? null;
+            setDots((all) => ({ ...all, [r.fullName]: { loading: false, data: run } }));
+          } catch (e) {
+            setDots((all) => ({ ...all, [r.fullName]: { loading: false, error: errorMessage(e) } }));
+            queue.length = 0;
+          } finally {
+            dotQueue.current.delete(r.fullName);
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: DOT_PARALLEL }, worker));
+    }, 500);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dotKey, dotsOff, repos]);
+
   const saveToken = async (token: string) => {
     const st = await api.githubSetToken(token);
     setStatus(st);
@@ -154,7 +232,7 @@ export default function GithubView() {
     setError(null);
     if (st.configured) {
       notify(`Connecté en tant que ${st.login}.`, "success");
-      void load();
+      void load(true);
     }
   };
   const disconnect = async () => {
@@ -180,7 +258,7 @@ export default function GithubView() {
       actions={
         connected ? (
           <>
-            <IconButton title="Actualiser la liste des dépôts" onClick={() => void load()} disabled={loading}>
+            <IconButton title="Actualiser la liste des dépôts" onClick={() => void load(true)} disabled={loading}>
               <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
             </IconButton>
             <MenuButton
@@ -225,6 +303,8 @@ export default function GithubView() {
             current={current}
             onSelect={setSelected}
             deployedCount={deployedCount}
+            ciOf={(n) => dots[n]?.data ?? insights[n]?.ci?.data?.[0]}
+            urgentOf={(n) => urgentAlerts(insights[n]?.alerts?.data)}
             scanning={depsLoading}
             canScan={targets.length > 0}
             onScanAll={() => void scanServers(targets.map((s) => s.id))}
@@ -238,6 +318,8 @@ export default function GithubView() {
                 targets={targets}
                 scans={scans[current.fullName] ?? {}}
                 deps={deps}
+                insights={insights[current.fullName] ?? {}}
+                onReloadInsight={(k) => void loadInsight(current, k)}
                 onScan={(id) => {
                   void scan(current, id);
                   void scanServers([id]);
@@ -307,7 +389,9 @@ function Onboarding({ error, onSave }: { error: string | null; onSave: (token: s
         <div className="flex flex-col gap-1.5 border-t border-border pt-3 text-xs leading-relaxed text-muted">
           <p>
             Minimum pour un jeton <strong className="font-medium text-fg">fine-grained</strong> : accès aux dépôts à suivre (ou « All repositories »), permissions de dépôt{" "}
-            <strong className="font-medium text-fg">Metadata : lecture</strong> (ajoutée d'office) et <strong className="font-medium text-fg">Contents : lecture</strong> (pour cloner et mettre à jour les dépôts privés).
+            <strong className="font-medium text-fg">Metadata</strong> + <strong className="font-medium text-fg">Contents</strong> en lecture (pour cloner et mettre à jour les dépôts privés).
+            Optionnel pour plus d'infos : <strong className="font-medium text-fg">Actions</strong>, <strong className="font-medium text-fg">Pull requests</strong>, <strong className="font-medium text-fg">Issues</strong>,{" "}
+            <strong className="font-medium text-fg">Dependabot alerts</strong>, <strong className="font-medium text-fg">Deployments</strong> (lecture). Une permission absente masque seulement la section concernée.
             Aucune permission de compte n'est utile. Un jeton classique avec le droit <strong className="font-medium text-fg">repo</strong> fonctionne aussi.
           </p>
           <p>
@@ -394,6 +478,8 @@ function RepoList({
   current,
   onSelect,
   deployedCount,
+  ciOf,
+  urgentOf,
   scanning,
   canScan,
   onScanAll,
@@ -409,6 +495,10 @@ function RepoList({
   current: GithubRepo | null;
   onSelect: (fullName: string) => void;
   deployedCount: (fullName: string) => number;
+  /** Dernier run de la branche par défaut, s'il est déjà connu (undefined : pas encore lu ou illisible). */
+  ciOf: (fullName: string) => GithubCiRun | null | undefined;
+  /** Alertes critiques ou hautes déjà lues. */
+  urgentOf: (fullName: string) => number;
   scanning: boolean;
   canScan: boolean;
   onScanAll: () => void;
@@ -497,6 +587,9 @@ function RepoList({
           repos.map((r) => {
             const on = r.fullName === current?.fullName;
             const n = deployedCount(r.fullName);
+            const ci = ciOf(r.fullName);
+            const urgent = urgentOf(r.fullName);
+            const st = ci === undefined ? null : ciState(ci ?? undefined);
             return (
               <button
                 key={r.fullName}
@@ -512,8 +605,21 @@ function RepoList({
                   <span className={`truncate text-[13px] ${on ? "font-semibold" : "font-medium"}`}>{r.name}</span>
                   {r.private && <Lock size={11} className="shrink-0 text-muted" aria-label="privé" />}
                   {r.archived && <Badge tone="warn">archivé</Badge>}
+                  <span className="ml-auto flex shrink-0 items-center gap-2">
+                    {urgent > 0 && (
+                      <span className="flex items-center gap-0.5 text-[11px] font-medium text-danger" title={`${urgent} alerte${urgent > 1 ? "s" : ""} de sécurité critique${urgent > 1 ? "s" : ""} ou haute${urgent > 1 ? "s" : ""}`}>
+                        <ShieldAlert size={11} aria-hidden />
+                        {urgent}
+                      </span>
+                    )}
+                    {st && st.label !== "aucune exécution" && (
+                      <span title={`Intégration continue (${r.defaultBranch}) : ${st.label}`} className="flex">
+                        <StatusDot tone={st.tone} pulse={st.running} className="size-2" />
+                      </span>
+                    )}
+                  </span>
                   {n > 0 && (
-                    <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-medium text-ok" title={`Déployé : ${n} déploiement${n > 1 ? "s" : ""}`}>
+                    <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-ok" title={`Déployé : ${n} déploiement${n > 1 ? "s" : ""}`}>
                       <Server size={11} aria-hidden />
                       {n}
                     </span>
@@ -541,6 +647,8 @@ function RepoDetail({
   targets,
   scans,
   deps,
+  insights,
+  onReloadInsight,
   onScan,
   onReplace,
   onClone,
@@ -549,10 +657,16 @@ function RepoDetail({
   targets: ServerView[];
   scans: Record<string, ServerScan>;
   deps: Deps;
+  insights: Insights;
+  onReloadInsight: (kind: InsightKind) => void;
   onScan: (serverId: string) => void;
   onReplace: (serverId: string, c: GithubClone) => void;
   onClone: () => void;
 }) {
+  // undefined : pas encore lue ; null : aucune version publiée.
+  const rel = insights.release?.data;
+  const count = (slot: Slot<unknown[]> | undefined, cap?: number) =>
+    slot?.error ? "—" : !slot?.data ? "…" : cap && slot.data.length >= cap ? `${cap}+` : slot.data.length;
   const results = targets.map((s) => ({ s, r: scans[s.id] }));
   const depsPending = targets.some((s) => !deps[s.id] || deps[s.id].loading);
   const pending = results.some(({ r }) => !r || r.loading) || depsPending;
@@ -578,6 +692,7 @@ function RepoDetail({
             </Badge>
             {repo.fork && <Badge>fork</Badge>}
             {repo.archived && <Badge tone="warn">archivé</Badge>}
+            {insights.alerts?.data && <AlertBadges alerts={insights.alerts.data} />}
           </div>
           <p className={`mt-2.5 max-w-prose text-[13px] leading-relaxed ${repo.description ? "text-muted" : "text-faint"}`}>{repo.description ?? "Pas de description."}</p>
         </div>
@@ -594,11 +709,13 @@ function RepoDetail({
       <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
         <StatTile label="Dernier push" value={agoOf(repo.pushedAt)} />
         <StatTile label="Branche par défaut" value={<span className="font-mono text-lg">{repo.defaultBranch}</span>} />
-        <StatTile label="Tickets et PR ouverts" value={repo.openIssues} />
+        <StatTile label="Dernière version" value={<span className="font-mono text-lg">{insights.release?.error ? "—" : rel === undefined ? "…" : (rel?.tag ?? "—")}</span>} hint={insights.release?.error ? "non lisible" : rel ? agoOf(rel.publishedAt) : rel === null ? "aucune version publiée" : undefined} />
+        <StatTile label="Tickets ouverts" value={count(insights.issues)} hint={insights.issues?.error ? "non lisible" : undefined} />
+        <StatTile label="Pull requests ouvertes" value={count(insights.pulls, 30)} hint={insights.pulls?.error ? "non lisible" : undefined} />
         <StatTile label="Déploiements" value={pending && found.length === 0 ? "…" : found.length} tone={found.length ? "ok" : undefined} hint={targets.length ? `sur ${targets.length} serveur${targets.length > 1 ? "s" : ""} examiné${targets.length > 1 ? "s" : ""}` : "aucun serveur connecté"} />
       </div>
 
-      <Section
+      <Fold
         title="Déploiements"
         count={found.length || undefined}
         description="Clones sous /srv, /opt, /var/www et le dossier personnel, images GHCR et projets compose."
@@ -647,7 +764,12 @@ function RepoDetail({
             {found.length > 0 && empty.length > 0 && <p className="text-xs text-faint">Rien trouvé sur {empty.join(", ")}.</p>}
           </div>
         )}
-      </Section>
+        <GhDeploymentsBlock repo={repo} slot={insights.deployments} onReload={() => onReloadInsight("deployments")} />
+      </Fold>
+      <CiSection repo={repo} slot={insights.ci} onReload={() => onReloadInsight("ci")} />
+      <PullsSection repo={repo} slot={insights.pulls} onReload={() => onReloadInsight("pulls")} />
+      <IssuesSection repo={repo} slot={insights.issues} onReload={() => onReloadInsight("issues")} />
+      <AlertsSection repo={repo} slot={insights.alerts} onReload={() => onReloadInsight("alerts")} />
     </div>
   );
 }

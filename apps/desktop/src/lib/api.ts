@@ -632,6 +632,58 @@ export interface GithubDeployment {
   containers: GithubContainer[];
 }
 
+export interface GithubCiRun {
+  name: string;
+  branch: string;
+  event: string;
+  status: string;
+  conclusion: string | null;
+  url: string | null;
+  startedAt: string | null;
+  updatedAt: string | null;
+}
+export interface GithubPull {
+  number: number;
+  title: string;
+  author: string;
+  draft: boolean;
+  createdAt: string | null;
+  url: string | null;
+}
+export interface GithubIssue {
+  number: number;
+  title: string;
+  author: string;
+  labels: { name: string; color: string }[];
+  createdAt: string | null;
+  url: string | null;
+}
+export interface GithubAlert {
+  package: string;
+  ecosystem: string;
+  severity: string;
+  summary: string;
+  manifest: string;
+  createdAt: string | null;
+  url: string | null;
+}
+export interface GithubGhDeployment {
+  id: number;
+  environment: string;
+  reference: string;
+  sha: string;
+  creator: string;
+  createdAt: string | null;
+  state: string | null;
+}
+export interface GithubRelease {
+  tag: string;
+  name: string | null;
+  publishedAt: string | null;
+  prerelease: boolean;
+  url: string | null;
+}
+
 export interface Service {
   unit: string;
   load: string;
@@ -1718,6 +1770,12 @@ export const api = {
   /** Jeton vide = supprime le compte. Il n'est jamais renvoyé. */
   githubSetToken: (token: string) => invoke<GithubStatus>("github_set_token", { token }),
   githubRepos: () => invoke<GithubRepo[]>("github_repos"),
+  githubCi: (owner: string, repo: string, branch?: string, limit?: number) => invoke<GithubCiRun[]>("github_ci", { owner, repo, branch: branch ?? null, limit: limit ?? null }),
+  githubPulls: (owner: string, repo: string) => invoke<GithubPull[]>("github_pulls", { owner, repo }),
+  githubIssues: (owner: string, repo: string) => invoke<GithubIssue[]>("github_issues", { owner, repo }),
+  githubAlerts: (owner: string, repo: string) => invoke<GithubAlert[]>("github_alerts", { owner, repo }),
+  githubGhDeployments: (owner: string, repo: string) => invoke<GithubGhDeployment[]>("github_gh_deployments", { owner, repo }),
+  githubRelease: (owner: string, repo: string) => invoke<GithubRelease | null>("github_release", { owner, repo }),
   githubClones: (serverId: string, owner: string, repo: string) => invoke<GithubClone[]>("github_clones", { serverId, owner, repo }),
   githubServerDeployments: (serverId: string, repos: { owner: string; name: string }[]) =>
     invoke<GithubDeployment[]>("github_server_deployments", { serverId, repos }),

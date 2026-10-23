@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { GithubDeployment, GithubRepo } from "./api";
-import { agoOf, browseRepos, certainDeployments, clonePath, cloneSync, containerTone, filterRepos, githubError, otherDeployments, repoUrl, validFolder, validToken } from "./github";
+import {
+  agoOf, alertCounts, browseRepos, certainDeployments, ciState, clonePath, cloneSync, containerTone, deployStateTone, filterRepos, githubError, insightError, labelColor, otherDeployments, repoPageUrl, repoUrl, runDuration, urgentAlerts, validFolder, validToken,
+} from "./github";
 
 describe("déploiements", () => {
   const dep = (repo: string, kind: GithubDeployment["kind"], certain: boolean): GithubDeployment => ({ repo, kind, certain, path: null, project: null, containers: [] });
@@ -97,5 +99,47 @@ describe("page GitHub", () => {
     expect(githubError("GitHub a répondu 429").kind).toBe("rate");
     expect(githubError("GitHub injoignable : timeout").kind).toBe("network");
     expect(githubError("autre chose")).toEqual({ kind: "other", hint: "autre chose" });
+  });
+});
+
+describe("informations du dépôt", () => {
+  it("état de CI et durée", () => {
+    expect(ciState(undefined).label).toBe("aucune exécution");
+    expect(ciState({ status: "queued", conclusion: null })).toMatchObject({ tone: "accent", running: true, label: "en attente" });
+    expect(ciState({ status: "in_progress", conclusion: null }).label).toBe("en cours");
+    expect(ciState({ status: "completed", conclusion: "success" }).tone).toBe("ok");
+    expect(ciState({ status: "completed", conclusion: "failure" }).tone).toBe("danger");
+    expect(ciState({ status: "completed", conclusion: "cancelled" }).tone).toBe("warn");
+    const run = { status: "completed", startedAt: "2026-10-23T10:00:00Z", updatedAt: "2026-10-23T10:04:30Z" };
+    expect(runDuration(run)).toBe("4 min 30 s");
+    expect(runDuration({ ...run, updatedAt: "2026-10-23T10:00:12Z" })).toBe("12 s");
+    expect(runDuration({ ...run, updatedAt: "2026-10-23T11:05:00Z" })).toBe("1 h 5 min");
+    expect(runDuration({ ...run, status: "in_progress" })).toBe("—");
+    expect(runDuration({ status: "completed", startedAt: null, updatedAt: null })).toBe("—");
+  });
+  it("permission refusée : note discrète, le reste garde son message", () => {
+    const perm = insightError("ci", "permission manquante (403) : … — GitHub : Resource not accessible by personal access token");
+    expect(perm.permission).toBe(true);
+    expect(perm.text).toContain("Permission « Actions » non accordée au jeton");
+    expect(insightError("alerts", "introuvable (404) : dépôt inexistant").text).toContain("Dependabot alerts");
+    expect(insightError("alerts", "permission manquante (403) … Dependabot alerts are disabled for this repository.").text).toContain("désactivées");
+    const rate = insightError("pulls", "limite de requêtes GitHub atteinte (429, rate limit)");
+    expect(rate.permission).toBe(false);
+    expect(rate.text).toContain("Réessaie");
+  });
+  it("alertes par gravité", () => {
+    const a = ["low", "critical", "high", "high"].map((severity) => ({ severity }));
+    expect(alertCounts(a)).toEqual([{ severity: "critical", count: 1 }, { severity: "high", count: 2 }, { severity: "low", count: 1 }]);
+    expect(urgentAlerts(a)).toBe(3);
+    expect(urgentAlerts(undefined)).toBe(0);
+  });
+  it("déploiements, étiquettes et liens", () => {
+    expect(deployStateTone("success")).toBe("ok");
+    expect(deployStateTone("failure")).toBe("danger");
+    expect(deployStateTone(null)).toBe("muted");
+    expect(labelColor("a2eeef")).toBe("#a2eeef");
+    expect(labelColor("red;}")).toBeNull();
+    expect(repoPageUrl("octo", "app", "security/dependabot")).toBe("https://github.com/octo/app/security/dependabot");
+    expect(repoPageUrl("o/x", "app", "issues")).toBeNull();
   });
 });
