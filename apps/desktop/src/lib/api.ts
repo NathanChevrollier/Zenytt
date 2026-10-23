@@ -529,6 +529,35 @@ export interface SystemUpdate {
   candidate: string;
 }
 
+export interface InventoryComponent {
+  id: string;
+  label: string;
+  version: string;
+  /** Version candidate si le paquet est à mettre à jour. */
+  update: string | null;
+  /** Faux sans paquet associé : pas de verdict. */
+  trackable: boolean;
+}
+
+export interface Inventory {
+  components: InventoryComponent[];
+  /** Faux sans apt ni dnf : mises à jour « inconnues ». */
+  updatesKnown: boolean;
+}
+
+export interface ContainerImage {
+  container: string;
+  project: string | null;
+  service: string | null;
+  image: string;
+  name: string;
+  tag: string;
+  /** `latest` ou sans tag. */
+  floating: boolean;
+  state: "unknown" | "upToDate" | "updateAvailable" | "pinned";
+  digest: string;
+}
+
 export type ProviderKind = "hetzner" | "scaleway" | "digitalOcean" | "ovh";
 export type ProviderAction = "status" | "reboot" | "reset" | "powerOn" | "powerOff";
 
@@ -1625,6 +1654,8 @@ export const api = {
   systemTimezones: (serverId: string) => invoke<string[]>("system_timezones", { serverId }),
   systemSetTimezone: (serverId: string, timezone: string) => invoke<void>("system_set_timezone", { serverId, timezone }),
   systemUpdates: (serverId: string, refresh: boolean) => invoke<SystemUpdate[]>("system_updates", { serverId, refresh }),
+  systemInventory: (serverId: string) => invoke<Inventory>("system_inventory", { serverId }),
+  dockerImagesCheck: (serverId: string, check: boolean) => invoke<ContainerImage[]>("docker_images_check", { serverId, check }),
   systemApplyUpdates: (serverId: string) => invoke<string>("system_apply_updates", { serverId }),
   providerGet: (serverId: string) => invoke<ProviderView>("provider_get", { serverId }),
   /** `undefined` = secret inchangé, `""` = supprimé. Sans `link`, le compte est délié. */

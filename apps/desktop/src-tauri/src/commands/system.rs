@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::State;
+use zenytt_core::inventory::{self, Inventory};
 use zenytt_core::provider::{self, Credentials, ProviderAction, ProviderKind, ProviderLink, Status};
 use zenytt_core::system::{self, PowerAction, SystemInfo, Update};
 use zenytt_profiles::ServerProfile;
@@ -17,6 +18,13 @@ pub async fn system_info(store: State<'_, Store>, sessions: State<'_, Sessions>,
     need_shell(&store, &server_id)?;
     let conn = sessions.get(&store, &server_id).await?;
     system::info(&conn).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn system_inventory(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String) -> Result<Inventory, String> {
+    need_shell(&store, &server_id)?;
+    let conn = sessions.get(&store, &server_id).await?;
+    inventory::inventory(&conn).await.map_err(err)
 }
 
 #[tauri::command]
