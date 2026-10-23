@@ -68,6 +68,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // Verrouillage configuré : Zenytt démarre verrouillé, avant de servir la moindre commande.
+            // Sinon quitter puis relancer l'app suffirait à lever le verrou.
+            workspace::app_lock_engage();
             let dir = app.path().app_config_dir()?;
             // Installation de la version précédente : profils repris avant la première lecture.
             legacy::migrate_local(&dir);

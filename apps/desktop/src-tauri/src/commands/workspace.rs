@@ -36,6 +36,8 @@ static LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::ne
 pub const ALLOWED_WHILE_LOCKED: &[&str] = &[
     "app_version",
     "app_is_locked",
+    // Présence seule du mot de passe (jamais l'empreinte) : l'interface relancée verrouillée en a besoin.
+    "app_lock_get",
     "app_unlock",
     "app_lock_engage",
     "ui_state_get",

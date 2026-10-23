@@ -94,6 +94,7 @@ pub fn sync_set(store: State<'_, Store>, settings: SyncSettings) -> Result<(), S
             last_rev: if same_target { previous.last_rev } else { 0 },
             last_hash: if same_target && previous.include_secrets == settings.include_secrets { previous.last_hash } else { None },
             last_sync: if same_target { previous.last_sync } else { None },
+            last_remote: if same_target { previous.last_remote } else { None },
         });
     })
 }
@@ -309,6 +310,7 @@ pub async fn sync_server_install(
                 last_rev: if same { previous.last_rev } else { 0 },
                 last_hash: if same { previous.last_hash } else { None },
                 last_sync: if same { previous.last_sync } else { None },
+                last_remote: if same { previous.last_remote } else { None },
             });
         })?;
         Ok(SyncServerInstalled { port, log })

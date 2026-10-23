@@ -111,6 +111,13 @@ fn own_owners(p: &Payload) -> Vec<String> {
         .collect()
 }
 
+/// Empreintes de clé d'hôte du contenu, limitées aux adresses (`hôte:port`) de ses propres serveurs :
+/// un contenu reçu ne pré-approuve jamais la clé d'un hôte qu'il n'apporte pas.
+pub(crate) fn own_host_keys(p: &Payload) -> BTreeMap<String, String> {
+    let hosts: Vec<String> = p.servers.iter().map(|s| format!("{}:{}", s.host, s.port)).collect();
+    p.known_hosts.iter().filter(|(k, _)| hosts.contains(k)).map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
 /// Enregistre dans le coffre les secrets d'un export (types connus et propriétaires du contenu uniquement).
 pub(crate) fn store_secrets(p: &Payload) -> Result<(), String> {
     store_owned_secrets(&p.secrets, &own_owners(p))
@@ -139,6 +146,10 @@ struct Envelope {
     salt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     nonce: Option<String>,
+    /// Contenu synchronisé (version 2) : révision pour laquelle il a été scellé, authentifiée avec
+    /// lui (voir [`sync_aad`]) ; absente d'un export.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rev: Option<u64>,
     /// JSON en clair, ou chiffré puis encodé en base64.
     data: serde_json::Value,
 }
@@ -168,6 +179,10 @@ pub struct ImportSummary {
 
 fn key(password: &str, salt: &[u8], iterations: u32) -> Result<LessSafeKey, String> {
     let mut k = [0u8; 32];
+    // Nombre lu dans l'enveloppe : borné, sinon un fichier piégé (`u32::MAX`) bloquerait l'app des heures.
+    if !(ITERATIONS..=ITERATIONS * 8).contains(&iterations) {
+        return Err("paramètres de chiffrement invalides".into());
+    }
     let iterations = NonZeroU32::new(iterations).ok_or("paramètres de chiffrement invalides")?;
     ring::pbkdf2::derive(ring::pbkdf2::PBKDF2_HMAC_SHA256, iterations, salt, password.as_bytes(), &mut k);
     Ok(LessSafeKey::new(UnboundKey::new(&AES_256_GCM, &k).map_err(|_| "clé invalide")?))
@@ -183,6 +198,24 @@ pub fn export(store: &Store, password: &str, include_secrets: bool) -> Result<St
 
 /// Enveloppe d'export d'un contenu : chiffrée si `password` n'est pas vide.
 pub(crate) fn seal(payload: &Payload, password: &str) -> Result<String, String> {
+    seal_with(payload, password, None)
+}
+
+/// Donnée authentifiée d'un contenu synchronisé : le format et la révision. Rejouer un ancien
+/// contenu sous une révision plus récente casse donc le déchiffrement.
+fn sync_aad(format: &str, rev: u64) -> Vec<u8> {
+    format!("{format}#rev={rev}").into_bytes()
+}
+
+/// Enveloppe d'un contenu synchronisé, toujours chiffrée et liée à la révision `rev` qu'il prendra.
+pub(crate) fn seal_sync(payload: &Payload, password: &str, rev: u64) -> Result<String, String> {
+    if password.is_empty() {
+        return Err("phrase de passe de synchronisation manquante".into());
+    }
+    seal_with(payload, password, Some(rev))
+}
+
+fn seal_with(payload: &Payload, password: &str, rev: Option<u64>) -> Result<String, String> {
     let json = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
     let envelope = if password.is_empty() {
         Envelope {
@@ -192,6 +225,7 @@ pub(crate) fn seal(payload: &Payload, password: &str) -> Result<String, String> 
             iterations: None,
             salt: None,
             nonce: None,
+            rev: None,
             data: serde_json::from_slice(&json).map_err(|e| e.to_string())?,
         }
     } else {
@@ -200,8 +234,9 @@ pub(crate) fn seal(payload: &Payload, password: &str) -> Result<String, String> 
         rng.fill(&mut salt).map_err(|_| "aléa indisponible")?;
         rng.fill(&mut nonce).map_err(|_| "aléa indisponible")?;
         let mut sealed = json;
+        let aad = rev.map_or_else(|| FORMAT.as_bytes().to_vec(), |r| sync_aad(FORMAT, r));
         key(password, &salt, ITERATIONS)?
-            .seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(FORMAT), &mut sealed)
+            .seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(aad), &mut sealed)
             .map_err(|_| "chiffrement impossible")?;
         Envelope {
             format: FORMAT.into(),
@@ -210,6 +245,7 @@ pub(crate) fn seal(payload: &Payload, password: &str) -> Result<String, String> 
             iterations: Some(ITERATIONS),
             salt: Some(B64.encode(salt)),
             nonce: Some(B64.encode(nonce)),
+            rev,
             data: serde_json::Value::String(B64.encode(sealed)),
         }
     };
@@ -234,6 +270,7 @@ pub(crate) fn seal_value(value: &serde_json::Value, password: &str, format: &str
         iterations: Some(ITERATIONS),
         salt: Some(B64.encode(salt)),
         nonce: Some(B64.encode(nonce)),
+        rev: None,
         data: serde_json::Value::String(B64.encode(sealed)),
     };
     serde_json::to_string(&envelope).map_err(|e| e.to_string())
@@ -325,20 +362,52 @@ pub fn is_encrypted(text: &str) -> Result<bool, String> {
     Ok(e.encrypted)
 }
 
-pub(crate) fn open(text: &str, password: &str) -> Result<Payload, String> {
+fn parse(text: &str) -> Result<Envelope, String> {
     let e: Envelope = serde_json::from_str(text).map_err(|_| "ce fichier n'est pas un export de Zenytt")?;
     if !known_format(&e.format) || !(1..=VERSION).contains(&e.version) {
         return Err("format d'export inconnu (fichier d'une version plus récente de Zenytt ?)".into());
     }
+    Ok(e)
+}
+
+/// Export ou partage (fichier, code). L'export en clair reste accepté : il ne porte aucun secret et
+/// passe par les garde-fous de [`import`], comme un export chiffré par quelqu'un d'autre.
+pub(crate) fn open(text: &str, password: &str) -> Result<Payload, String> {
+    let e = parse(text)?;
     if !e.encrypted {
         return serde_json::from_value(e.data).map_err(|err| format!("export illisible : {err}"));
     }
+    let aad = e.format.clone().into_bytes();
+    decrypt(e, password, &aad)
+}
+
+/// Contenu synchronisé reçu à la révision `rev`. Toujours chiffré : quiconque peut écrire dans le
+/// fichier ou sur le serveur pourrait sinon y glisser des serveurs ou des clés d'hôte. Renvoie
+/// aussi si la révision est authentifiée : un contenu de version 1 (écrit avant cette protection)
+/// ne l'est pas, et ne doit qu'être fusionné, jamais appliqué tel quel.
+pub(crate) fn open_sync(text: &str, password: &str, rev: u64) -> Result<(Payload, bool), String> {
+    let e = parse(text)?;
+    if !e.encrypted {
+        return Err("contenu de synchronisation non chiffré : refusé (modifié par un tiers ?)".into());
+    }
+    if e.version == 1 {
+        let aad = e.format.clone().into_bytes();
+        return Ok((decrypt(e, password, &aad)?, false));
+    }
+    if e.rev != Some(rev) {
+        return Err("révision du contenu de synchronisation incohérente : contenu rejoué ou modifié, refusé".into());
+    }
+    let aad = sync_aad(&e.format, rev);
+    Ok((decrypt(e, password, &aad)?, true))
+}
+
+fn decrypt(e: Envelope, password: &str, aad: &[u8]) -> Result<Payload, String> {
     let bad = || "export chiffré illisible".to_string();
     let salt = B64.decode(e.salt.ok_or_else(bad)?).map_err(|_| bad())?;
     let nonce: [u8; 12] = B64.decode(e.nonce.ok_or_else(bad)?).map_err(|_| bad())?.try_into().map_err(|_| bad())?;
     let mut data = B64.decode(e.data.as_str().ok_or_else(bad)?).map_err(|_| bad())?;
     let plain = key(password, &salt, e.iterations.unwrap_or(ITERATIONS))?
-        .open_in_place(Nonce::assume_unique_for_key(nonce), Aad::from(e.format.as_bytes()), &mut data)
+        .open_in_place(Nonce::assume_unique_for_key(nonce), Aad::from(aad), &mut data)
         .map_err(|_| "mot de passe incorrect (ou fichier modifié)".to_string())?;
     serde_json::from_slice(plain).map_err(|err| format!("export illisible : {err}"))
 }
@@ -358,6 +427,7 @@ pub fn import(store: &Store, text: &str, password: &str) -> Result<ImportSummary
     let duplicated = store.read(|d| rekey_conflicting_servers(&mut p, &d.servers));
     let duplicated_other = store.read(|d| rekey_conflicting_others(&mut p, &d.desktops, &d.registries));
     let identity_links_removed = store.read(|d| protect_identities(&mut p, d));
+    p.known_hosts = own_host_keys(&p);
     let host_keys_kept = store.read(|d| p.known_hosts.iter().filter(|(k, v)| d.known_hosts.get(*k).is_some_and(|mine| mine != *v)).count());
     let summary = ImportSummary {
         servers: p.servers.len(),
@@ -548,7 +618,7 @@ mod tests {
         let payload = serde_json::to_vec(&Payload::default()).unwrap();
         let (salt, nonce) = ([7u8; 16], [9u8; 12]);
         let mut sealed = payload;
-        key("secret", &salt, 1000)
+        key("secret", &salt, ITERATIONS)
             .unwrap()
             .seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(old), &mut sealed)
             .unwrap();
@@ -556,9 +626,10 @@ mod tests {
             format: old.into(),
             version: 1,
             encrypted: true,
-            iterations: Some(1000),
+            iterations: Some(ITERATIONS),
             salt: Some(B64.encode(salt)),
             nonce: Some(B64.encode(nonce)),
+            rev: None,
             data: serde_json::Value::String(B64.encode(sealed)),
         })
         .unwrap();
@@ -830,6 +901,52 @@ mod tests {
         let mut sneaky = p.servers[0].clone();
         sneaky.id = "sync".into();
         assert!(!own_owners(&Payload { servers: vec![sneaky], ..Default::default() }).iter().any(|o| o == "sync"));
+    }
+
+    #[test]
+    fn l_import_n_approuve_que_les_cles_de_ses_propres_serveurs() {
+        let b = tempfile::tempdir().unwrap();
+        let target = Store::open(b.path());
+        let text = received(|d| {
+            d.servers.push(store_with_server(tempfile::tempdir().unwrap().path()).read(|x| x.servers[0].clone()));
+            d.known_hosts.insert("h:22".into(), "SHA256:x".into());
+            // Clé pré-approuvée pour un hôte que le partage n'apporte pas : ignorée.
+            d.known_hosts.insert("banque.example:22".into(), "SHA256:piege".into());
+        });
+        import(&target, &text, "").unwrap();
+        target.read(|d| {
+            assert_eq!(d.known_hosts.get("h:22").map(String::as_str), Some("SHA256:x"));
+            assert!(!d.known_hosts.contains_key("banque.example:22"));
+        });
+    }
+
+    #[test]
+    fn un_nombre_d_iterations_demesure_est_refuse() {
+        assert!(key("x", &[0; 16], u32::MAX).is_err());
+        assert!(key("x", &[0; 16], ITERATIONS - 1).is_err());
+        let text = seal(&Payload::default(), "secret").unwrap().replace("\"iterations\": 600000", "\"iterations\": 4294967295");
+        assert!(text.contains("4294967295"));
+        let t = std::time::Instant::now();
+        assert!(open(&text, "secret").is_err());
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "refusé sans dériver la clé");
+    }
+
+    #[test]
+    fn la_synchronisation_exige_le_chiffrement_et_la_bonne_revision() {
+        let p = Payload { snippets: vec![Snippet { id: "s".into(), name: "n".into(), command: "ls".into() }], ..Default::default() };
+        assert!(open_sync(&seal(&p, "").unwrap(), "secret", 1).unwrap_err().contains("non chiffré"));
+        assert!(seal_sync(&p, "", 1).is_err());
+        let sealed = seal_sync(&p, "secret", 5).unwrap();
+        assert_eq!(open_sync(&sealed, "secret", 5).unwrap(), (p.clone(), true));
+        assert!(open_sync(&sealed, "secret", 6).unwrap_err().contains("rejoué"), "ancien contenu servi sous une autre révision");
+        // Révision réécrite dans l'enveloppe : elle est authentifiée, le déchiffrement échoue.
+        assert!(open_sync(&sealed.replace("\"rev\": 5", "\"rev\": 6"), "secret", 6).is_err());
+        // Un export chiffré (sans révision) n'est pas un contenu synchronisé de version 2.
+        assert!(open_sync(&seal(&p, "secret").unwrap(), "secret", 1).is_err());
+        assert!(open(&sealed, "secret").is_err(), "et l'inverse : un contenu synchronisé ne s'importe pas");
+        // Version 1 (écrite avant cette protection) : lisible, mais signalée non authentifiée.
+        let v1 = seal(&p, "secret").unwrap().replace("\"version\": 2", "\"version\": 1");
+        assert_eq!(open_sync(&v1, "secret", 9).unwrap(), (p, false));
     }
 
     #[test]

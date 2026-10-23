@@ -85,7 +85,15 @@ export default function App() {
   }, [rdpShown]);
   const goHome = () => useApp.getState().setSection("home");
 
+  // Zenytt relancé verrouillé : profils, espace de travail (donc connexions automatiques et
+  // synchronisation) ne sont chargés qu'une fois déverrouillé.
+  const unlocked = useLock((s) => s.checked && !s.locked);
+  const [started, setStarted] = useState(false);
   useEffect(() => {
+    if (unlocked) setStarted(true);
+  }, [unlocked]);
+  useEffect(() => {
+    if (!started) return;
     api.version().then(setVersion).catch(() => setVersion(undefined));
     // Profils d'abord (les onglets restaurés en dépendent), puis l'espace de travail sauvegardé.
     // Les deux lectures partent en même temps ; seule leur application suit cet ordre.
@@ -99,7 +107,7 @@ export default function App() {
     void api.storeWarning().then((w) => {
       if (w) void useApp.getState().ask({ title: "Configuration récupérée", body: w, confirmLabel: "Compris" });
     });
-  }, [refreshServers, hydrate]);
+  }, [started, refreshServers, hydrate]);
 
   // Verrouillage : état initial, puis surveillance de l'inactivité.
   const locked = useLock((s) => s.locked);
