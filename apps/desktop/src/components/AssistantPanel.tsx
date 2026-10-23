@@ -51,8 +51,12 @@ function ToolLine({ entry }: { entry: Extract<Entry, { kind: "tool" }> }) {
   );
 }
 
+/** Commande qui en enchaîne plusieurs ou en imbrique une autre : sa fin peut cacher autre chose. */
+const CHAINED = /[;|\n\r`]|&&|\$\(/;
+
 function ProposalCard({ entry }: { entry: Extract<Entry, { kind: "proposal" }> }) {
   const { callId, server, command, why, dangerous, answer } = entry.proposal;
+  const chained = CHAINED.test(command);
   return (
     <div className={`rounded-lg border p-3 ${dangerous ? "border-danger/50 bg-danger/5" : "border-accent/40 bg-accent/5"}`}>
       <div className="mb-1 flex items-center gap-2 text-xs">
@@ -63,9 +67,15 @@ function ProposalCard({ entry }: { entry: Extract<Entry, { kind: "proposal" }> }
             <TriangleAlert size={10} className="mr-1" /> sensible
           </Badge>
         )}
+        {chained && (
+          <Badge tone="warn" title="Plusieurs commandes enchaînées ou imbriquées : relis-la jusqu'au bout">
+            <TriangleAlert size={10} className="mr-1" /> enchaînée
+          </Badge>
+        )}
       </div>
       {why && <p className="mb-2 text-xs text-muted">{why}</p>}
-      <pre className="mb-2 overflow-x-auto rounded-md border border-border bg-bg p-2 font-mono text-xs select-text">{command}</pre>
+      {/* Retour à la ligne forcé : des espaces ajoutés ne doivent pas repousser la fin hors de vue. */}
+      <pre className="mb-2 max-h-60 overflow-y-auto whitespace-pre-wrap break-all rounded-md border border-border bg-bg p-2 font-mono text-xs select-text">{command}</pre>
       {answer ? (
         <p className="text-xs text-muted">{answer === "accepted" ? "Exécutée." : "Refusée."}</p>
       ) : (

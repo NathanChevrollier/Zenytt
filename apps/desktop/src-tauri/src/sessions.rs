@@ -258,8 +258,9 @@ impl Sessions {
         cols: u32,
         rows: u32,
         command: Option<String>,
-        // Mot de passe sudo à écrire dès que le terminal le réclame (voir `commands::terminal`).
-        mut sudo_pw: Option<String>,
+        // Mot de passe sudo et nonce de l'amorce : le mot de passe n'est écrit que sur le signal de
+        // l'amorce de ce terminal (voir `commands::terminal::sudo_answer`).
+        mut sudo: Option<(String, String)>,
         events: Channel<TermEvent>,
     ) -> Result<u64, String> {
         let channel = match command {
@@ -304,18 +305,19 @@ impl Sessions {
                                 Ok(None) | Err(_) => break,
                             }
                         }
-                        let ready = crate::commands::terminal::SUDO_READY.as_bytes();
-                        if sudo_pw.is_some() && buf.windows(ready.len()).any(|w| w == ready) {
-                            if let Some(pw) = sudo_pw.take() {
-                                let _ = writer.data(format!("{pw}\n").as_bytes()).await;
+                        if let Some((pw, nonce)) = &sudo {
+                            if let Some(answer) = crate::commands::terminal::sudo_answer(&buf, nonce, pw) {
+                                if let Some(line) = answer {
+                                    let _ = writer.data(line.as_bytes()).await;
+                                }
+                                sudo = None;
                             }
                         }
-                        // L'amorce s'annonce avant toute sortie de la commande : passé le début, le
-                        // marqueur ne peut venir que de la commande elle-même (fichier affiché…),
-                        // qui ne doit jamais recevoir le mot de passe.
+                        // L'amorce s'annonce avant toute sortie de la commande : passé le début, on
+                        // n'attend plus rien (défense en profondeur, le nonce suffit déjà).
                         sudo_seen += buf.len();
                         if sudo_seen > 4096 {
-                            sudo_pw = None;
+                            sudo = None;
                         }
                         // Terminal partagé : la même sortie part vers les invités.
                         if let Some(mirror) = mirrors.lock().await.get(&id) {

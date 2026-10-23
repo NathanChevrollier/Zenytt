@@ -134,11 +134,21 @@ async function offerTmux(serverId: string) {
   }
 }
 
-/** Presse-papiers pour les séquences OSC 52 (sélection à la souris dans tmux, vim…) : écriture seule. */
-const writeOnlyClipboard = {
-  readText: (_s: ClipboardSelectionType) => "",
-  writeText: (_s: ClipboardSelectionType, text: string) => writeClipboard(text),
-};
+/**
+ * Presse-papiers pour les séquences OSC 52 (sélection à la souris dans tmux, vim…) : écriture seule,
+ * et seulement quand ce terminal a le focus (on est en train de s'en servir). Un programme en
+ * arrière-plan ne remplace pas en silence ce que tu viens de copier ailleurs.
+ */
+function writeOnlyClipboard(focused: () => boolean) {
+  return {
+    readText: (_s: ClipboardSelectionType) => "",
+    writeText: async (_s: ClipboardSelectionType, text: string) => {
+      if (!focused()) return;
+      await writeClipboard(text);
+      useApp.getState().notify("Le serveur a copié du texte dans le presse-papiers");
+    },
+  };
+}
 
 export default function TerminalPane({
   serverId,
@@ -220,7 +230,11 @@ export default function TerminalPane({
     // Seuls les liens web s'ouvrent : une sortie de commande ne doit pas pouvoir lancer autre chose.
     term.loadAddon(new WebLinksAddon((_e, url) => /^https?:\/\//i.test(url) && void openUrl(url)));
     // Copie demandée par le serveur (OSC 52) ; la lecture du presse-papiers lui reste interdite.
-    term.loadAddon(new ClipboardAddon(undefined, writeOnlyClipboard));
+    // Terminal rejoint : c'est l'hôte du partage qui écrirait chez nous, jamais accepté.
+    if (!join) {
+      const focused = () => document.hasFocus() && document.activeElement === term.textarea;
+      term.loadAddon(new ClipboardAddon(undefined, writeOnlyClipboard(focused)));
+    }
     // PID du shell simple (séquence privée envoyée au démarrage) et dossier courant annoncé par le
     // shell (OSC 7) : servent au panneau Fichiers et au dépôt de fichiers dans le terminal.
     term.parser.registerOscHandler(7770, (data) => {
