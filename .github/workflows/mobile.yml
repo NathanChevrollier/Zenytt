@@ -104,7 +104,8 @@ jobs:
       - name: Désactiver la signature du projet Xcode
         working-directory: apps/mobile/src-tauri/gen/apple
         run: |
-          sed -i '' 's/^        ENABLE_BITCODE: false$/        ENABLE_BITCODE: false        CODE_SIGNING_ALLOWED: "NO"        CODE_SIGNING_REQUIRED: "NO"        CODE_SIGN_IDENTITY: ""/' project.yml
+          awk '{ print } /^        ENABLE_BITCODE: false$/ { print "        CODE_SIGNING_ALLOWED: \"NO\""; print "        CODE_SIGNING_REQUIRED: \"NO\""; print "        CODE_SIGN_IDENTITY: \"\"" }' project.yml > project.yml.new
+          mv project.yml.new project.yml
           grep -n -B1 -A3 CODE_SIGNING_ALLOWED project.yml
           command -v xcodegen || brew install xcodegen
           xcodegen generate
@@ -112,5 +113,6 @@ jobs:
       # échoue, ce qui est attendu : seule l'archive nous intéresse.
       - name: Archive iOS (arm64, release)
         run: pnpm --filter zenytt-mobile tauri ios build --target aarch64 -v || echo "export échoué (attendu)"
-      - name: Diagnostic
-        run: find apps/mobile/src-tauri/gen/apple -maxdepth 6 \( -name '*.xcarchive' -o -name '*.app' -o -name '*.ipa' \) | head
+      - name: Empaqueter l'IPA
+        run: |
+          find apps/mobile/src-tauri/gen/apple -maxdepth 6 \( -name '*.xcarchive' -o -name '*.app' -o -name '*.ipa' \)
