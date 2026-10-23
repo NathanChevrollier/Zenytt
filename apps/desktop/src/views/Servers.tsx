@@ -219,7 +219,7 @@ function ServersMasterDetail({ folders, activeId, onEdit, onNewFolder }: { folde
   ];
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)]">
+    <div className="grid min-h-0 flex-1 grid-cols-[clamp(240px,28%,320px)_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col gap-2 border-r border-border bg-subtle px-3 py-3.5">
         <label className="relative">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />

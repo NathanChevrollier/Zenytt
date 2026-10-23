@@ -27,7 +27,7 @@ export default function Topbar() {
             type="button"
             onClick={() => setSwitcher(true)}
             title="Changer de serveur"
-            className={`flex h-6 shrink-0 items-center gap-1.5 rounded-md border border-border bg-panel px-2 font-medium hover:border-border-strong ${FOCUS_RING}`}
+            className={`flex h-6 max-w-[40%] shrink-0 items-center gap-1.5 truncate rounded-md border border-border bg-panel px-2 font-medium hover:border-border-strong ${FOCUS_RING}`}
           >
             <StatusDot tone={server.connected ? "ok" : "muted"} />
             {server.name}
@@ -160,7 +160,7 @@ function NotificationsPanel() {
   const servers = useApp((s) => s.servers);
   const clear = useApp((s) => s.clearNotifications);
   return (
-    <div role="dialog" aria-label="Notifications" className="animate-pop-in absolute top-full right-0 z-50 mt-1.5 flex max-h-[70vh] w-[380px] flex-col overflow-hidden rounded-xl border border-border-strong bg-panel shadow-2xl">
+    <div role="dialog" aria-label="Notifications" className="animate-pop-in absolute top-full right-0 z-50 mt-1.5 flex max-h-[70vh] w-[380px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-xl border border-border-strong bg-panel shadow-2xl">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
         <h2 className="flex-1 text-[13px] font-semibold">Notifications</h2>
         {list.length > 0 && (
