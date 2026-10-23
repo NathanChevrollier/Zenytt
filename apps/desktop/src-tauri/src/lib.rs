@@ -11,8 +11,8 @@ mod tray;
 mod vnc_bridge;
 
 use commands::{
-    assistant, backups, dashboard, databases, deploy, docker, files, identities, logs, mesh, monitoring, rdp, redis, security, servers,
-    share, sites, sync, system, terminal, tunnels, vms, workspace,
+    assistant, backups, dashboard, databases, deploy, docker, files, github, identities, logs, mesh, monitoring, rdp, redis, security,
+    servers, share, sites, sync, system, terminal, tunnels, vms, workspace,
 };
 use tauri::Manager;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
@@ -233,6 +233,7 @@ pub fn run() {
             files::fs_copy_between,
             monitoring::mon_metrics,
             system::system_info,
+            system::system_inventory,
             system::system_power,
             system::system_cancel_power,
             system::system_wait_online,
@@ -263,6 +264,7 @@ pub fn run() {
             monitoring::timer_run,
             docker::docker_overview,
             docker::docker_stats,
+            docker::docker_images_check,
             docker::docker_container_action,
             docker::docker_inspect,
             docker::docker_logs,
@@ -406,6 +408,13 @@ pub fn run() {
             deploy::deploy_sudo_risk,
             deploy::deploy_key_create,
             deploy::deploy_key_revoke,
+            github::github_status,
+            github::github_set_token,
+            github::github_repos,
+            github::github_clones,
+            github::github_clone_state,
+            github::github_clone,
+            github::github_pull,
         ]))
         .run(tauri::generate_context!())
         .expect("erreur au lancement de l'application Tauri");

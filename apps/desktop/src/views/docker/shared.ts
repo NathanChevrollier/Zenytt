@@ -1,8 +1,8 @@
 // Éléments partagés par les onglets de la page Docker.
 import { useState } from "react";
-import { api, errorMessage, shellQuote, type Container, type ContainerStats } from "../../lib/api";
+import { api, errorMessage, shellQuote, type ComposeProject, type Container, type ContainerStats } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
-import { useItemFolders } from "../../lib/folders";
+import { composeLockKey, confirmDestructive, useItemFolders, useLocks } from "../../lib/folders";
 import { useCachedState } from "../../lib/cache";
 import { usePolling } from "../../lib/poll";
 import type { Tone } from "../../components/ui";
@@ -24,8 +24,9 @@ export function useContainerStats(serverId: string) {
 }
 
 /** Actions sur un conteneur (avec confirmation quand elles interrompent un service), shell et logs. */
-export function useContainerActions(serverId: string, docker: string, reload: () => Promise<void>) {
+export function useContainerActions(serverId: string, docker: string, reload: () => Promise<void>, projects: ComposeProject[] = []) {
   const { ask, notify, openTab } = useAppPick("ask", "notify", "openTab");
+  const locks = useLocks(serverId);
   const [busy, setBusy] = useState<string | null>(null);
   const act = async (c: Container, action: string): Promise<boolean> => {
     const labels: Record<string, [string, string?, boolean?]> = {
@@ -37,7 +38,12 @@ export function useContainerActions(serverId: string, docker: string, reload: ()
       remove: ["Supprimer", "Le conteneur sera supprimé. Ses volumes nommés sont conservés.", true],
     };
     const [label, body, danger] = labels[action] ?? [action];
-    if (body && !(await ask({ title: `${label} ${c.name} ?`, body, confirmLabel: label, danger }))) return false;
+    // Conteneur d'un projet compose verrouillé : retaper le nom du projet pour arrêter, redémarrer ou supprimer.
+    const p = c.composeProject ? projects.find((x) => x.name === c.composeProject) : undefined;
+    const locked = !!p && locks.isLocked(composeLockKey(p));
+    if (locked && ["stop", "restart", "remove"].includes(action)) {
+      if (!(await confirmDestructive({ title: `${label} ${c.name} ?`, body: `Le projet « ${p.name} » est verrouillé.`, confirmLabel: label, name: p.name, locked }))) return false;
+    } else if (body && !(await ask({ title: `${label} ${c.name} ?`, body, confirmLabel: label, danger }))) return false;
     setBusy(c.id);
     try {
       await api.dockerAction(serverId, c.id, action);

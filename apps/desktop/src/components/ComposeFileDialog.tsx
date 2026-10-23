@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Hammer, Layers, Play, Replace, RotateCw, ScrollText, Square, Trash2, UploadCloud } from "lucide-react";
 import { api, errorMessage, type ComposeFileInfo, type ComposeProject } from "../lib/api";
 import { composeChoices, type ComposeChoice } from "../lib/compose";
+import { composeLockKey, confirmDestructive, useLocks } from "../lib/folders";
 import { useApp, useAppPick } from "../lib/store";
 import { Badge, Button, CodeBlock, Loading, Modal } from "./ui";
 
@@ -45,6 +46,7 @@ export default function ComposeFileDialog({ serverId, file, onClose }: { serverI
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<ComposeChoice | null>(null);
   const [log, setLog] = useState<string | null>(null);
+  const locks = useLocks(serverId);
 
   const load = useCallback(() => {
     setError(null);
@@ -55,8 +57,12 @@ export default function ComposeFileDialog({ serverId, file, onClose }: { serverI
   const run = async (choice: ComposeChoice) => {
     if (!info) return;
     const spec = CHOICES[choice];
-    if (spec.confirm && !(await ask({ title: `${spec.label} « ${info.project} » ?`, body: spec.confirm, confirmLabel: spec.label, danger: spec.variant === "danger" }))) return;
     const existing: ComposeProject | null = info.state.kind === "same" || info.state.kind === "conflict" ? info.state.project : null;
+    // Un projet verrouillé demande de retaper son nom pour toute action qui interrompt le service.
+    const locked = !!existing && ["stop", "down", "rebuild", "restart", "replace"].includes(choice) && locks.isLocked(composeLockKey(existing));
+    if (locked || spec.confirm) {
+      if (!(await confirmDestructive({ title: `${spec.label} « ${info.project} » ?`, body: spec.confirm ?? "Le service sera interrompu.", confirmLabel: spec.label, name: existing?.name ?? info.project, locked, danger: spec.variant === "danger" }))) return;
+    }
     if (choice === "logs" && existing) {
       openTab(serverId, { title: `${existing.name} (logs)`, command: await api.composeCommand(existing, "logs -f --tail 200") });
       onClose();

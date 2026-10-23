@@ -77,8 +77,15 @@ pub(crate) fn snapshot(store: &Store, include_secrets: bool) -> Payload {
         let owners: Vec<String> = payload
             .servers
             .iter()
+            .filter(|s| !is_reserved_owner(&s.id))
             .map(|s| s.id.clone())
-            .chain(payload.servers.iter().filter(|s| s.provider.is_some()).map(|s| ServerProfile::provider_owner(&s.id)))
+            .chain(
+                payload
+                    .servers
+                    .iter()
+                    .filter(|s| !is_reserved_owner(&s.id) && s.provider.is_some())
+                    .map(|s| ServerProfile::provider_owner(&s.id)),
+            )
             .chain(payload.identities.iter().map(|i| Identity::secret_owner(&i.id)))
             .chain(payload.desktops.iter().map(|r| RemoteDesktop::secret_owner(&r.id)))
             .chain(payload.registries.iter().flatten().map(|r| Registry::secret_owner(&r.id)))
@@ -94,16 +101,20 @@ pub(crate) fn snapshot(store: &Store, include_secrets: bool) -> Payload {
     payload
 }
 
+/// Un identifiant de serveur qui imiterait un propriétaire réservé (`sync`, `identity-…`) n'ouvre aucun droit.
+/// `github` (jeton de la page GitHub) et `ai` (clé de l'assistant) sont propres à ce poste.
+pub(crate) fn is_reserved_owner(id: &str) -> bool {
+    [crate::sync::SECRET_OWNER, secrets::GITHUB_OWNER, "ai"].contains(&id)
+        || ["provider-", "identity-", "rdp-", "registry-"].iter().any(|p| id.starts_with(p))
+}
+
 /// Propriétaires de secrets que ce contenu a le droit de renseigner : ses propres éléments.
 /// Jamais `sync` ni un autre propriétaire réservé : un export piégé ne doit pas pouvoir remplacer
 /// le jeton de synchronisation ni les secrets d'un élément absent du contenu.
 fn own_owners(p: &Payload) -> Vec<String> {
-    // Un identifiant de serveur qui imiterait un propriétaire réservé (`sync`, `identity-…`) n'ouvre aucun droit.
-    let reserved =
-        |id: &str| id == crate::sync::SECRET_OWNER || ["provider-", "identity-", "rdp-", "registry-"].iter().any(|p| id.starts_with(p));
     p.servers
         .iter()
-        .filter(|s| !reserved(&s.id))
+        .filter(|s| !is_reserved_owner(&s.id))
         .flat_map(|s| [s.id.clone(), ServerProfile::provider_owner(&s.id)])
         .chain(p.identities.iter().map(|i| Identity::secret_owner(&i.id)))
         .chain(p.desktops.iter().map(|r| RemoteDesktop::secret_owner(&r.id)))
@@ -423,6 +434,8 @@ fn decrypt(e: Envelope, password: &str, aad: &[u8]) -> Result<Payload, String> {
 ///   dans le coffre) vers l'adresse reçue à la connexion suivante.
 pub fn import(store: &Store, text: &str, password: &str) -> Result<ImportSummary, String> {
     let mut p = open(text, password)?;
+    // Un serveur dont l'id imite un propriétaire réservé est écarté.
+    p.servers.retain(|s| !is_reserved_owner(&s.id));
     let rejected = drop_invalid(&mut p);
     let duplicated = store.read(|d| rekey_conflicting_servers(&mut p, &d.servers));
     let duplicated_other = store.read(|d| rekey_conflicting_others(&mut p, &d.desktops, &d.registries));
@@ -898,9 +911,26 @@ mod tests {
         let owners = own_owners(&p);
         assert!(owners.contains(&"a".to_string()) && owners.contains(&"provider-a".to_string()));
         assert!(!owners.iter().any(|o| o == "sync" || o == "b"), "ni le jeton de synchronisation ni un autre serveur");
-        let mut sneaky = p.servers[0].clone();
-        sneaky.id = "sync".into();
-        assert!(!own_owners(&Payload { servers: vec![sneaky], ..Default::default() }).iter().any(|o| o == "sync"));
+        for reserved in ["sync", "github", "ai"] {
+            let mut sneaky = p.servers[0].clone();
+            sneaky.id = reserved.into();
+            assert!(!own_owners(&Payload { servers: vec![sneaky], ..Default::default() }).iter().any(|o| o == reserved), "{reserved}");
+        }
+    }
+
+    #[test]
+    fn un_serveur_a_id_reserve_est_ecarte_a_l_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = Store::open(dir.path());
+        let model = store_with_server(tempfile::tempdir().unwrap().path()).read(|d| d.servers[0].clone());
+        let text = received(|d| {
+            for id in ["github", "sync", "identity-x"] {
+                d.servers.push(ServerProfile { id: id.into(), ..model.clone() });
+            }
+        });
+        import(&target, &text, "").unwrap();
+        assert!(target.read(|d| d.servers.is_empty()));
+        assert!(is_reserved_owner("github") && !is_reserved_owner("a"));
     }
 
     #[test]

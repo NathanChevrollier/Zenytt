@@ -30,20 +30,29 @@ export default function Sidebar({ version }: { version?: string }) {
   const tabCount = useApp((s) => s.tabs.length);
 
   // Colonne dépliée ou non : choix retenu d'une session à l'autre.
-  const [open, setOpen] = useState(() => {
+  const [pref, setPref] = useState(() => {
     try {
       return localStorage.getItem(RAIL_KEY) !== "closed";
     } catch {
       return true;
     }
   });
+  // Sous 1100 px la colonne se replie d'office, sans toucher à la préférence.
+  const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 1099px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1099px)");
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  const open = pref && !narrow;
   useEffect(() => {
     try {
-      localStorage.setItem(RAIL_KEY, open ? "open" : "closed");
+      localStorage.setItem(RAIL_KEY, pref ? "open" : "closed");
     } catch {
       /* stockage indisponible : la préférence ne sera pas retenue, sans conséquence */
     }
-  }, [open]);
+  }, [pref]);
 
   const badgeFor = (id: SectionId): { n: number; tone: "danger" | "warn" | "muted" } | null => {
     if (id === "monitoring" && badges.alerts) return { n: badges.alerts, tone: "danger" };
@@ -109,11 +118,11 @@ export default function Sidebar({ version }: { version?: string }) {
         {open && <span className="flex-1 text-[15px] font-semibold tracking-[0.01em]">Zenytt</span>}
         <button
           type="button"
-          onClick={() => setOpen(!open)}
+          onClick={() => setPref(!pref)}
           title={open ? "Replier la colonne" : "Déplier la colonne"}
           aria-label={open ? "Replier la colonne" : "Déplier la colonne"}
           aria-expanded={open}
-          className={`flex size-7 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg ${FOCUS_RING}`}
+          className={`${narrow ? "hidden" : "flex"} size-7 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg ${FOCUS_RING}`}
         >
           {open ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
         </button>

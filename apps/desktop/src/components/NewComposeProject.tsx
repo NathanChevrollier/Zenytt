@@ -4,6 +4,7 @@ import { CheckCircle2, FileCode2, Rocket } from "lucide-react";
 import "../lib/monaco";
 import { api, errorMessage } from "../lib/api";
 import { useApp } from "../lib/store";
+import { projectNameFromPath } from "../lib/compose";
 import { useMonacoTheme } from "../lib/theme";
 import { Button, Checkbox, ErrorState, Field, Input, Modal, Textarea } from "./ui";
 
@@ -41,6 +42,8 @@ export default function NewComposeProject({
   const monacoTheme = useMonacoTheme();
   const [name, setName] = useState(preset?.name ?? "");
   const [directory, setDirectory] = useState(preset?.directory ?? "");
+  /** Le nom suit le dernier segment du dossier tant qu'il n'a pas été modifié à la main (ni venir du catalogue). */
+  const [nameTouched, setNameTouched] = useState(!!preset);
   const [yaml, setYaml] = useState(preset?.yaml ?? "");
   const [env, setEnv] = useState(preset?.env ?? "");
   const [showEnv, setShowEnv] = useState(!!preset?.env?.trim());
@@ -121,11 +124,19 @@ export default function NewComposeProject({
           </ul>
         )}
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Nom du projet" hint="Sert de nom de projet compose et de dossier.">
-            <Input value={name} placeholder="mon-app" onChange={(e) => setName(e.target.value.toLowerCase())} autoFocus />
+          <Field label="Nom du projet" hint="Nom de projet compose ; proposé d'après le dossier, modifiable.">
+            <Input value={name} placeholder="mon-app" onChange={(e) => {
+                setNameTouched(true);
+                setName(e.target.value.toLowerCase());
+              }}
+              autoFocus />
           </Field>
           <Field label="Dossier sur le serveur" hint="Vide : /opt/stacks/<nom>.">
-            <Input className="font-mono text-xs" value={directory} placeholder={dir} onChange={(e) => setDirectory(e.target.value)} />
+            <Input className="font-mono text-xs" value={directory} placeholder={dir} onChange={(e) => {
+                setDirectory(e.target.value);
+                if (!nameTouched) setName(projectNameFromPath(e.target.value));
+              }}
+            />
           </Field>
         </div>
         <div>

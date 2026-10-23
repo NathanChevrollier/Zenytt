@@ -529,6 +529,35 @@ export interface SystemUpdate {
   candidate: string;
 }
 
+export interface InventoryComponent {
+  id: string;
+  label: string;
+  version: string;
+  /** Version candidate si le paquet est à mettre à jour. */
+  update: string | null;
+  /** Faux sans paquet associé : pas de verdict. */
+  trackable: boolean;
+}
+
+export interface Inventory {
+  components: InventoryComponent[];
+  /** Faux sans apt ni dnf : mises à jour « inconnues ». */
+  updatesKnown: boolean;
+}
+
+export interface ContainerImage {
+  container: string;
+  project: string | null;
+  service: string | null;
+  image: string;
+  name: string;
+  tag: string;
+  /** `latest` ou sans tag. */
+  floating: boolean;
+  state: "unknown" | "upToDate" | "updateAvailable" | "pinned";
+  digest: string;
+}
+
 export type ProviderKind = "hetzner" | "scaleway" | "digitalOcean" | "ovh";
 export type ProviderAction = "status" | "reboot" | "reset" | "powerOn" | "powerOff";
 
@@ -550,6 +579,37 @@ export interface ProviderView {
 export interface ProviderStatus {
   state: "running" | "off" | "starting" | "stopping" | "unknown";
   raw: string;
+}
+
+export interface GithubStatus {
+  configured: boolean;
+  login: string | null;
+}
+
+export interface GithubRepo {
+  fullName: string;
+  name: string;
+  owner: string;
+  private: boolean;
+  defaultBranch: string;
+  pushedAt: string | null;
+  openIssues: number;
+  description: string | null;
+  fork: boolean;
+  archived: boolean;
+}
+
+/** Clone d'un dépôt GitHub présent sur un serveur. */
+export interface GithubClone {
+  path: string;
+  branch: string;
+  /** Fichiers modifiés ou non suivis. */
+  dirty: number;
+  /** [en avance, en retard] sur la branche suivie ; null sans branche suivie. */
+  aheadBehind: [number, number] | null;
+  commit: string;
+  commitDate: string;
+  subject: string;
 }
 
 export interface Service {
@@ -1625,6 +1685,8 @@ export const api = {
   systemTimezones: (serverId: string) => invoke<string[]>("system_timezones", { serverId }),
   systemSetTimezone: (serverId: string, timezone: string) => invoke<void>("system_set_timezone", { serverId, timezone }),
   systemUpdates: (serverId: string, refresh: boolean) => invoke<SystemUpdate[]>("system_updates", { serverId, refresh }),
+  systemInventory: (serverId: string) => invoke<Inventory>("system_inventory", { serverId }),
+  dockerImagesCheck: (serverId: string, check: boolean) => invoke<ContainerImage[]>("docker_images_check", { serverId, check }),
   systemApplyUpdates: (serverId: string) => invoke<string>("system_apply_updates", { serverId }),
   providerGet: (serverId: string) => invoke<ProviderView>("provider_get", { serverId }),
   /** `undefined` = secret inchangé, `""` = supprimé. Sans `link`, le compte est délié. */
@@ -1632,6 +1694,15 @@ export const api = {
     invoke<void>("provider_set", { serverId, link, ...secrets }),
   providerTest: (serverId: string) => invoke<ProviderStatus>("provider_test", { serverId }),
   providerAction: (serverId: string, action: ProviderAction) => invoke<ProviderStatus>("provider_action", { serverId, action }),
+  githubStatus: () => invoke<GithubStatus>("github_status"),
+  /** Jeton vide = supprime le compte. Il n'est jamais renvoyé. */
+  githubSetToken: (token: string) => invoke<GithubStatus>("github_set_token", { token }),
+  githubRepos: () => invoke<GithubRepo[]>("github_repos"),
+  githubClones: (serverId: string, owner: string, repo: string) => invoke<GithubClone[]>("github_clones", { serverId, owner, repo }),
+  githubCloneState: (serverId: string, owner: string, repo: string, path: string, fetch: boolean) =>
+    invoke<GithubClone>("github_clone_state", { serverId, owner, repo, path, fetch }),
+  githubClone: (serverId: string, owner: string, repo: string, folder: string) => invoke<string>("github_clone", { serverId, owner, repo, folder }),
+  githubPull: (serverId: string, owner: string, repo: string, path: string) => invoke<string>("github_pull", { serverId, owner, repo, path }),
   agentInfo: (serverId: string) => invoke<AgentInfo>("agent_info", { serverId }),
   agentHistory: (serverId: string, rangeSecs: number, points = 400) =>
     invoke<HistoryPoint[]>("agent_history", { serverId, rangeSecs, points }),

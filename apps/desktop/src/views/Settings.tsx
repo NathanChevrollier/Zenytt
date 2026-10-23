@@ -98,7 +98,7 @@ export default function SettingsView() {
   return (
     <PageLayout title="Réglages" subtitle="Préférences de l'app, verrouillage, assistant, synchronisation et journal des actions." guide="settings" scroll={false}>
       <div className="flex min-h-0 flex-1">
-        <nav className="flex w-56 shrink-0 flex-col gap-0.5 overflow-auto border-r border-border bg-panel p-2" aria-label="Rubriques des réglages">
+        <nav className="flex w-56 max-lg:w-44 shrink-0 flex-col gap-0.5 overflow-auto border-r border-border bg-panel p-2" aria-label="Rubriques des réglages">
           {NAV.map((n) => {
             const on = n.id === current.id;
             const Icon = n.icon;

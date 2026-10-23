@@ -568,7 +568,7 @@ function Databases({ serverId }: { serverId: string }) {
   return layout(
     <>
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[270px] shrink-0 flex-col border-r border-border bg-subtle" aria-label="Explorateur">
+        <aside className="flex w-[270px] max-w-[34%] shrink-0 flex-col border-r border-border bg-subtle" aria-label="Explorateur">
           <div className="flex items-center justify-between px-3 pt-3 pb-1.5">
             <Eyebrow>Instances</Eyebrow>
             <IconButton size="sm" title="Rechercher à nouveau" onClick={() => void loadInstances()}>

@@ -8,6 +8,7 @@ use tauri::State;
 use tokio::sync::Mutex;
 use zenytt_core::catalog;
 use zenytt_core::docker::{self, Access, ComposeProject, Container, DiskUsage, Image, Stats, Volume};
+use zenytt_core::inventory::{self, ContainerImage};
 use zenytt_core::registry as zenytt_registry;
 use zenytt_core::ssh::shell_quote;
 use zenytt_core::Connection;
@@ -147,6 +148,19 @@ pub async fn docker_overview(
     set_on_purpose(&store, &server_id, &running, false);
     let on_purpose = on_purpose_keys(&store, &server_id);
     Ok(Overview { access, version, engine, containers, projects, occasional, on_purpose })
+}
+
+/// Images des conteneurs en marche ; `check` interroge les registres (lent, sans rien télécharger).
+#[tauri::command]
+pub async fn docker_images_check(
+    store: State<'_, Store>,
+    sessions: State<'_, Sessions>,
+    cache: State<'_, DockerAccess>,
+    server_id: String,
+    check: bool,
+) -> Result<Vec<ContainerImage>, String> {
+    let c = ctx(&store, &sessions, &cache, &server_id).await?;
+    inventory::images(&c.conn, c.access, c.sudo.as_deref(), check).await.map_err(err)
 }
 
 #[tauri::command]

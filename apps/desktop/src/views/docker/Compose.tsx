@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { Cable, FileCode2, FolderSearch, GitBranch, Layers, Lock, Package, Play, Plus, Rocket, RotateCw, ScrollText, Square, SquareTerminal, UploadCloud } from "lucide-react";
+import { Cable, Tag, FileCode2, FolderSearch, GitBranch, Layers, Lock, Package, Play, Plus, Rocket, RotateCw, ScrollText, Square, SquareTerminal, UploadCloud } from "lucide-react";
 import { api, errorMessage, type ComposeProject, type Container, type DockerOverview } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
 import { Badge, Button, EmptyState, IconButton, MenuButton, Modal, StatusDot, useContextMenu, type MenuItem } from "../../components/ui";
@@ -8,7 +8,9 @@ import ContainerDrawer from "./ContainerDrawer";
 import ConditionBadge from "./ConditionBadge";
 import PortChips, { isExposed } from "./PortChips";
 import { stateTone, useContainerActions, useContainerStats } from "./shared";
-import { containerKey, projectCounts } from "../../lib/compose";
+import { containerKey, projectCounts, projectDir, projectNameFromPath } from "../../lib/compose";
+import { composeLockKey, confirmDestructive, groupByClient, useItemFolders, useLocks } from "../../lib/folders";
+import { ClientFilter, clientMenuItems } from "../../components/ClientTools";
 
 const FileEditor = lazy(() => import("../../components/FileEditor"));
 const ComposeFileDialog = lazy(() => import("../../components/ComposeFileDialog"));
@@ -21,7 +23,7 @@ const SERVICE_GRID ="grid grid-cols-[minmax(140px,1.1fr)_minmax(0,1fr)_minmax(0,
 export default function Compose({ serverId, data, docker, reload, onNew, onCatalog }: { serverId: string; data: DockerOverview; docker: string; reload: () => Promise<void>; onNew: () => void; onCatalog: () => void }) {
   const { ask, notify, openTab } = useAppPick("ask", "notify", "openTab");
   const stats = useContainerStats(serverId);
-  const containerActions = useContainerActions(serverId, docker, reload);
+  const containerActions = useContainerActions(serverId, docker, reload, data.projects);
   const [busy, setBusy] = useState<string | null>(null);
   const [output, setOutput] = useState<{ title: string; text: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -31,6 +33,10 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   /** Nouveau fichier compose choisi pour un projet dont le fichier a disparu. */
   const [relinkFile, setRelinkFile] = useState<string | null>(null);
   const portMenu = useContextMenu();
+  const clients = useItemFolders("compose", serverId);
+  const locks = useLocks(serverId);
+  const [clientFilter, setClientFilter] = useState("");
+  const lockOf = (p: ComposeProject) => composeLockKey(p);
   if (data.projects.length === 0) {
     return (
       <EmptyState
@@ -53,8 +59,10 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   }
 
   const act = async (p: ComposeProject, action: string, label: string, danger?: string) => {
-    if (danger) {
-      const ok = await ask({ title: `${label} « ${p.name} » ?`, body: danger, confirmLabel: label, danger: true });
+    const locked = locks.isLocked(lockOf(p));
+    // Un projet verrouillé demande une confirmation (nom à retaper) pour toute action qui interrompt le service.
+    if (danger || (locked && ["stop", "down", "rebuild", "restart", "remove"].includes(action))) {
+      const ok = await confirmDestructive({ title: `${label} « ${p.name} » ?`, body: danger ?? "Le service sera brièvement interrompu.", confirmLabel: label, name: p.name, locked });
       if (!ok) return;
     }
     setBusy(`${p.name}:${action}`);
@@ -86,7 +94,10 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   };
 
   /** Sans fichier, seules les actions qui se font par le nom du projet restent possibles. */
+  const organise = (p: ComposeProject): MenuItem[] => [...clientMenuItems(clients, projectDir(p), locks.isLocked(lockOf(p)), () => locks.toggle(lockOf(p))), "separator"];
+
   const missingItems = (p: ComposeProject): MenuItem[] => [
+    ...organise(p),
     { label: "Relier au nouveau dossier…", icon: <FolderSearch size={14} />, onClick: () => void relink(p) },
     "separator",
     { label: "Arrêter (stop)", icon: <Square size={14} />, onClick: () => void act(p, "stop", "Arrêter") },
@@ -99,6 +110,7 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   ];
 
   const projectItems = (p: ComposeProject, file: string, stopped: boolean): MenuItem[] => [
+    ...organise(p),
     { label: "Mettre à jour (pull + up)", icon: <UploadCloud size={14} />, onClick: () => void act(p, "update", "Mettre à jour (pull + up)") },
     ...(stopped ? [] : [{ label: "Démarrer les services manquants (up -d)", icon: <Play size={14} />, onClick: () => void act(p, "up", "Démarrer (up -d)") }]),
     ...(stopped
@@ -137,6 +149,8 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
     },
   ];
 
+  const groups = groupByClient(data.projects, (p) => clients.folderOf(projectDir(p)), clientFilter);
+
   const selected = data.containers.find((c) => c.id === selectedId);
   const occasional = new Set(data.occasional);
   const onPurpose = new Set(data.onPurpose ?? []);
@@ -160,7 +174,18 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   return (
     // Une colonne tant qu'il n'y a pas la place pour deux projets lisibles côte à côte.
     <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,640px),1fr))] items-start gap-4 px-7 py-5">
-      {data.projects.map((p) => {
+      {clients.names.length > 0 && (
+        <div className="col-span-full flex items-center gap-2">
+          <ClientFilter names={clients.names} value={clientFilter} onChange={setClientFilter} />
+        </div>
+      )}
+      {groups.flatMap(([client, list]) => [
+        clients.names.length > 0 ? (
+          <h3 key={`client:${client}`} className="col-span-full flex items-center gap-1.5 text-xs font-medium text-muted">
+            <Tag size={12} /> {client || "Sans client"}
+          </h3>
+        ) : null,
+        ...list.map((p) => {
         const file = p.configFiles.split(",")[0];
         const b = (a: string) => busy === `${p.name}:${a}`;
         const services = containersOf(p.name);
@@ -185,6 +210,17 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
                   {counts.occasional > 0 && (
                     <Badge tone="muted" title="Conteneurs ponctuels : leur arrêt n'est pas signalé">
                       +{counts.occasional} ponctuel{counts.occasional > 1 ? "s" : ""}
+                    </Badge>
+                  )}
+                  {locks.isLocked(lockOf(p)) && (
+                    <Badge tone="warn" title="Verrouillé : actions destructrices à confirmer en retapant le nom">
+                      <Lock size={10} /> verrouillé
+                    </Badge>
+                  )}
+                  {clients.folderOf(projectDir(p)) && <Badge title="Client">{clients.folderOf(projectDir(p))}</Badge>}
+                  {projectNameFromPath(projectDir(p)) !== p.name && (
+                    <Badge tone="muted" title={`Le dossier ${projectDir(p)} ne porte pas le nom du projet compose (-p ${p.name})`}>
+                      dossier « {projectDir(p).split("/").pop() || "/"} »
                     </Badge>
                   )}
                   {p.missing && (
@@ -330,7 +366,8 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
             )}
           </section>
         );
-      })}
+        }),
+      ])}
       {portMenu.menu}
       {relinkFile && (
         <Suspense fallback={null}>

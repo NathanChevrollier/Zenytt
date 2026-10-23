@@ -125,7 +125,7 @@ export default function MachinesDrawer() {
   );
 
   return (
-    <aside className="flex w-[300px] shrink-0 flex-col border-l border-border bg-panel relative z-30" aria-label="Machines">
+    <aside className="flex w-[300px] max-w-[40vw] shrink-0 flex-col border-l border-border bg-panel relative z-30" aria-label="Machines">
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <Monitor size={15} className="text-accent" />
         <h2 className="flex-1 text-[13px] font-semibold">Machines</h2>

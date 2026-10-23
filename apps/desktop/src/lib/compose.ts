@@ -64,3 +64,25 @@ export function projectCounts(
     occasional: services.length - expected.length,
   };
 }
+
+/** Dossier du fichier compose d'un projet (premier fichier de `configFiles`). */
+export function projectDir(p: { configFiles: string }): string {
+  const file = p.configFiles.split(",")[0];
+  return file.slice(0, Math.max(file.lastIndexOf("/"), 0)) || "/";
+}
+
+/**
+ * Nom de projet compose proposé pour un dossier : dernier segment du chemin, en minuscules, réduit à
+ * `[a-z0-9_-]` (40 caractères au plus, commençant par un caractère alphanumérique). Vide si rien n'en sort.
+ */
+export function projectNameFromPath(path: string): string {
+  const last = path.split("/").filter(Boolean).pop() ?? "";
+  return last
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .slice(0, 40)
+    .replace(/-+$/, "");
+}

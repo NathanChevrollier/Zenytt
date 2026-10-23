@@ -8,6 +8,7 @@ import { Badge, Button, Card, CodeBlock, DataTable, ErrorState, Field, Input, Ke
 import PageLayout from "../components/PageLayout";
 import ServerGate, { ServerContext } from "../components/ServerGate";
 import Provider from "./system/Provider";
+import Inventory from "./system/Inventory";
 
 export default function SystemView() {
   const serverId = useApp((s) => s.activeServerId);
@@ -273,6 +274,9 @@ function SshPanels({ serverId, name }: { serverId: string; name: string }) {
         </Card>
       </Section>
 
+      <Inventory serverId={serverId} />
+
+      <div id="system-updates" className="scroll-mt-4">
       <Section
         title="Mises à jour"
         count={updates?.length}
@@ -301,6 +305,7 @@ function SshPanels({ serverId, name }: { serverId: string; name: string }) {
         </Card>
         {output && <CodeBlock code={output.split("\n").slice(-200).join("\n")} />}
       </Section>
+      </div>
 
       {power && <PowerModal kind={power} name={name} onClose={() => setPower(null)} onConfirm={(d) => void doPower(power, d)} />}
     </>

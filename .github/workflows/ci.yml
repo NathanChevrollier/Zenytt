@@ -107,7 +107,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -116,7 +116,15 @@ jobs:
       - run: cargo fmt --all --check
       # Pas d'action de cache apt : elle restaure mal les fichiers pkg-config de GTK (glib-2.0).
       - name: Dépendances système Tauri
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $TAURI_APT
+        # Un miroir Ubuntu lent peut figer apt : trois essais bornés plutôt qu'un job bloqué.
+        timeout-minutes: 16
+        run: |
+          for i in 1 2 3; do
+            timeout 300 sudo apt-get update -qq -o Acquire::Retries=3 \
+              && timeout 300 sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 $TAURI_APT && exit 0
+            sleep 15
+          done
+          exit 1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           # Les PR lisent le cache de main sans l'écraser (quota de 10 Go par dépôt).
@@ -127,13 +135,21 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       # Pas d'action de cache apt : elle restaure mal les fichiers pkg-config de GTK (glib-2.0).
       - name: Dépendances système Tauri
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $TAURI_APT
+        # Un miroir Ubuntu lent peut figer apt : trois essais bornés plutôt qu'un job bloqué.
+        timeout-minutes: 16
+        run: |
+          for i in 1 2 3; do
+            timeout 300 sudo apt-get update -qq -o Acquire::Retries=3 \
+              && timeout 300 sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 $TAURI_APT && exit 0
+            sleep 15
+          done
+          exit 1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}

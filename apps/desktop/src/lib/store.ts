@@ -123,7 +123,7 @@ interface Persisted {
   folders?: Folders;
 }
 
-/** Dossiers de classement (serveurs, conteneurs Docker), propres à ce PC. */
+/** Dossiers de classement (serveurs, conteneurs Docker, clients des sites et projets compose), propres à ce PC. */
 export interface Folders {
   /** Dossiers de serveurs créés, même vides (le dossier d'un serveur est son champ `group`). */
   servers: string[];
@@ -135,7 +135,17 @@ export interface Folders {
   vms?: Record<string, Record<string, string>>;
   /** Par serveur : dossiers de machines virtuelles créés, même vides. */
   vmFolders?: Record<string, string[]>;
-  /** Dossiers repliés (`servers:<nom>`, `docker:<serveur>:<nom>` ou `vms:<serveur>:<nom>`). */
+  /** Par serveur : domaine d'un site → client. */
+  sites?: Record<string, Record<string, string>>;
+  /** Par serveur : clients de sites créés, même vides. */
+  siteFolders?: Record<string, string[]>;
+  /** Par serveur : dossier d'un projet compose → client. */
+  compose?: Record<string, Record<string, string>>;
+  /** Par serveur : clients de projets compose créés, même vides. */
+  composeFolders?: Record<string, string[]>;
+  /** Par serveur : sites (`site:<domaine>`) et projets compose (`compose:<dossier>`) verrouillés. */
+  locks?: Record<string, string[]>;
+  /** Dossiers repliés (`servers:<nom>`, `docker:<serveur>:<nom>`, `vms:<serveur>:<nom>`, `sites:<serveur>:<nom>` ou `compose:<serveur>:<nom>`). */
   collapsed: string[];
 }
 
