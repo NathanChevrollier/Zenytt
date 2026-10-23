@@ -146,7 +146,8 @@ impl Sessions {
         }
         let params = store.connect_params(server_id)?;
         let Auth::Password { password } = params.auth else { return Err("FTP : un mot de passe est requis".into()) };
-        let target = format!("{}:{}", params.host, params.port);
+        // Lu dans le profil, pas dans les paramètres de connexion : aucun secret ne peut finir dans le journal.
+        let target = store.server(server_id).map(|s| format!("{}:{}", s.host, s.port)).unwrap_or_default();
         let client = match ftp::connect(
             &params.host,
             params.port,
@@ -198,7 +199,8 @@ impl Sessions {
             return Err(format!("AUTH_BLOCKED: {reason} — reconnexion automatique suspendue, clique « Connecter » pour réessayer"));
         }
         let params = store.connect_params(server_id)?;
-        let target = format!("{}:{}", params.host, params.port);
+        // Lu dans le profil, pas dans les paramètres de connexion : aucun secret ne peut finir dans le journal.
+        let target = store.server(server_id).map(|s| format!("{}:{}", s.host, s.port)).unwrap_or_default();
         let result = match store.jump_chain(server_id)?.first() {
             None => Connection::connect(params).await,
             Some(jump) => {

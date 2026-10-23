@@ -56,7 +56,8 @@ impl Sessions {
             return Err(format!("AUTH_BLOCKED: {reason} — reconnexion automatique suspendue, touche « Réessayer »"));
         }
         let params = store.connect_params(server_id)?;
-        let target = format!("{}:{}", params.host, params.port);
+        // Lu dans le profil, pas dans les paramètres de connexion : aucun secret ne peut finir dans le journal.
+        let target = store.server(server_id).map(|s| format!("{}:{}", s.host, s.port)).unwrap_or_default();
         let result = match store.jump_chain(server_id)?.first() {
             None => Connection::connect(params).await,
             Some(jump) => {
