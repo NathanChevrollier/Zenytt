@@ -59,6 +59,9 @@ publiés sur la page [Releases](https://github.com/NathanChevrollier/Zenytt/rele
 Mac Apple Silicon ou Intel ? Menu  → *À propos de ce Mac* : la ligne « Puce » (Apple M…) ou
 « Processeur » (Intel) le dit.
 
+**Sur téléphone** : le compagnon Android (`.apk`) et iPhone (`.ipa`, via AltStore et un identifiant Apple gratuit) est
+joint à chaque release. Pas à pas : [`apps/mobile`](apps/mobile/README.md#installer-lapp).
+
 Zenytt vérifie au démarrage si une nouvelle version existe et propose de l'installer
 (Réglages → Maintenance → Mises à jour). Les paquets sont signés : une version altérée est refusée.
 

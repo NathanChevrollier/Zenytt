@@ -58,6 +58,9 @@ Or download an installer from the [Releases](https://github.com/NathanChevrollie
 Apple Silicon or Intel? Apple menu  → *About This Mac*: the "Chip" (Apple M…) or "Processor"
 (Intel) line tells you.
 
+**On your phone**: the Android (`.apk`) and iPhone (`.ipa`, sideloaded with AltStore and a free Apple ID) companion app is
+attached to each release. Steps (in French): [`apps/mobile`](apps/mobile/README.md#installer-lapp).
+
 Zenytt checks for new versions at startup and offers to install them. Update packages are signed: a
 tampered version is rejected.
 

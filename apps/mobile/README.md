@@ -28,6 +28,45 @@ Le redémarrage du serveur n'est pas encore branché (bouton désactivé) : voir
 4. Les serveurs apparaissent. Si le PC ne synchronise pas les secrets (option « inclure les secrets »), ou pour les
    serveurs en clé SSH, ouvre le serveur → crayon → saisis le mot de passe ou colle la clé privée.
 
+## Installer l'app
+
+Les fichiers sont sur la page [Releases](https://github.com/NathanChevrollier/Zenytt/releases/latest) :
+`Zenytt-Compagnon-<version>.apk` (Android) et `Zenytt-Compagnon-<version>.ipa` (iPhone).
+
+### Installer sur Android
+
+1. Télécharge le `.apk` sur le téléphone.
+2. Ouvre-le ; Android demande d'autoriser l'installation depuis cette source (navigateur ou gestionnaire de fichiers) : accepte.
+3. L'APK est signé avec une clé de débogage : Play Protect peut afficher un avertissement, choisis « Installer quand même ».
+   Les mises à jour se font en installant le `.apk` suivant par-dessus.
+
+### Installer sur iPhone depuis Windows (AltStore)
+
+L'IPA n'est pas signée par Apple : AltStore la signe avec **ton identifiant Apple gratuit**, sans compte Developer. Contraintes
+d'Apple pour ce mode : l'app est valable **7 jours** puis doit être rafraîchie, et un identifiant gratuit n'autorise que
+**3 apps** sideloadées à la fois.
+
+1. Sur le PC, installe **iTunes** et **iCloud** depuis le site d'Apple (apple.com), pas les versions du Microsoft Store :
+   AltServer ne fonctionne qu'avec les versions du site.
+2. Installe **AltServer pour Windows** depuis [altstore.io](https://altstore.io) et lance-le (icône dans la zone de notification).
+3. Branche l'iPhone au PC en USB, déverrouille-le et touche « Faire confiance à cet ordinateur ». Dans iTunes, coche
+   « Synchroniser avec cet iPhone via le Wi-Fi ».
+4. Clic sur l'icône AltServer → **Install AltStore** → ton iPhone, puis ton identifiant Apple et son mot de passe.
+5. Sur l'iPhone : **Réglages → Général → VPN et gestion de l'appareil**, ouvre ton identifiant Apple et touche **Faire confiance**.
+6. Active le **Mode développeur** (iOS 16 et plus) : **Réglages → Confidentialité et sécurité → Mode développeur**, puis
+   redémarre l'iPhone et confirme.
+7. Télécharge le `.ipa` sur l'iPhone (Safari), puis « Ouvrir dans » / Partager → **AltStore**. Ou, dans AltStore, onglet
+   **My Apps** → **+** et choisis le fichier. Entre ton identifiant Apple si on te le demande.
+8. Garde AltServer lancé sur le PC, sur le même Wi-Fi que l'iPhone : AltStore rafraîchit l'app tout seul avant les 7 jours
+   (ou manuellement : My Apps → Refresh All). Passé le délai sans rafraîchissement, l'app ne s'ouvre plus ; il suffit de la
+   rafraîchir, les données restent.
+
+**Sans le PC** : [SideStore](https://sidestore.io) fait le même travail directement sur l'iPhone une fois installé (l'installation
+initiale passe par un PC ou un Mac), avec un VPN de rafraîchissement local. Même limite de 7 jours.
+
+**Voie payante** : un compte Apple Developer (99 $/an) supprime la limite de 7 jours et ouvre TestFlight puis l'App Store ;
+il demande une signature de publication, que la CI ne fait pas aujourd'hui.
+
 ## Développer
 
 Boucle rapide sur le PC (sans téléphone) : `pnpm dev:mobile` ouvre l'app dans une fenêtre de bureau étroite.
@@ -54,13 +93,14 @@ Tests : `pnpm --filter zenytt-mobile test`.
 
 Il faut un **Mac** avec Xcode (ou la CI : [`mobile.yml`](../../.github/workflows/mobile.yml) sur `macos-latest`), CocoaPods et les cibles
 `aarch64-apple-ios` / `aarch64-apple-ios-sim`. Mêmes commandes avec `tauri ios init` puis `pnpm ios`.
-Installer sur un vrai iPhone, TestFlight et l'App Store demandent un **compte Apple Developer (99 $/an)** et une signature ; le
-simulateur n'en demande pas.
+TestFlight et l'App Store demandent un **compte Apple Developer (99 $/an)** ; pour un iPhone sans ce compte, voir
+[Installer sur iPhone](#installer-sur-iphone-depuis-windows-altstore) (IPA non signée de la CI).
 
 ### CI
 
 `mobile.yml` (lancement manuel ou tag `v*`) construit un APK signé avec la clé de débogage (installable à la main, pas
-publiable sur le Play Store) et une app pour le simulateur iOS. Pas de signature de publication pour l'instant.
+publiable sur le Play Store) et une IPA iOS **non signée** (arm64, release) pour AltStore / SideStore. Sur un tag, les deux sont
+jointes à la release sous les noms `Zenytt-Compagnon-<version>.apk` / `.ipa`. Pas de signature de publication pour l'instant.
 
 ## Limites connues
 

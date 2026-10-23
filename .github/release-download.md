@@ -15,6 +15,17 @@ l'ouvrir, *Réglages Système* → *Confidentialité et sécurité* → *Ouvrir 
 que l'app « est endommagée », lancer une fois dans le Terminal :
 `xattr -dr com.apple.quarantine /Applications/Zenytt.app`
 
+### Sur téléphone (Zenytt Compagnon)
+
+| Téléphone | Fichier |
+| --- | --- |
+| **Android** | `Zenytt-Compagnon-{v}.apk` : l'ouvrir, puis autoriser l'installation depuis cette source si Android le demande |
+| **iPhone** | `Zenytt-Compagnon-{v}.ipa` : à installer avec [AltStore](https://altstore.io) ou SideStore et ton identifiant Apple gratuit |
+
+Sur iPhone, l'app n'est pas signée par Apple : l'installation gratuite dure **7 jours** puis doit être
+rafraîchie (AltStore le fait seul tant qu'AltServer tourne sur le PC), avec 3 apps sideloadées au maximum.
+Pas à pas : [Installer sur iPhone](https://github.com/NathanChevrollier/Zenytt/blob/main/apps/mobile/README.md#installer-sur-iphone-depuis-windows-altstore).
+
 Les fichiers `.sig`, `.app.tar.gz` et `latest.json` servent aux mises à jour automatiques : inutile
 de les télécharger. Déjà installé ? Zenytt se met à jour tout seul.
 
