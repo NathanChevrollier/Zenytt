@@ -2,7 +2,7 @@
 // 30 derniers jours), explorateur de sauvegardes avec restauration, configuration en assistant.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { DatabaseBackup, Download, HardDrive, Play, Settings2, ShieldCheck } from "lucide-react";
-import { api, errorMessage, type BackupOverview, type Snapshot } from "../lib/api";
+import { api, errorMessage, formatAgo, type BackupOverview, type Snapshot } from "../lib/api";
 import { useApp, useAppPick } from "../lib/store";
 import { Badge, Button, Card, EmptyState, ErrorState, Loading, MenuButton, Modal, ResultBanner, Section, StatTile } from "../components/ui";
 import PageLayout from "../components/PageLayout";
@@ -173,7 +173,7 @@ function Backups({ serverId }: { serverId: string }) {
               <StatTile
                 label="Dernière sauvegarde"
                 tone={!last ? "muted" : last.ok ? "ok" : "danger"}
-                value={last ? relative(last.finishedAt * 1000) : "Jamais"}
+                value={last ? formatAgo(Date.now() - last.finishedAt * 1000) : "Jamais"}
                 hint={last ? <span title={last.message}>{new Date(last.finishedAt * 1000).toLocaleString("fr-FR")} · {last.message}</span> : "Pas encore exécutée"}
               />
               <StatTile label="Prochaine exécution" value={status.nextRun ?? config.schedule} hint={`chaque jour à ${config.schedule}`} />
@@ -301,11 +301,4 @@ function Timeline({ snaps, onPick }: { snaps: Snapshot[] | null; onPick: (id: st
       </div>
     </Card>
   );
-}
-
-function relative(ms: number) {
-  const diff = Date.now() - ms;
-  if (diff < 3_600_000) return `il y a ${Math.max(1, Math.round(diff / 60_000))} min`;
-  if (diff < DAY) return `il y a ${Math.round(diff / 3_600_000)} h`;
-  return `il y a ${Math.round(diff / DAY)} j`;
 }

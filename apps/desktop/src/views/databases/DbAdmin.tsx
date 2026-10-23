@@ -6,6 +6,7 @@ import { Activity, DatabaseBackup, Download, KeyRound, Plus, RefreshCw, RotateCc
 import { api, errorMessage, formatBytes, type DbBackupFile, type DbInstance, type DbNamed, type DbQueryResult } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
 import { track } from "../../lib/transfers";
+import { usePolling } from "../../lib/poll";
 import { Badge, Button, Card, EmptyState, ErrorState, Field, IconButton, Input, Loading, Modal, Segmented, Select } from "../../components/ui";
 
 type Section = "backups" | "users" | "activity";
@@ -371,11 +372,7 @@ function ActivityPanel({ serverId, instance }: { serverId: string; instance: DbI
       (e) => setError(errorMessage(e)),
     );
   }, [serverId, instance]);
-  useEffect(() => {
-    load();
-    const t = setInterval(() => !document.hidden && load(), 5000);
-    return () => clearInterval(t);
-  }, [load]);
+  usePolling(load, 5000, [load]);
 
   const kill = async (id: number, whole: boolean) => {
     if (!(await ask({ title: whole ? `Couper la connexion ${id} ?` : `Arrêter la requête ${id} ?`, body: whole ? "La requête est arrêtée et l'application perd sa connexion (elle devra se reconnecter)." : "La requête est annulée ; la connexion reste ouverte.", confirmLabel: whole ? "Couper" : "Arrêter", danger: true })))

@@ -22,7 +22,7 @@ const PRESETS = [
 const HTTP_PORTS = new Set([80, 443, 3000, 3001, 5000, 5173, 8000, 8080, 8081, 8443, 8888, 9000, 9090]);
 
 /** Commande ou adresse prête à coller pour utiliser le tunnel, selon le service visé. */
-export function connectionString(t: Pick<TunnelDef, "localPort" | "remotePort">): { text: string; label: string; url?: string } {
+function connectionString(t: Pick<TunnelDef, "localPort" | "remotePort">): { text: string; label: string; url?: string } {
   const p = t.localPort;
   switch (t.remotePort) {
     case 3306:
@@ -271,7 +271,7 @@ export default function TunnelsView() {
 
 const validPort = (n: number) => Number.isInteger(n) && n >= 1 && n <= 65535;
 
-export function TunnelForm({
+function TunnelForm({
   initial,
   others = [],
   onClose,

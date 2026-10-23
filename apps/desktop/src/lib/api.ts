@@ -1442,7 +1442,6 @@ export const api = {
   dbTables: (serverId: string, instance: DbInstance, database: string) => invoke<DbNamed[]>("db_tables", { serverId, instance, database }),
   dbQuery: (serverId: string, instance: DbInstance, database: string | null, sql: string, limit = 500) =>
     invoke<DbQueryResult>("db_query", { serverId, instance, database, sql, limit }),
-  dbPreviewQuery: (engine: DbEngine, table: string, limit = 200) => invoke<string>("db_preview_query", { engine, table, limit }),
   dbColumns: (serverId: string, instance: DbInstance, database: string | null, table: string) =>
     invoke<DbColumn[]>("db_columns", { serverId, instance, database, table }),
   dbTableQuery: (engine: DbEngine, table: string, filters: DbFilter[], sortColumn: string | null, sortDesc: boolean, limit: number, offset = 0) =>
@@ -1471,7 +1470,6 @@ export const api = {
   dbActivity: (serverId: string, instance: DbInstance) => invoke<DbQueryResult>("db_activity", { serverId, instance }),
   dbKill: (serverId: string, instance: DbInstance, id: number, whole: boolean) => invoke<void>("db_kill", { serverId, instance, id, whole }),
   dbSqliteFiles: (serverId: string) => invoke<DbInstance[]>("db_sqlite_files", { serverId }),
-  dbSqliteInstance: (path: string, container: string | null = null) => invoke<DbInstance>("db_sqlite_instance", { path, container }),
 
   dockerCatalog: () => invoke<CatalogApp[]>("docker_catalog"),
   dockerCatalogDefaults: (appId: string) => invoke<[string, string][]>("docker_catalog_defaults", { appId }),
@@ -1552,7 +1550,6 @@ export const api = {
   /** Envoie l'écran courant à un invité qui vient d'arriver. */
   termShareSend: (termId: number, data: string) => invoke<void>("term_share_send", { termId, data }),
   termShareStop: (termId: number) => invoke<void>("term_share_stop", { termId }),
-  termShares: () => invoke<ShareInfo[]>("term_shares"),
   /** Rejoint le terminal partagé d'une invitation. */
   termJoin: (code: string, onEvent: (e: TermEvent) => void) => {
     const channel = new Channel<TermEvent>();
@@ -1782,6 +1779,15 @@ export function formatDuration(secs: number): string {
   if (h) return `${h} h ${m} min`;
   if (secs < 60) return `${Math.max(0, Math.round(secs))} s`;
   return `${m} min`;
+}
+
+/** Il y a combien de temps, en clair (`ms` = durée écoulée en millisecondes). */
+export function formatAgo(ms: number): string {
+  const s = ms / 1000;
+  if (s < 60) return "à l'instant";
+  if (s < 3600) return `il y a ${Math.round(s / 60)} min`;
+  if (s < 86400) return `il y a ${Math.round(s / 3600)} h`;
+  return `il y a ${Math.round(s / 86400)} j`;
 }
 
 export function formatBytes(n: number): string {

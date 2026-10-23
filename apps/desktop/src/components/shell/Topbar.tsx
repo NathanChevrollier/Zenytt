@@ -2,6 +2,7 @@
 // (actualiser, notifications, assistant).
 import { useEffect, useRef, useState } from "react";
 import { Bell, CheckCheck, CircleAlert, CircleCheck, Info, PanelRight, RefreshCw, Search, Sparkles, Trash2, TriangleAlert } from "lucide-react";
+import { formatAgo } from "../../lib/api";
 import { useApp, type NotificationEntry } from "../../lib/store";
 import { useShell } from "../../lib/shell";
 import { refreshAll, useRefresh } from "../../lib/refresh";
@@ -115,9 +116,8 @@ const ICONS = {
 };
 
 function timeLabel(at: number) {
-  const s = Math.round((Date.now() - at) / 1000);
-  if (s < 60) return "à l'instant";
-  if (s < 3600) return `il y a ${Math.round(s / 60)} min`;
+  const ms = Date.now() - at;
+  if (ms < 3_600_000) return formatAgo(ms);
   return new Date(at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 }
 

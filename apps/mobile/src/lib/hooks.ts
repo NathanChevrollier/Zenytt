@@ -6,7 +6,7 @@ import { errorMessage } from "./api";
  * les connexions d'une app en arrière-plan : on se contente de reprendre au retour).
  * Jamais deux exécutions en même temps.
  */
-export function usePolling(task: () => Promise<unknown>, intervalMs: number, deps: DependencyList) {
+function usePolling(task: () => Promise<unknown>, intervalMs: number, deps: DependencyList) {
   const ref = useRef(task);
   ref.current = task;
   useEffect(() => {

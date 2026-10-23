@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class {} }));
-const { errorMessage, formatBytes, formatDuration, shellQuote } = await import("./api");
+const { errorMessage, formatAgo, formatBytes, formatDuration, shellQuote } = await import("./api");
 
 describe("formatage", () => {
+  it("il y a X", () => {
+    expect(formatAgo(30_000)).toBe("à l'instant");
+    expect(formatAgo(5 * 60_000)).toBe("il y a 5 min");
+    expect(formatAgo(3 * 3_600_000)).toBe("il y a 3 h");
+    expect(formatAgo(2 * 86_400_000)).toBe("il y a 2 j");
+  });
+
   it("durées", () => {
     expect(formatDuration(45)).toBe("45 s");
     expect(formatDuration(600)).toBe("10 min");

@@ -6,19 +6,9 @@
 // EXTENDED_HISTORY le fait, bash jamais. Zenytt ne l'invente pas dans les autres cas.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CornerDownLeft, History, Repeat } from "lucide-react";
-import { api, errorMessage, formatDuration, type ShellHistoryEntry } from "../lib/api";
+import { api, errorMessage, formatAgo, formatDuration, type ShellHistoryEntry } from "../lib/api";
 import { rankCommands } from "../lib/fuzzy";
 import { Input, Modal } from "./ui";
-
-/** Il y a combien de temps, en clair. */
-function ago(last: number | null): string {
-  if (!last) return "";
-  const secs = Date.now() / 1000 - last;
-  if (secs < 90) return "à l'instant";
-  if (secs < 5400) return `il y a ${Math.round(secs / 60)} min`;
-  if (secs < 172800) return `il y a ${Math.round(secs / 3600)} h`;
-  return `il y a ${Math.round(secs / 86400)} j`;
-}
 
 /** Commande avec les lettres trouvées mises en évidence. */
 function Highlighted({ text, positions }: { text: string; positions: number[] }) {
@@ -147,7 +137,7 @@ export function HistoryList({ serverId, onPick, autoFocus, compact }: { serverId
                   {formatDuration(r.item.duration)}
                 </span>
               )}
-              <span className={`shrink-0 text-right text-[10px] text-muted ${compact ? "w-14" : "w-24"}`}>{ago(r.item.last)}</span>
+              <span className={`shrink-0 text-right text-[10px] text-muted ${compact ? "w-14" : "w-24"}`}>{r.item.last ? formatAgo(Date.now() - r.item.last * 1000) : ""}</span>
               {i === cursor && <CornerDownLeft size={11} className="shrink-0 text-accent" />}
             </button>
           ))}
