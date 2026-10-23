@@ -167,6 +167,402 @@ pub async fn repos(token: &str) -> Result<Vec<Repo>> {
     .map_err(|e| Error::Other(e.to_string()))?
 }
 
+// ---- Informations d'un dépôt (CI, PR, tickets, sécurité, déploiements, version) ---------------
+
+/// Lien github.com seulement : toute autre origine est écartée avant d'atteindre l'interface.
+fn gh_url(u: Option<String>) -> Option<String> {
+    u.filter(|u| u.starts_with("https://github.com/"))
+}
+
+fn parse<T: serde::de::DeserializeOwned>(json: &str) -> Result<T> {
+    serde_json::from_str(json).map_err(|e| Error::Other(format!("réponse GitHub illisible : {e}")))
+}
+
+#[derive(Deserialize)]
+struct RawUser {
+    login: String,
+}
+
+/// Exécution d'un workflow GitHub Actions.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CiRun {
+    pub name: String,
+    pub branch: String,
+    pub event: String,
+    /// `queued`, `in_progress`, `completed`…
+    pub status: String,
+    /// `success`, `failure`, `cancelled`… (seulement une fois terminée).
+    pub conclusion: Option<String>,
+    pub url: Option<String>,
+    pub started_at: Option<String>,
+    /// Dernière mise à jour : avec `started_at`, donne la durée d'un run terminé.
+    pub updated_at: Option<String>,
+}
+
+pub fn parse_runs(json: &str) -> Result<Vec<CiRun>> {
+    #[derive(Deserialize)]
+    struct Run {
+        name: Option<String>,
+        display_title: Option<String>,
+        head_branch: Option<String>,
+        #[serde(default)]
+        event: String,
+        status: Option<String>,
+        conclusion: Option<String>,
+        html_url: Option<String>,
+        run_started_at: Option<String>,
+        created_at: Option<String>,
+        updated_at: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Page {
+        workflow_runs: Vec<Run>,
+    }
+    Ok(parse::<Page>(json)?
+        .workflow_runs
+        .into_iter()
+        .map(|r| CiRun {
+            name: r.name.or(r.display_title).unwrap_or_default(),
+            branch: r.head_branch.unwrap_or_default(),
+            event: r.event,
+            status: r.status.unwrap_or_default(),
+            conclusion: r.conclusion,
+            url: gh_url(r.html_url),
+            started_at: r.run_started_at.or(r.created_at),
+            updated_at: r.updated_at,
+        })
+        .collect())
+}
+
+/// Demande de fusion ouverte.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Pull {
+    pub number: u32,
+    pub title: String,
+    pub author: String,
+    pub draft: bool,
+    pub created_at: Option<String>,
+    pub url: Option<String>,
+}
+
+pub fn parse_pulls(json: &str) -> Result<Vec<Pull>> {
+    #[derive(Deserialize)]
+    struct P {
+        number: u32,
+        #[serde(default)]
+        title: String,
+        user: Option<RawUser>,
+        #[serde(default)]
+        draft: bool,
+        created_at: Option<String>,
+        html_url: Option<String>,
+    }
+    Ok(parse::<Vec<P>>(json)?
+        .into_iter()
+        .map(|p| Pull {
+            number: p.number,
+            title: p.title,
+            author: p.user.map(|u| u.login).unwrap_or_default(),
+            draft: p.draft,
+            created_at: p.created_at,
+            url: gh_url(p.html_url),
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Label {
+    pub name: String,
+    /// Hexadécimal sur 6 caractères, ou vide s'il est illisible (la couleur finit dans un style).
+    pub color: String,
+}
+
+/// Ticket ouvert (les demandes de fusion, que l'API des tickets renvoie aussi, sont exclues).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Issue {
+    pub number: u32,
+    pub title: String,
+    pub author: String,
+    pub labels: Vec<Label>,
+    pub created_at: Option<String>,
+    pub url: Option<String>,
+}
+
+pub fn parse_issues(json: &str) -> Result<Vec<Issue>> {
+    #[derive(Deserialize)]
+    struct L {
+        name: String,
+        #[serde(default)]
+        color: String,
+    }
+    #[derive(Deserialize)]
+    struct I {
+        number: u32,
+        #[serde(default)]
+        title: String,
+        user: Option<RawUser>,
+        #[serde(default)]
+        labels: Vec<L>,
+        created_at: Option<String>,
+        html_url: Option<String>,
+        pull_request: Option<serde_json::Value>,
+    }
+    let hex = |c: String| if c.len() == 6 && c.bytes().all(|b| b.is_ascii_hexdigit()) { c } else { String::new() };
+    Ok(parse::<Vec<I>>(json)?
+        .into_iter()
+        .filter(|i| i.pull_request.is_none())
+        .map(|i| Issue {
+            number: i.number,
+            title: i.title,
+            author: i.user.map(|u| u.login).unwrap_or_default(),
+            labels: i.labels.into_iter().map(|l| Label { name: l.name, color: hex(l.color) }).collect(),
+            created_at: i.created_at,
+            url: gh_url(i.html_url),
+        })
+        .collect())
+}
+
+/// Alerte Dependabot ouverte.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Alert {
+    pub package: String,
+    pub ecosystem: String,
+    /// `critical`, `high`, `medium`, `low`.
+    pub severity: String,
+    pub summary: String,
+    pub manifest: String,
+    pub created_at: Option<String>,
+    pub url: Option<String>,
+}
+
+/// 0 = le plus grave.
+fn severity_rank(s: &str) -> usize {
+    ["critical", "high", "medium", "low"].iter().position(|x| *x == s).unwrap_or(4)
+}
+
+/// Alertes triées de la plus grave à la moins grave.
+pub fn parse_alerts(json: &str) -> Result<Vec<Alert>> {
+    #[derive(Deserialize, Default)]
+    struct Pkg {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        ecosystem: String,
+    }
+    #[derive(Deserialize, Default)]
+    struct Dep {
+        #[serde(default)]
+        package: Pkg,
+        #[serde(default)]
+        manifest_path: String,
+    }
+    #[derive(Deserialize, Default)]
+    struct Adv {
+        #[serde(default)]
+        severity: String,
+        #[serde(default)]
+        summary: String,
+    }
+    #[derive(Deserialize)]
+    struct A {
+        #[serde(default)]
+        dependency: Dep,
+        #[serde(default)]
+        security_advisory: Adv,
+        created_at: Option<String>,
+        html_url: Option<String>,
+    }
+    let mut v: Vec<Alert> = parse::<Vec<A>>(json)?
+        .into_iter()
+        .map(|a| Alert {
+            package: a.dependency.package.name,
+            ecosystem: a.dependency.package.ecosystem,
+            severity: a.security_advisory.severity,
+            summary: a.security_advisory.summary,
+            manifest: a.dependency.manifest_path,
+            created_at: a.created_at,
+            url: gh_url(a.html_url),
+        })
+        .collect();
+    v.sort_by_key(|a| severity_rank(&a.severity));
+    Ok(v)
+}
+
+/// Déploiement GitHub (Deployments API) avec l'état du dernier statut.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GhDeployment {
+    pub id: u64,
+    pub environment: String,
+    pub reference: String,
+    pub sha: String,
+    pub creator: String,
+    pub created_at: Option<String>,
+    /// `success`, `failure`, `in_progress`… ; `None` si aucun statut n'est publié ou lu.
+    pub state: Option<String>,
+}
+
+pub fn parse_gh_deployments(json: &str) -> Result<Vec<GhDeployment>> {
+    #[derive(Deserialize)]
+    struct D {
+        id: u64,
+        #[serde(default)]
+        environment: String,
+        #[serde(default, rename = "ref")]
+        reference: String,
+        #[serde(default)]
+        sha: String,
+        creator: Option<RawUser>,
+        created_at: Option<String>,
+    }
+    Ok(parse::<Vec<D>>(json)?
+        .into_iter()
+        .map(|d| GhDeployment {
+            id: d.id,
+            environment: d.environment,
+            reference: d.reference,
+            sha: d.sha.chars().take(7).collect(),
+            creator: d.creator.map(|u| u.login).unwrap_or_default(),
+            created_at: d.created_at,
+            state: None,
+        })
+        .collect())
+}
+
+/// État du statut le plus récent (`/deployments/{id}/statuses`, du plus récent au plus ancien).
+pub fn parse_deployment_state(json: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct S {
+        state: String,
+    }
+    serde_json::from_str::<Vec<S>>(json).ok()?.into_iter().next().map(|s| s.state)
+}
+
+/// Dernière version publiée.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Release {
+    pub tag: String,
+    pub name: Option<String>,
+    pub published_at: Option<String>,
+    pub prerelease: bool,
+    pub url: Option<String>,
+}
+
+pub fn parse_release(json: &str) -> Result<Release> {
+    #[derive(Deserialize)]
+    struct R {
+        tag_name: String,
+        name: Option<String>,
+        published_at: Option<String>,
+        #[serde(default)]
+        prerelease: bool,
+        html_url: Option<String>,
+    }
+    let r: R = parse(json)?;
+    Ok(Release {
+        tag: r.tag_name,
+        name: r.name.filter(|n| !n.is_empty()),
+        published_at: r.published_at,
+        prerelease: r.prerelease,
+        url: gh_url(r.html_url),
+    })
+}
+
+/// Données d'un dépôt demandées séparément : chacune a sa permission, donc sa propre erreur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Insight {
+    Ci,
+    Pulls,
+    Issues,
+    Alerts,
+    Deployments,
+    Release,
+}
+
+/// Adresse de l'API pour `insight`. `branch` ne sert qu'à la CI (derniers runs d'une branche) ; `limit` est borné à 1..=30.
+pub fn insight_path(insight: Insight, owner: &str, repo: &str, branch: Option<&str>, limit: u32) -> Result<String> {
+    if !valid_repo(owner, repo) {
+        return Err(Error::Other("nom de dépôt invalide".into()));
+    }
+    let n = limit.clamp(1, 30);
+    let b = match branch {
+        // Un nom de branche contient parfois `/` : seuls des caractères sûrs passent, donc rien à encoder.
+        Some(b)
+            if !b.is_empty()
+                && b.len() <= 200
+                && b.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.' | b'-' | b'/')) =>
+        {
+            format!("&branch={b}")
+        }
+        Some(_) => return Err(Error::Other("nom de branche invalide".into())),
+        None => String::new(),
+    };
+    let base = format!("{API}/repos/{owner}/{repo}");
+    Ok(match insight {
+        Insight::Ci => format!("{base}/actions/runs?per_page={n}{b}"),
+        Insight::Pulls => format!("{base}/pulls?state=open&per_page={n}"),
+        // L'API des tickets renvoie aussi les PR : on en demande 100 pour qu'il en reste après filtrage.
+        Insight::Issues => format!("{base}/issues?state=open&per_page=100"),
+        Insight::Alerts => format!("{base}/dependabot/alerts?state=open&per_page=100"),
+        Insight::Deployments => format!("{base}/deployments?per_page={n}"),
+        Insight::Release => format!("{base}/releases/latest"),
+    })
+}
+
+async fn fetch(token: &str, url: String) -> Result<String> {
+    let token = token.to_string();
+    tokio::task::spawn_blocking(move || get(&agent(), &token, &url)).await.map_err(|e| Error::Other(e.to_string()))?
+}
+
+pub async fn ci_runs(token: &str, owner: &str, repo: &str, branch: Option<&str>, limit: u32) -> Result<Vec<CiRun>> {
+    parse_runs(&fetch(token, insight_path(Insight::Ci, owner, repo, branch, limit)?).await?)
+}
+
+pub async fn pulls(token: &str, owner: &str, repo: &str) -> Result<Vec<Pull>> {
+    parse_pulls(&fetch(token, insight_path(Insight::Pulls, owner, repo, None, 30)?).await?)
+}
+
+pub async fn issues(token: &str, owner: &str, repo: &str) -> Result<Vec<Issue>> {
+    parse_issues(&fetch(token, insight_path(Insight::Issues, owner, repo, None, 30)?).await?)
+}
+
+pub async fn alerts(token: &str, owner: &str, repo: &str) -> Result<Vec<Alert>> {
+    parse_alerts(&fetch(token, insight_path(Insight::Alerts, owner, repo, None, 30)?).await?)
+}
+
+/// Déploiements GitHub ; le dernier statut est lu pour le plus récent de 6 environnements au plus (un appel chacun).
+pub async fn gh_deployments(token: &str, owner: &str, repo: &str) -> Result<Vec<GhDeployment>> {
+    let mut list = parse_gh_deployments(&fetch(token, insight_path(Insight::Deployments, owner, repo, None, 30)?).await?)?;
+    let mut seen: Vec<String> = Vec::new();
+    for d in list.iter_mut() {
+        if seen.contains(&d.environment) {
+            continue;
+        }
+        if seen.len() >= 6 {
+            break;
+        }
+        seen.push(d.environment.clone());
+        // Un statut illisible ou refusé laisse l'état inconnu.
+        let url = format!("{API}/repos/{owner}/{repo}/deployments/{}/statuses?per_page=1", d.id);
+        d.state = fetch(token, url).await.ok().and_then(|t| parse_deployment_state(&t));
+    }
+    Ok(list)
+}
+
+/// Dernière version ; `None` si le dépôt n'en a pas (GitHub répond 404).
+pub async fn latest_release(token: &str, owner: &str, repo: &str) -> Result<Option<Release>> {
+    match fetch(token, insight_path(Insight::Release, owner, repo, None, 1)?).await {
+        Ok(t) => parse_release(&t).map(Some),
+        Err(Error::Other(m)) if m.starts_with("introuvable (404)") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 // ---- Validation ----------------------------------------------------------------------------
 
 /// `^[A-Za-z0-9_.-]+$`, sans `.` ni `..`.
@@ -715,6 +1111,88 @@ C\tfoo2\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tx\t/opt/stacks/mypage\
                 assert!(c.contains(h), "{t} {h}");
             }
         }
+    }
+
+    // Formes relevées sur l'API (Zenytt) puis réduites ; les alertes suivent la documentation de l'API Dependabot.
+    #[test]
+    fn lecture_des_runs() {
+        let json = r#"{"total_count":2,"workflow_runs":[
+{"id":1,"name":"Mobile","display_title":"Mobile","head_branch":"feat/mobile-ipa","event":"workflow_dispatch","status":"queued","conclusion":null,
+"html_url":"https://github.com/NathanChevrollier/Zenytt/actions/runs/39993224328","run_started_at":"2026-10-23T17:12:55Z","created_at":"2026-10-23T17:12:50Z","updated_at":"2026-10-23T17:12:55Z"},
+{"id":2,"name":null,"display_title":"CI","head_branch":"main","event":"push","status":"completed","conclusion":"failure",
+"html_url":"https://evil.example/x","run_started_at":null,"created_at":"2026-10-23T10:00:00Z","updated_at":"2026-10-23T10:04:30Z"}]}"#;
+        let r = parse_runs(json).unwrap();
+        assert_eq!((r[0].status.as_str(), r[0].conclusion.clone()), ("queued", None));
+        assert_eq!(r[0].url.as_deref(), Some("https://github.com/NathanChevrollier/Zenytt/actions/runs/39993224328"));
+        assert_eq!(
+            (r[1].name.as_str(), r[1].conclusion.as_deref(), r[1].url.clone()),
+            ("CI", Some("failure"), None),
+            "hôte étranger écarté"
+        );
+        assert_eq!(r[1].started_at.as_deref(), Some("2026-10-23T10:00:00Z"));
+        assert_eq!(parse_runs(r#"{"total_count":0,"workflow_runs":[]}"#).unwrap(), vec![]);
+        assert!(parse_runs("[]").is_err());
+    }
+
+    #[test]
+    fn lecture_des_pr_et_tickets_sans_melange() {
+        let pulls = r#"[{"number":45,"title":"Refonte","draft":false,"html_url":"https://github.com/o/r/pull/45","created_at":"2026-10-23T16:45:08Z","user":{"login":"octo"}},
+{"number":46,"title":"WIP","draft":true,"html_url":"https://github.com/o/r/pull/46","user":null}]"#;
+        let p = parse_pulls(pulls).unwrap();
+        assert_eq!((p[0].number, p[0].draft, p[0].author.as_str()), (45, false, "octo"));
+        assert!(p[1].draft && p[1].author.is_empty());
+        let issues = r#"[{"number":45,"title":"une PR","html_url":"https://github.com/o/r/pull/45","labels":[],"pull_request":{"url":"https://api.github.com/repos/o/r/pulls/45"},"user":{"login":"octo"}},
+{"number":44,"title":"Suggestion","html_url":"https://github.com/o/r/issues/44","labels":[{"name":"enhancement","color":"a2eeef"},{"name":"x","color":"red;}"}],"pull_request":null,"created_at":"2026-10-23T15:56:20Z","user":{"login":"octo"}}]"#;
+        let i = parse_issues(issues).unwrap();
+        assert_eq!(i.len(), 1, "la PR est exclue");
+        assert_eq!(i[0].number, 44);
+        assert_eq!((i[0].labels[0].color.as_str(), i[0].labels[1].color.as_str()), ("a2eeef", ""));
+    }
+
+    #[test]
+    fn lecture_des_alertes_triees() {
+        let json = r#"[
+{"number":3,"state":"open","dependency":{"package":{"ecosystem":"npm","name":"lodash"},"manifest_path":"pnpm-lock.yaml","scope":"runtime"},
+"security_advisory":{"ghsa_id":"GHSA-x","summary":"Prototype pollution","severity":"medium"},"html_url":"https://github.com/o/r/security/dependabot/3","created_at":"2026-01-01T00:00:00Z"},
+{"number":4,"state":"open","dependency":{"package":{"ecosystem":"rust","name":"tokio"},"manifest_path":"Cargo.lock"},
+"security_advisory":{"summary":"Boum","severity":"critical"},"html_url":"https://github.com/o/r/security/dependabot/4"}]"#;
+        let a = parse_alerts(json).unwrap();
+        assert_eq!(
+            (a[0].package.as_str(), a[0].severity.as_str(), a[0].ecosystem.as_str(), a[0].manifest.as_str()),
+            ("tokio", "critical", "rust", "Cargo.lock")
+        );
+        assert_eq!(a[1].package, "lodash");
+        assert_eq!(parse_alerts("[]").unwrap(), vec![]);
+    }
+
+    #[test]
+    fn lecture_des_deploiements_et_version() {
+        let json = r#"[{"url":"https://api.github.com/repos/o/r/deployments/7281125823","id":7281125823,"sha":"4f0aa05c1d2e3f4a","ref":"v1.3.0","task":"deploy",
+"environment":"release","creator":{"login":"octo","id":1},"created_at":"2026-10-23T14:45:04Z"}]"#;
+        let d = parse_gh_deployments(json).unwrap();
+        assert_eq!(
+            (d[0].environment.as_str(), d[0].reference.as_str(), d[0].sha.as_str(), d[0].creator.as_str()),
+            ("release", "v1.3.0", "4f0aa05", "octo")
+        );
+        assert_eq!(parse_deployment_state(r#"[{"state":"success","id":1},{"state":"in_progress"}]"#).as_deref(), Some("success"));
+        assert_eq!(parse_deployment_state("[]"), None);
+        let rel = parse_release(r#"{"tag_name":"v1.3.0","name":"Zenytt v1.3.0","prerelease":false,"published_at":"2026-10-23T14:45:16Z","html_url":"https://github.com/o/r/releases/tag/v1.3.0"}"#).unwrap();
+        assert_eq!((rel.tag.as_str(), rel.name.as_deref(), rel.prerelease), ("v1.3.0", Some("Zenytt v1.3.0"), false));
+    }
+
+    #[test]
+    fn adresses_de_l_api() {
+        let p = |i, b: Option<&str>, n| insight_path(i, "octo", "app", b, n);
+        assert_eq!(
+            p(Insight::Ci, Some("feat/x"), 1).unwrap(),
+            "https://api.github.com/repos/octo/app/actions/runs?per_page=1&branch=feat/x"
+        );
+        assert!(p(Insight::Ci, None, 999).unwrap().ends_with("per_page=30"));
+        assert!(p(Insight::Ci, Some("a&b"), 1).is_err() && p(Insight::Ci, Some(""), 1).is_err());
+        assert!(p(Insight::Release, None, 1).unwrap().ends_with("/releases/latest"));
+        assert!(
+            insight_path(Insight::Pulls, "o/x", "app", None, 1).is_err() && insight_path(Insight::Pulls, "octo", "..", None, 1).is_err()
+        );
     }
 
     #[test]
