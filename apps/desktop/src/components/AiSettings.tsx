@@ -9,6 +9,7 @@ import { Badge, Button, Checkbox, Field, Input } from "./ui";
 const PRESETS: { id: string; label: string; settings: Partial<Settings>; hint: string }[] = [
   { id: "claude", label: "Claude (Anthropic)", settings: { provider: "anthropic", baseUrl: "", model: "claude-opus-5" }, hint: "Clé sur console.anthropic.com. Le plus à l'aise sur les tâches d'administration." },
   { id: "openai", label: "OpenAI", settings: { provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4o" }, hint: "Clé sur platform.openai.com." },
+  { id: "gemini", label: "Gemini (Google)", settings: { provider: "openai", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-3.8-flash" }, hint: "Clé gratuite sur aistudio.google.com/apikey (quota limité), payante au-delà." },
   { id: "mistral", label: "Mistral", settings: { provider: "openai", baseUrl: "https://api.mistral.ai/v1", model: "mistral-large-latest" }, hint: "Clé sur console.mistral.ai." },
   { id: "openrouter", label: "OpenRouter", settings: { provider: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4.5" }, hint: "Un seul compte pour de nombreux modèles." },
   { id: "ollama", label: "Ollama (local)", settings: { provider: "openai", baseUrl: "http://localhost:11434/v1", model: "llama3.1" }, hint: "Rien ne sort de ton réseau. Choisis un modèle qui gère les outils." },
@@ -98,6 +99,10 @@ export default function AiSettingsPanel({ onOpenAccess }: { onOpenAccess?: () =>
           );
         })}
       </div>
+
+      <p className="text-xs leading-relaxed text-muted">
+        Une clé d'API est nécessaire : les abonnements grand public (Claude Pro, ChatGPT Plus, Gemini Advanced / Google One AI Premium) ne donnent pas accès à l'API. Gemini propose une clé gratuite (quota limité) sur Google AI Studio, aistudio.google.com/apikey.
+      </p>
 
       <div className="grid grid-cols-2 gap-3">
         <Field label="Modèle">

@@ -577,4 +577,13 @@ mod tests {
             assert!(check_base_url(bad).is_err(), "{bad}");
         }
     }
+
+    #[test]
+    fn gemini_openai_compatible_endpoint() {
+        for base in ["https://generativelanguage.googleapis.com/v1beta/openai", "https://generativelanguage.googleapis.com/v1beta/openai/"] {
+            assert!(check_base_url(base).is_ok());
+            let c = Config { provider: Provider::OpenAi, base_url: base.into(), ..Config::default() };
+            assert_eq!(c.endpoint(), "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
+        }
+    }
 }

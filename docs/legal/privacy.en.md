@@ -50,7 +50,7 @@ you define in Zenytt are written on the server, in Zenytt's own file
 | IP location (fail2ban, off by default) | download.db-ip.com (DB-IP) | Your IP address, as for any download. No address from your logs is sent: Zenytt downloads a free database (CC BY 4.0) and looks addresses up on your computer, about once a month |
 | Server public IP | api.ipify.org, from the server | The server's IP address |
 | Domain expiry | rdap.org and domain registries | Your sites' domain names |
-| AI assistant (off until a provider is set) | The provider you choose (Anthropic, OpenAI, Mistral, OpenRouter, or a local model) | Your messages and what the assistant reads on your servers (logs, configs). Detected secrets are masked before sending, without absolute guarantee |
+| AI assistant (off until a provider is set) | The provider you choose (Anthropic, OpenAI, Google Gemini, Mistral, OpenRouter, or a local model) | Your messages and what the assistant reads on your servers (logs, configs). Detected secrets are masked before sending, without absolute guarantee |
 | Alerts | Discord, ntfy or any webhook you configure | Alert text |
 | Backups | Storage you configure | Backups encrypted by restic |
 | Sync / shared terminal | A folder or a `zenytt-sync` server you host | End-to-end encrypted data (AES-256-GCM); your passphrase never leaves your devices |
