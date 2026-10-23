@@ -1,5 +1,5 @@
 // Page GitHub : fonctions pures (filtre, tri, lien, état d'un clone) séparées de la vue pour être testées.
-import { formatAgo, type GithubClone, type GithubRepo } from "./api";
+import { formatAgo, type GithubClone, type GithubDeployment, type GithubRepo } from "./api";
 
 /** Même règle que le moteur : `^[A-Za-z0-9_.-]+$`, sans `.` ni `..`. */
 const SLUG = /^[A-Za-z0-9_.-]+$/;
@@ -72,9 +72,28 @@ export function cloneSync(c: Pick<GithubClone, "dirty" | "aheadBehind">): { tone
   return out;
 }
 
+/** Déploiements certains (clone, image) d'un dépôt. Le dossier compose « probable » n'est pas compté. */
+export function certainDeployments(list: GithubDeployment[] | undefined, fullName: string): GithubDeployment[] {
+  const key = fullName.toLowerCase();
+  return (list ?? []).filter((d) => d.certain && d.repo.toLowerCase() === key);
+}
+
+/** Déploiements d'un dépôt hors clones (ceux-ci ont leur carte détaillée). */
+export function otherDeployments(list: GithubDeployment[] | undefined, fullName: string): GithubDeployment[] {
+  const key = fullName.toLowerCase();
+  return (list ?? []).filter((d) => d.kind !== "clone" && d.repo.toLowerCase() === key);
+}
+
+/** Ton de la pastille d'un état de conteneur Docker. */
+export function containerTone(state: string): SyncTone {
+  return state === "running" ? "ok" : state === "restarting" || state === "paused" ? "warn" : "muted";
+}
+
 /** Erreur GitHub reconnue : jeton à remplacer, ou incident passager à réessayer. */
-export function githubError(message: string): { kind: "token" | "rate" | "network" | "other"; hint: string } {
+export function githubError(message: string): { kind: "token" | "rate" | "permission" | "network" | "other"; hint: string } {
   const m = message.toLowerCase();
+  if (m.includes("permission manquante"))
+    return { kind: "permission", hint: `Permission manquante : Metadata et Contents en lecture (jeton fine-grained), ou « repo » (jeton classique). Pour un dépôt d'organisation, choisis l'organisation comme « Resource owner » à la création du jeton. (${message})` };
   if (m.includes("jeton refusé") || m.includes("aucun jeton")) return { kind: "token", hint: "Le jeton a expiré, a été révoqué ou n'a pas le droit de lecture. Colle un nouveau jeton." };
   if (m.includes("429") || m.includes("rate limit")) return { kind: "rate", hint: "GitHub limite le nombre de requêtes. Réessaie dans quelques minutes." };
   if (m.includes("injoignable")) return { kind: "network", hint: "GitHub ne répond pas : vérifie la connexion internet de ce poste." };

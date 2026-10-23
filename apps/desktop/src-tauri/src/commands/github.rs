@@ -109,6 +109,34 @@ pub async fn github_clones(
     details(&conn, &dirs).await
 }
 
+#[derive(serde::Deserialize)]
+pub struct RepoRef {
+    owner: String,
+    name: String,
+}
+
+/// Tout ce qui tourne sur ce serveur pour les dépôts donnés (clones, images GHCR, dossiers compose) : une seule
+/// commande en lecture seule, quel que soit le nombre de dépôts.
+#[tauri::command]
+pub async fn github_server_deployments(
+    store: State<'_, Store>,
+    sessions: State<'_, Sessions>,
+    server_id: String,
+    repos: Vec<RepoRef>,
+) -> Result<Vec<github::Deployment>, String> {
+    if repos.len() > 2000 {
+        return Err("trop de dépôts".into());
+    }
+    let mut list = Vec::with_capacity(repos.len());
+    for r in repos {
+        check_repo(&r.owner, &r.name)?;
+        list.push((r.owner, r.name));
+    }
+    let conn = shell_conn(&store, &sessions, &server_id).await?;
+    let out = conn.exec(&github::server_scan_command(), None).await.map_err(err)?;
+    Ok(github::parse_deployments(&out.stdout, &list))
+}
+
 /// Relit l'état d'un clone ; `fetch` interroge d'abord GitHub (sinon avance/retard datent du dernier fetch).
 #[tauri::command]
 pub async fn github_clone_state(

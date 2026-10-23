@@ -612,6 +612,26 @@ export interface GithubClone {
   subject: string;
 }
 
+export interface GithubContainer {
+  name: string;
+  image: string;
+  tag: string;
+  /** 7 premiers caractères si l'étiquette est un SHA de commit. */
+  sha: string | null;
+  state: string;
+  created: string | null;
+}
+
+/** Où tourne un dépôt sur un serveur : clone (certain), image GHCR / label (certain) ou dossier compose du même nom (probable). */
+export interface GithubDeployment {
+  repo: string;
+  kind: "clone" | "image" | "compose-dir";
+  certain: boolean;
+  path: string | null;
+  project: string | null;
+  containers: GithubContainer[];
+}
+
 export interface Service {
   unit: string;
   load: string;
@@ -1699,6 +1719,8 @@ export const api = {
   githubSetToken: (token: string) => invoke<GithubStatus>("github_set_token", { token }),
   githubRepos: () => invoke<GithubRepo[]>("github_repos"),
   githubClones: (serverId: string, owner: string, repo: string) => invoke<GithubClone[]>("github_clones", { serverId, owner, repo }),
+  githubServerDeployments: (serverId: string, repos: { owner: string; name: string }[]) =>
+    invoke<GithubDeployment[]>("github_server_deployments", { serverId, repos }),
   githubCloneState: (serverId: string, owner: string, repo: string, path: string, fetch: boolean) =>
     invoke<GithubClone>("github_clone_state", { serverId, owner, repo, path, fetch }),
   githubClone: (serverId: string, owner: string, repo: string, folder: string) => invoke<string>("github_clone", { serverId, owner, repo, folder }),

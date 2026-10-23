@@ -412,6 +412,7 @@ pub fn run() {
             github::github_set_token,
             github::github_repos,
             github::github_clones,
+            github::github_server_deployments,
             github::github_clone_state,
             github::github_clone,
             github::github_pull,

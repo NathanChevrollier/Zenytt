@@ -3,11 +3,13 @@
 // Le jeton reste dans le coffre de l'OS : l'interface ne le relit jamais.
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
-  ExternalLink, Eye, EyeOff, FolderGit2, FolderOpen, GitBranch, GitCommitHorizontal, GitPullRequestArrow, KeyRound, Loader2, Lock, LogOut, RefreshCw, Rocket, Search, Server, SquareTerminal, UserRound,
+  Container, ExternalLink, Eye, EyeOff, FolderGit2, FolderOpen, GitBranch, GitCommitHorizontal, GitPullRequestArrow, KeyRound, Loader2, Lock, LogOut, RefreshCw, Rocket, Search, Server, SquareTerminal, UserRound,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, errorMessage, hasShell, shellQuote, type GithubClone, type GithubRepo, type GithubStatus, type ServerView } from "../lib/api";
-import { agoOf, browseRepos, clonePath, cloneSync, githubError, repoUrl, validFolder, validToken, type RepoFilter, type RepoSort } from "../lib/github";
+import { api, errorMessage, hasShell, shellQuote, type GithubClone, type GithubDeployment, type GithubRepo, type GithubStatus, type ServerView } from "../lib/api";
+import {
+  agoOf, browseRepos, certainDeployments, clonePath, cloneSync, containerTone, githubError, otherDeployments, repoUrl, validFolder, validToken, type RepoFilter, type RepoSort,
+} from "../lib/github";
 import { navigate } from "../lib/shell";
 import { useApp, useAppPick } from "../lib/store";
 import { useCachedState } from "../lib/cache";
@@ -26,6 +28,13 @@ interface ServerScan {
 }
 /** Clones connus, par dépôt puis par serveur. */
 type Scans = Record<string, Record<string, ServerScan>>;
+interface ServerDeps {
+  loading: boolean;
+  items: GithubDeployment[];
+  error?: string;
+}
+/** Déploiements de tous les dépôts, par serveur (une seule commande par serveur). */
+type Deps = Record<string, ServerDeps>;
 
 const openRepo = (r: GithubRepo) => {
   const url = repoUrl(r.owner, r.name);
@@ -44,6 +53,7 @@ export default function GithubView() {
   const [status, setStatus] = useCachedState<GithubStatus | null>("github:status", null);
   const [repos, setRepos] = useCachedState<GithubRepo[] | null>("github:repos", null);
   const [scans, setScans] = useCachedState<Scans>("github:scans", {});
+  const [deps, setDeps] = useCachedState<Deps>("github:deps", {});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
@@ -87,12 +97,47 @@ export default function GithubView() {
       return { ...all, [repo.fullName]: { ...all[repo.fullName], [serverId]: { ...cur, clones: cur.clones.map((x) => (x.path === c.path ? c : x)) } } };
     });
 
-  const deployedCount = useCallback((fullName: string) => Object.values(scans[fullName] ?? {}).reduce((n, s) => n + s.clones.length, 0), [scans]);
+  // Une commande par serveur couvre tous les dépôts : à l'ouverture de la page (sauf serveurs déjà examinés), ou à la demande.
+  const scanServers = useCallback(
+    async (ids: string[]) => {
+      const list = (repos ?? []).map((r) => ({ owner: r.owner, name: r.name }));
+      if (!list.length) return;
+      setDeps((all) => ({ ...all, ...Object.fromEntries(ids.map((id) => [id, { loading: true, items: all[id]?.items ?? [] }])) }));
+      await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const items = await api.githubServerDeployments(id, list);
+            setDeps((all) => ({ ...all, [id]: { loading: false, items } }));
+          } catch (e) {
+            setDeps((all) => ({ ...all, [id]: { loading: false, items: [], error: errorMessage(e) } }));
+          }
+        }),
+      );
+    },
+    [repos, setDeps],
+  );
+  const targetIds = targets.map((s) => s.id).join(",");
+  const depsKnown = repos !== null;
+  useEffect(() => {
+    if (!depsKnown) return;
+    const todo = targets.filter((s) => !deps[s.id]).map((s) => s.id);
+    if (todo.length) void scanServers(todo);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [depsKnown, targetIds]);
+  const depsLoading = targets.some((s) => deps[s.id]?.loading);
+  const allDeps = useMemo(() => Object.values(deps).flatMap((d) => d.items), [deps]);
+
+  const deployedCount = useCallback(
+    (fullName: string) => {
+      const known = certainDeployments(allDeps, fullName).length;
+      return known || Object.values(scans[fullName] ?? {}).reduce((n, s) => n + s.clones.length, 0);
+    },
+    [allDeps, scans],
+  );
   const shown = useMemo(() => browseRepos(repos ?? [], query, filter, sort, (n) => deployedCount(n) > 0), [repos, query, filter, sort, deployedCount]);
   const current = shown.find((r) => r.fullName === selected) ?? shown[0] ?? null;
 
   // Examine les serveurs une fois que la sélection se pose : parcourir la liste au clavier ne lance pas un scan par ligne.
-  const targetIds = targets.map((s) => s.id).join(",");
   useEffect(() => {
     if (!current) return;
     const t = setTimeout(() => {
@@ -180,6 +225,9 @@ export default function GithubView() {
             current={current}
             onSelect={setSelected}
             deployedCount={deployedCount}
+            scanning={depsLoading}
+            canScan={targets.length > 0}
+            onScanAll={() => void scanServers(targets.map((s) => s.id))}
             {...{ query, setQuery, filter, setFilter, sort, setSort }}
           />
           <main className="min-h-0 min-w-0 flex-1 overflow-auto" aria-label="Détail du dépôt">
@@ -189,7 +237,11 @@ export default function GithubView() {
                 repo={current}
                 targets={targets}
                 scans={scans[current.fullName] ?? {}}
-                onScan={(id) => void scan(current, id)}
+                deps={deps}
+                onScan={(id) => {
+                  void scan(current, id);
+                  void scanServers([id]);
+                }}
                 onReplace={(id, c) => replace(current, id, c)}
                 onClone={() => setCloneFor(current)}
               />
@@ -254,8 +306,12 @@ function Onboarding({ error, onSave }: { error: string | null; onSave: (token: s
         <TokenForm onSave={onSave} />
         <div className="flex flex-col gap-1.5 border-t border-border pt-3 text-xs leading-relaxed text-muted">
           <p>
-            Crée un jeton <strong className="font-medium text-fg">fine-grained</strong> : accès aux dépôts à suivre (ou à tous), permission <strong className="font-medium text-fg">Contents : lecture seule</strong>. Metadata en lecture
-            est ajouté d'office. Un jeton classique avec le droit « repo » fonctionne aussi.
+            Minimum pour un jeton <strong className="font-medium text-fg">fine-grained</strong> : accès aux dépôts à suivre (ou « All repositories »), permissions de dépôt{" "}
+            <strong className="font-medium text-fg">Metadata : lecture</strong> (ajoutée d'office) et <strong className="font-medium text-fg">Contents : lecture</strong> (pour cloner et mettre à jour les dépôts privés).
+            Aucune permission de compte n'est utile. Un jeton classique avec le droit <strong className="font-medium text-fg">repo</strong> fonctionne aussi.
+          </p>
+          <p>
+            Un jeton fine-grained ne couvre que les dépôts d'un seul propriétaire : pour ceux d'une organisation, choisis l'organisation comme <strong className="font-medium text-fg">Resource owner</strong> à la création.
           </p>
           <p className="text-faint">Le jeton est rangé dans le coffre de l'OS. Il n'est ni exporté ni synchronisé, et n'est jamais écrit sur tes serveurs.</p>
         </div>
@@ -338,6 +394,9 @@ function RepoList({
   current,
   onSelect,
   deployedCount,
+  scanning,
+  canScan,
+  onScanAll,
   query,
   setQuery,
   filter,
@@ -350,6 +409,9 @@ function RepoList({
   current: GithubRepo | null;
   onSelect: (fullName: string) => void;
   deployedCount: (fullName: string) => number;
+  scanning: boolean;
+  canScan: boolean;
+  onScanAll: () => void;
   query: string;
   setQuery: (q: string) => void;
   filter: RepoFilter;
@@ -403,7 +465,7 @@ function RepoList({
             { value: "all", label: "Tous" },
             { value: "private", label: "Privés" },
             { value: "public", label: "Publics" },
-            { value: "deployed", label: "Déployés", title: "Dépôts dont un clone a été trouvé sur un serveur" },
+            { value: "deployed", label: "Déployés", title: "Dépôts dont un clone ou une image a été trouvé sur un serveur" },
           ]}
         />
         <div className="flex items-center justify-between gap-2 text-xs text-muted">
@@ -420,7 +482,14 @@ function RepoList({
           />
         </div>
       </div>
-      {filter === "deployed" && <p className="border-b border-border px-3 py-2 text-xs text-faint">D'après les dépôts déjà ouverts : la recherche sur les serveurs se fait dépôt par dépôt.</p>}
+      {canScan && (
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5 text-xs text-muted">
+          <span aria-live="polite">{scanning ? "Recherche sur les serveurs…" : "Clones et images trouvés sur tes serveurs."}</span>
+          <Button size="sm" variant="ghost" icon={<RefreshCw size={12} className={scanning ? "animate-spin" : ""} />} disabled={scanning} onClick={onScanAll}>
+            Rechercher sur les serveurs
+          </Button>
+        </div>
+      )}
       <div ref={listRef} role="listbox" aria-label="Dépôts" className="scroll-thin min-h-0 flex-1 overflow-auto p-1.5" onKeyDown={onKey}>
         {repos.length === 0 ? (
           <p className="px-3 py-8 text-center text-[13px] text-muted">{query || filter !== "all" ? "Aucun dépôt ne correspond." : "Ce compte n'a encore aucun dépôt."}</p>
@@ -444,7 +513,7 @@ function RepoList({
                   {r.private && <Lock size={11} className="shrink-0 text-muted" aria-label="privé" />}
                   {r.archived && <Badge tone="warn">archivé</Badge>}
                   {n > 0 && (
-                    <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-medium text-ok" title={`Déployé : ${n} clone${n > 1 ? "s" : ""}`}>
+                    <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-medium text-ok" title={`Déployé : ${n} déploiement${n > 1 ? "s" : ""}`}>
                       <Server size={11} aria-hidden />
                       {n}
                     </span>
@@ -471,6 +540,7 @@ function RepoDetail({
   repo,
   targets,
   scans,
+  deps,
   onScan,
   onReplace,
   onClone,
@@ -478,14 +548,20 @@ function RepoDetail({
   repo: GithubRepo;
   targets: ServerView[];
   scans: Record<string, ServerScan>;
+  deps: Deps;
   onScan: (serverId: string) => void;
   onReplace: (serverId: string, c: GithubClone) => void;
   onClone: () => void;
 }) {
   const results = targets.map((s) => ({ s, r: scans[s.id] }));
-  const pending = results.some(({ r }) => !r || r.loading);
-  const found = results.flatMap(({ s, r }) => (r?.clones ?? []).map((c) => ({ s, c })));
-  const empty = results.filter(({ r }) => r && !r.loading && !r.error && r.clones.length === 0).map(({ s }) => s.name);
+  const depsPending = targets.some((s) => !deps[s.id] || deps[s.id].loading);
+  const pending = results.some(({ r }) => !r || r.loading) || depsPending;
+  const clones = results.flatMap(({ s, r }) => (r?.clones ?? []).map((c) => ({ s, c })));
+  const images = targets.flatMap((s) => otherDeployments(deps[s.id]?.items, repo.fullName).map((d) => ({ s, d })));
+  const found = [...clones, ...images.filter(({ d }) => d.certain)];
+  const empty = results
+    .filter(({ s, r }) => r && !r.loading && !r.error && r.clones.length === 0 && !images.some((i) => i.s.id === s.id))
+    .map(({ s }) => s.name);
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6 px-7 py-6">
@@ -525,7 +601,7 @@ function RepoDetail({
       <Section
         title="Déploiements"
         count={found.length || undefined}
-        description="Clones sous /srv, /opt, /var/www et le dossier personnel."
+        description="Clones sous /srv, /opt, /var/www et le dossier personnel, images GHCR et projets compose."
         actions={
           targets.length > 0 && (
             <Button size="sm" variant="ghost" icon={<RefreshCw size={13} className={pending ? "animate-spin" : ""} />} disabled={pending} onClick={() => targets.forEach((s) => onScan(s.id))}>
@@ -555,8 +631,11 @@ function RepoDetail({
                 <ErrorState key={s.id} message={<><strong className="font-semibold">{s.name} injoignable.</strong> {r.error}</>} onRetry={() => onScan(s.id)} />
               ) : null,
             )}
-            {found.map(({ s, c }) => (
+            {clones.map(({ s, c }) => (
               <CloneCard key={`${s.id}:${c.path}`} repo={repo} server={s} clone={c} onReplace={(nc) => onReplace(s.id, nc)} />
+            ))}
+            {images.map(({ s, d }) => (
+              <ImageCard key={`${s.id}:${d.kind}:${d.project ?? d.containers[0]?.name ?? d.path}`} server={s} dep={d} />
             ))}
             {!pending && found.length === 0 && (
               <Card className="border-dashed">
@@ -637,6 +716,60 @@ function CloneCard({ repo, server, clone: c, onReplace }: { repo: GithubRepo; se
         <Button size="sm" variant="ghost" icon={<FolderOpen size={13} />} onClick={() => openFiles(server.id, c.path)}>
           Fichiers
         </Button>
+      </div>
+    </Card>
+  );
+}
+
+/** Déploiement par images (GHCR) ou dossier compose « probable » : pas de .git, donc pas de pull. */
+function ImageCard({ server, dep }: { server: ServerView; dep: GithubDeployment }) {
+  const probable = !dep.certain;
+  const title = dep.project ?? dep.containers[0]?.name ?? "Conteneur";
+  return (
+    <Card padded={false} className={probable ? "border-dashed" : undefined}>
+      <div className="flex items-start gap-3 px-4 pt-3.5">
+        <Avatar name={server.name} color={server.color} size={30} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium">
+            {server.name} <span className="font-normal text-muted">· {probable ? "projet compose" : "images Docker"} {title}</span>
+          </div>
+          {dep.path && (
+            <div className="truncate font-mono text-xs text-muted select-text" title={dep.path}>
+              {dep.path}
+            </div>
+          )}
+        </div>
+        <Badge tone={probable ? "warn" : "ok"} title={probable ? "Déduit du nom du dossier, sans preuve" : "L'image ou son label désigne ce dépôt"}>
+          {probable ? "probable" : "certain"}
+        </Badge>
+      </div>
+      {probable && <p className="px-4 pt-2 text-xs text-muted">Dossier compose au même nom que le dépôt : à vérifier.</p>}
+      <ul className="flex flex-col gap-1.5 px-4 py-3">
+        {dep.containers.map((c) => (
+          <li key={c.name} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+            <Badge tone={containerTone(c.state)}>{c.state}</Badge>
+            <span className="font-medium text-fg">{c.name}</span>
+            <span className="min-w-0 truncate font-mono text-muted select-text" title={c.image}>
+              {c.image.replace(/^ghcr\.io\//i, "")}
+            </span>
+            {c.sha && <Badge title={`Étiquette = SHA de commit ${c.sha}`}>commit {c.sha}</Badge>}
+            <span className="ml-auto shrink-0 text-faint" title="Création du conteneur">
+              {agoOf(c.created)}
+            </span>
+          </li>
+        ))}
+        {dep.containers.length === 0 && <li className="text-xs text-faint">Aucun conteneur.</li>}
+      </ul>
+      <div className="flex flex-wrap items-center gap-1.5 border-t border-border px-3 py-2">
+        <Button size="sm" icon={<Container size={13} />} onClick={() => navigate("docker", dep.project ? "compose" : "containers", server.id)}>
+          Voir dans Docker
+        </Button>
+        <span className="flex-1" />
+        {dep.path && (
+          <Button size="sm" variant="ghost" icon={<FolderOpen size={13} />} onClick={() => openFiles(server.id, dep.path!)}>
+            Fichiers
+          </Button>
+        )}
       </div>
     </Card>
   );

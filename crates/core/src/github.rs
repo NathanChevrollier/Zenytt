@@ -84,6 +84,27 @@ pub fn valid_token(t: &str) -> bool {
     !t.is_empty() && t.len() <= 255 && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// Message d'erreur selon la réponse de GitHub : jeton invalide (401), limite de requêtes (429, ou 403 avec
+/// `x-ratelimit-remaining: 0` / `retry-after`), permission manquante (autre 403), introuvable (404).
+pub fn map_http_error(status: u16, remaining: Option<&str>, retry_after: Option<&str>, body: &str) -> String {
+    let msg =
+        serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| v["message"].as_str().map(str::to_string)).unwrap_or_default();
+    let lower = msg.to_lowercase();
+    match status {
+        401 => "jeton refusé par GitHub (401) : invalide, expiré ou révoqué".into(),
+        429 => "limite de requêtes GitHub atteinte (429, rate limit) : réessaie dans quelques minutes".into(),
+        403 if remaining == Some("0") || retry_after.is_some() || lower.contains("rate limit") => {
+            "limite de requêtes GitHub atteinte (403, rate limit) : réessaie dans quelques minutes".into()
+        }
+        403 => format!(
+            "permission manquante (403) : le jeton n'a pas le droit demandé (Metadata et Contents en lecture, ou « repo » pour un jeton classique){}",
+            if msg.is_empty() { String::new() } else { format!(" — GitHub : {msg}") }
+        ),
+        404 => "introuvable (404) : dépôt inexistant ou non accordé à ce jeton".into(),
+        s => format!("GitHub a répondu {s}"),
+    }
+}
+
 fn get(agent: &ureq::Agent, token: &str, url: &str) -> Result<String> {
     let mut resp = agent
         .get(url)
@@ -94,11 +115,12 @@ fn get(agent: &ureq::Agent, token: &str, url: &str) -> Result<String> {
         .call()
         .map_err(|e| Error::Other(format!("GitHub injoignable : {e}")))?;
     let status = resp.status().as_u16();
+    let header = |n: &str| resp.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let (remaining, retry) = (header("x-ratelimit-remaining"), header("retry-after"));
     let text = resp.body_mut().read_to_string().map_err(|e| Error::Other(e.to_string()))?;
     match status {
         200..=299 => Ok(text),
-        401 | 403 => Err(Error::Other("jeton refusé par GitHub (401/403) : expiré, révoqué ou sans droit de lecture".into())),
-        s => Err(Error::Other(format!("GitHub a répondu {s}"))),
+        _ => Err(Error::Other(map_http_error(status, remaining.as_deref(), retry.as_deref(), &text))),
     }
 }
 
@@ -128,7 +150,11 @@ pub async fn repos(token: &str) -> Result<Vec<Repo>> {
         let agent = agent();
         let mut all = Vec::new();
         for page in 1..=MAX_PAGES {
-            let text = get(&agent, &token, &format!("{API}/user/repos?per_page=100&sort=updated&page={page}"))?;
+            let text = get(
+                &agent,
+                &token,
+                &format!("{API}/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member&page={page}"),
+            )?;
             let count = serde_json::from_str::<Vec<serde_json::Value>>(&text).map(|v| v.len()).unwrap_or(0);
             all.extend(parse_repos(&text)?);
             if count < 100 {
@@ -320,9 +346,271 @@ pub fn clone_command(owner: &str, repo: &str, folder: &str, with_token: bool) ->
     Ok((sh(&cmd), target))
 }
 
+// ---- Déploiements (clones, images GHCR, dossiers compose) ------------------------------------
+
+/// Une seule commande par serveur : dépôts git (`G<TAB>chemin<TAB>origin`) puis conteneurs Docker
+/// (`C<TAB>nom<TAB>image<TAB>état<TAB>création<TAB>projet compose<TAB>dossier compose<TAB>label source`). Lecture seule, sans sudo.
+pub fn server_scan_command() -> String {
+    sh(r#"t=''; command -v timeout >/dev/null 2>&1 && t='timeout 25'; T=$(printf '\t'); \
+$t find /srv /opt /var/www "$HOME" -maxdepth 5 -name node_modules -prune -o -name .git -type d -print 2>/dev/null | head -300 | \
+while IFS= read -r g; do d=${g%/.git}; r=$(git -c safe.directory='*' -C "$d" remote get-url origin 2>/dev/null) && printf 'G\t%s\t%s\n' "$d" "$r"; done; \
+command -v docker >/dev/null 2>&1 && $t docker ps -a --format "C${T}{{.Names}}${T}{{.Image}}${T}{{.State}}${T}{{.CreatedAt}}${T}{{.Label \"com.docker.compose.project\"}}${T}{{.Label \"com.docker.compose.project.working_dir\"}}${T}{{.Label \"org.opencontainers.image.source\"}}" 2>/dev/null; true"#)
+}
+
+/// `(propriétaire, paquet, étiquette)` d'une image `ghcr.io/owner/pkg[:tag][@digest]`, en minuscules (sauf l'étiquette).
+pub fn parse_ghcr(image: &str) -> Option<(String, String, String)> {
+    let image = image.trim();
+    let rest = image.get(..8).filter(|p| p.eq_ignore_ascii_case("ghcr.io/")).map(|_| &image[8..])?;
+    let rest = rest.split('@').next()?;
+    let (path, tag) = match rest.rsplit_once(':') {
+        Some((p, t)) if !t.contains('/') => (p, t),
+        _ => (rest, "latest"),
+    };
+    let mut seg = path.split('/');
+    let (owner, pkg) = (seg.next()?, seg.next()?);
+    (valid_repo(owner, pkg) && valid_slug(tag)).then(|| (owner.to_ascii_lowercase(), pkg.to_ascii_lowercase(), tag.to_string()))
+}
+
+/// Le paquet GHCR appartient-il au dépôt : même nom, ou `<dépôt>-suffixe` / `<dépôt>_suffixe` ?
+pub fn package_matches(pkg: &str, repo: &str) -> bool {
+    let (p, r) = (pkg.to_ascii_lowercase(), repo.to_ascii_lowercase());
+    p == r || (p.len() > r.len() && p.starts_with(&r) && matches!(p.as_bytes()[r.len()], b'-' | b'_'))
+}
+
+/// Étiquette qui ressemble à un SHA de commit (7 à 40 hexadécimaux dont un chiffre et une lettre), éventuellement `sha-…`.
+pub fn commit_sha(tag: &str) -> Option<String> {
+    let t = tag.strip_prefix("sha-").unwrap_or(tag);
+    let ok = (7..=40).contains(&t.len())
+        && t.bytes().all(|b| b.is_ascii_hexdigit())
+        && t.bytes().any(|b| b.is_ascii_digit())
+        && t.bytes().any(|b| b.is_ascii_alphabetic());
+    ok.then(|| t[..7].to_ascii_lowercase())
+}
+
+/// Nom de dossier comparable : minuscules, `_` ramené à `-`.
+fn norm_name(s: &str) -> String {
+    s.to_ascii_lowercase().replace('_', "-")
+}
+
+/// `2026-01-02 03:04:05 +0000 UTC` (docker) vers `2026-01-02T03:04:05+00:00`.
+pub fn docker_date(s: &str) -> Option<String> {
+    let mut p = s.split_whitespace();
+    let (d, t, z) = (p.next()?, p.next()?, p.next()?);
+    (d.len() == 10 && z.len() == 5 && (z.starts_with('+') || z.starts_with('-'))).then(|| format!("{d}T{t}{}:{}", &z[..3], &z[3..]))
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerInfo {
+    pub name: String,
+    pub image: String,
+    pub tag: String,
+    /// Les 7 premiers caractères si l'étiquette est un SHA de commit.
+    pub sha: Option<String>,
+    pub state: String,
+    pub created: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeploymentKind {
+    Clone,
+    Image,
+    ComposeDir,
+}
+
+/// Un endroit où tourne un dépôt sur un serveur. `certain` : clone avec `origin` correct, ou image / label qui correspond.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Deployment {
+    /// `owner/repo` tel que listé par GitHub.
+    pub repo: String,
+    pub kind: DeploymentKind,
+    pub certain: bool,
+    /// Dossier du clone, ou dossier de travail compose.
+    pub path: Option<String>,
+    pub project: Option<String>,
+    pub containers: Vec<ContainerInfo>,
+}
+
+struct Cont<'a> {
+    name: &'a str,
+    image: &'a str,
+    state: &'a str,
+    created: &'a str,
+    project: &'a str,
+    dir: &'a str,
+    source: &'a str,
+}
+
+/// Dépôt (parmi `repos`) auquel appartient le conteneur : label source identique au dépôt, sinon image GHCR du même
+/// propriétaire. En cas d'ambiguïté (`app` et `app-api`), le nom le plus long gagne.
+fn container_repo<'a>(c: &Cont, repos: &'a [(String, String)]) -> Option<&'a (String, String)> {
+    if let Some(r) = repos.iter().find(|(o, n)| same_repo(c.source, o, n)) {
+        return Some(r);
+    }
+    let (owner, pkg, _) = parse_ghcr(c.image)?;
+    repos.iter().filter(|(o, n)| o.eq_ignore_ascii_case(&owner) && package_matches(&pkg, n)).max_by_key(|(_, n)| n.len())
+}
+
+/// Lit la sortie de `server_scan_command` et la rattache aux dépôts `(propriétaire, nom)` du compte.
+pub fn parse_deployments(out: &str, repos: &[(String, String)]) -> Vec<Deployment> {
+    let mut found: Vec<Deployment> = Vec::new();
+    let mut conts: Vec<Cont> = Vec::new();
+    for line in out.lines() {
+        let f: Vec<&str> = line.splitn(8, '\t').collect();
+        match f.as_slice() {
+            ["G", path, url] if valid_path(path) => {
+                for (o, n) in repos.iter().filter(|(o, n)| same_repo(url, o, n)) {
+                    let repo = format!("{o}/{n}");
+                    if !found.iter().any(|d| d.kind == DeploymentKind::Clone && d.repo == repo && d.path.as_deref() == Some(path)) {
+                        found.push(Deployment {
+                            repo,
+                            kind: DeploymentKind::Clone,
+                            certain: true,
+                            path: Some(path.to_string()),
+                            project: None,
+                            containers: vec![],
+                        });
+                    }
+                }
+            }
+            ["C", name, image, state, created, project, dir, source] if valid_slug(name) => {
+                conts.push(Cont { name, image, state, created, project, dir, source })
+            }
+            _ => {}
+        }
+    }
+    let info = |c: &Cont| {
+        let tag =
+            parse_ghcr(c.image).map(|g| g.2).unwrap_or_else(|| c.image.rsplit_once(':').map(|(_, t)| t.to_string()).unwrap_or_default());
+        ContainerInfo {
+            name: c.name.into(),
+            image: c.image.into(),
+            sha: commit_sha(&tag),
+            tag,
+            state: c.state.into(),
+            created: docker_date(c.created),
+        }
+    };
+    // Images : un déploiement par (dépôt, projet compose), ou par conteneur hors compose.
+    for c in &conts {
+        let Some((o, n)) = container_repo(c, repos) else { continue };
+        let repo = format!("{o}/{n}");
+        let project = (!c.project.is_empty()).then(|| c.project.to_string());
+        let path = valid_path(c.dir).then(|| c.dir.to_string());
+        let existing =
+            found.iter_mut().find(|d| d.kind == DeploymentKind::Image && d.repo == repo && project.is_some() && d.project == project);
+        if let Some(d) = existing {
+            d.containers.push(info(c));
+        } else {
+            found.push(Deployment { repo, kind: DeploymentKind::Image, certain: true, path, project, containers: vec![info(c)] });
+        }
+    }
+    // Dossiers compose au même nom que le dépôt, pas déjà couverts.
+    let mut dirs: Vec<(&str, &str)> = conts.iter().filter(|c| valid_path(c.dir)).map(|c| (c.dir, c.project)).collect();
+    dirs.sort();
+    dirs.dedup();
+    for (dir, project) in dirs {
+        let base = norm_name(dir.rsplit('/').next().unwrap_or_default());
+        for (o, n) in repos.iter().filter(|(_, n)| norm_name(n) == base) {
+            let repo = format!("{o}/{n}");
+            let covered = found.iter().any(|d| {
+                d.repo == repo
+                    && (d.path.as_deref() == Some(dir)
+                        || (d.kind == DeploymentKind::Image && !project.is_empty() && d.project.as_deref() == Some(project)))
+            });
+            if !covered {
+                let containers = conts.iter().filter(|c| c.dir == dir && c.project == project).map(info).collect();
+                found.push(Deployment {
+                    repo,
+                    kind: DeploymentKind::ComposeDir,
+                    certain: false,
+                    path: Some(dir.into()),
+                    project: (!project.is_empty()).then(|| project.into()),
+                    containers,
+                });
+            }
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn repos() -> Vec<(String, String)> {
+        ["MyPage", "scanlib", "Zenytt", "app", "app-api"].iter().map(|n| ("NathanChevrollier".to_string(), n.to_string())).collect()
+    }
+
+    #[test]
+    fn images_ghcr() {
+        assert_eq!(
+            parse_ghcr("ghcr.io/nathanchevrollier/mypage-web:4f0aa05c"),
+            Some(("nathanchevrollier".into(), "mypage-web".into(), "4f0aa05c".into()))
+        );
+        assert_eq!(parse_ghcr("GHCR.io/Octo/App@sha256:abc"), Some(("octo".into(), "app".into(), "latest".into())));
+        assert_eq!(parse_ghcr("docker.io/library/nginx:1"), None);
+        assert_eq!(parse_ghcr("ghcr.io/onlyowner"), None);
+        assert!(package_matches("mypage-web", "MyPage") && package_matches("scanlib_worker", "scanlib") && package_matches("app", "app"));
+        assert!(!package_matches("mypager", "mypage") && !package_matches("my", "mypage"));
+        assert_eq!(commit_sha("4f0aa05c1d2e").as_deref(), Some("4f0aa05"));
+        assert_eq!(commit_sha("sha-ABCDEF1234").as_deref(), Some("abcdef1"));
+        for t in ["latest", "1.2.3", "1234567", "abcdefg", "deadbee"] {
+            assert_eq!(commit_sha(t), None, "{t}");
+        }
+        assert_eq!(docker_date("2026-01-02 03:04:05 +0100 CET").as_deref(), Some("2026-01-02T03:04:05+01:00"));
+    }
+
+    #[test]
+    fn deploiements_mypage_et_scanlib() {
+        let out = "G\t/var/www/html/Zenytt\thttps://github.com/NathanChevrollier/Zenytt.git\n\
+G\t/var/www/html/scanlib\tgit@github.com:nathanchevrollier/scanlib.git\n\
+G\t/x/other\thttps://gitlab.com/NathanChevrollier/MyPage.git\n\
+C\tmypage-web-1\tghcr.io/nathanchevrollier/mypage-web:4f0aa05c1d2e\trunning\t2026-01-02 03:04:05 +0000 UTC\tmypage\t/srv/apps/mypage\thttps://github.com/nginx/docker-nginx-unprivileged\n\
+C\tmypage-status-1\tghcr.io/nathanchevrollier/mypage-status:4f0aa05c1d2e\texited\t2026-01-02 03:04:05 +0000 UTC\tmypage\t/srv/apps/mypage\t\n\
+C\tlab\tmyimg:1\trunning\t2026-01-02 03:04:05 +0000 UTC\t\t\thttps://github.com/NathanChevrollier/scanlib\n\
+C\tapi\tghcr.io/nathanchevrollier/app-api:v1\trunning\t2026-01-02 03:04:05 +0000 UTC\t\t\t\n\
+C\tzenytt-sync\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tzenytt-sync\t/opt/stacks/zenytt-sync\t\n\
+C\tfoo\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tscan_lib\t/opt/scan_lib\t\n\
+C\tfoo2\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tx\t/opt/stacks/mypage\t\nbad\n";
+        let d = parse_deployments(out, &repos());
+        let of =
+            |r: &str, k: DeploymentKind| d.iter().filter(|x| x.repo == format!("NathanChevrollier/{r}") && x.kind == k).collect::<Vec<_>>();
+        assert_eq!(of("Zenytt", DeploymentKind::Clone).len(), 1);
+        assert_eq!(of("MyPage", DeploymentKind::Clone).len(), 0, "gitlab ignoré");
+        let img = of("MyPage", DeploymentKind::Image);
+        assert_eq!(img.len(), 1);
+        assert!(img[0].certain && img[0].project.as_deref() == Some("mypage") && img[0].path.as_deref() == Some("/srv/apps/mypage"));
+        assert_eq!(img[0].containers.len(), 2, "le label vers nginx n'a aucun effet");
+        assert_eq!(img[0].containers[0].sha.as_deref(), Some("4f0aa05"));
+        assert_eq!(img[0].containers[1].state, "exited");
+        // /srv/apps/mypage est couvert par l'image ; /opt/stacks/mypage ne l'est pas : « probable »
+        let probable = of("MyPage", DeploymentKind::ComposeDir);
+        assert_eq!(probable.len(), 1);
+        assert!(!probable[0].certain && probable[0].path.as_deref() == Some("/opt/stacks/mypage"));
+        // label source identique -> image certaine
+        assert_eq!(of("scanlib", DeploymentKind::Image).len(), 1);
+        assert_eq!(of("scanlib", DeploymentKind::ComposeDir).len(), 0, "scan_lib != scanlib");
+        // le nom le plus long gagne
+        assert_eq!(of("app-api", DeploymentKind::Image).len(), 1);
+        assert_eq!(of("app", DeploymentKind::Image).len(), 0);
+        assert_eq!(of("Zenytt", DeploymentKind::ComposeDir).len(), 0);
+        assert!(server_scan_command().contains("docker ps -a --format"));
+    }
+
+    #[test]
+    fn erreurs_http() {
+        let perm = r#"{"message":"Resource not accessible by personal access token"}"#;
+        assert!(map_http_error(401, None, None, "").contains("jeton refusé"));
+        assert!(map_http_error(403, Some("0"), None, "").contains("rate limit"));
+        assert!(map_http_error(403, None, Some("60"), "").contains("rate limit"));
+        let p = map_http_error(403, Some("4000"), None, perm);
+        assert!(p.contains("permission manquante") && p.contains("Resource not accessible") && !p.contains("rate limit"));
+        assert!(map_http_error(429, None, None, "").contains("429"));
+        assert!(map_http_error(404, None, None, "").contains("introuvable"));
+    }
 
     #[test]
     fn urls_origin_reconnues() {

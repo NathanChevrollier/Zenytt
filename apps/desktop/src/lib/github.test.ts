@@ -1,6 +1,22 @@
 import { describe, expect, it } from "vitest";
-import type { GithubRepo } from "./api";
-import { agoOf, browseRepos, clonePath, cloneSync, filterRepos, githubError, repoUrl, validFolder, validToken } from "./github";
+import type { GithubDeployment, GithubRepo } from "./api";
+import { agoOf, browseRepos, certainDeployments, clonePath, cloneSync, containerTone, filterRepos, githubError, otherDeployments, repoUrl, validFolder, validToken } from "./github";
+
+describe("déploiements", () => {
+  const dep = (repo: string, kind: GithubDeployment["kind"], certain: boolean): GithubDeployment => ({ repo, kind, certain, path: null, project: null, containers: [] });
+  const list = [dep("Octo/App", "clone", true), dep("Octo/App", "image", true), dep("Octo/App", "compose-dir", false), dep("Octo/Other", "image", true)];
+  it("compte les certains et sépare les non-clones, sans tenir compte de la casse", () => {
+    expect(certainDeployments(list, "octo/app")).toHaveLength(2);
+    expect(otherDeployments(list, "Octo/App").map((d) => d.kind)).toEqual(["image", "compose-dir"]);
+    expect(certainDeployments(undefined, "a/b")).toEqual([]);
+  });
+  it("tons d'état et erreur de permission", () => {
+    expect(containerTone("running")).toBe("ok");
+    expect(containerTone("exited")).toBe("muted");
+    expect(githubError("permission manquante (403) : …").kind).toBe("permission");
+    expect(githubError("limite de requêtes GitHub atteinte (403, rate limit)").kind).toBe("rate");
+  });
+});
 
 const repo = (fullName: string, extra: Partial<GithubRepo> = {}): GithubRepo => ({
   fullName,
