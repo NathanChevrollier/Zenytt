@@ -452,6 +452,14 @@ pub fn run(store: &Store, transport: &dyn Transport, passphrase: &str) -> Result
                 e
             }
         })?;
+        // Un appareil qui a déjà reçu du contenu de version 2 ne revient jamais à la version 1 :
+        // sinon un ancien contenu rejoué serait fusionné puis renvoyé comme authentifié.
+        if !bound && cfg.last_remote.is_some() {
+            return Err(
+                "contenu de synchronisation de version 1 refusé : cet appareil a déjà reçu du contenu authentifié (contenu rejoué ?)"
+                    .into(),
+            );
+        }
         let remote_changed = remote.rev != cfg.last_rev;
 
         // Contenu de version 1 (révision non authentifiée) : fusionné puis renvoyé en version 2,
@@ -698,17 +706,33 @@ mod tests {
         let b = store(b_dir.path());
         let pass = "phrase de passe";
         b.write(|d| d.servers.push(server("mien"))).unwrap();
-        run(&b, &t, pass).unwrap();
+        // Appareil neuf : n'a jamais reçu de version 2, il peut lire la version 1 une fois.
         // Contenu de version 1 (révision non authentifiée) sans le serveur de B.
         let v1 = export::seal(&Payload { servers: vec![server("autre")], ..Default::default() }, pass)
             .unwrap()
             .replace("\"version\": 2", "\"version\": 1");
-        write_remote(&t.path, 2, &v1);
+        write_remote(&t.path, 1, &v1);
         assert_eq!(run(&b, &t, pass).unwrap().action, Action::Merged);
         assert_eq!(b.read(|d| d.servers.len()), 2, "le serveur local n'est pas supprimé");
         // Renvoyé en version 2 : lié à sa révision.
         let now = t.fetch().unwrap().unwrap();
         assert!(export::open_sync(&now.data, pass, now.rev).unwrap().1);
+    }
+
+    #[test]
+    fn un_contenu_de_version_1_rejoue_apres_la_version_2_est_refuse() {
+        let (b_dir, shared) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let t = FileTransport { path: shared.path().join("s.json") };
+        let b = store(b_dir.path());
+        let pass = "phrase de passe";
+        b.write(|d| d.servers.push(server("mien"))).unwrap();
+        run(&b, &t, pass).unwrap();
+        let v1 = export::seal(&Payload { servers: vec![server("ancien")], ..Default::default() }, pass)
+            .unwrap()
+            .replace("\"version\": 2", "\"version\": 1");
+        write_remote(&t.path, 2, &v1);
+        assert!(run(&b, &t, pass).unwrap_err().contains("version 1 refusé"));
+        assert_eq!(b.read(|d| d.servers.len()), 1);
     }
 
     #[test]

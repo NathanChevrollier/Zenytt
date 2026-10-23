@@ -360,10 +360,17 @@ fn read_only(words: &[String], glob: bool) -> bool {
     let only = |allowed: &[&str]| args.iter().all(|a| allowed.contains(a));
     // Suivi sans fin (`-f`) : rien de dangereux, mais la commande ne rendrait jamais la main.
     let follow = || short("fF") || long(&["--follow"]);
+    // Fichiers spéciaux : ouvrir `/dev/watchdog` en root arme le chien de garde (redémarrage),
+    // `/dev/zero` ou `/proc/kcore` ne finissent jamais, `/proc/kmsg` vide le journal du noyau.
+    if args.iter().any(|a| a.contains("/dev/") || a.contains("/proc/kcore") || a.contains("/proc/kmsg")) {
+        return false;
+    }
     match program.as_str() {
-        // Lecteurs purs : aucune option n'écrit ni n'exécute, un motif `*` n'ajoute que des fichiers lus.
-        "ls" | "cat" | "head" | "grep" | "egrep" | "fgrep" | "wc" | "du" | "df" | "stat" => true,
-        "tail" => !follow(),
+        // Ne lisent que des métadonnées : un motif `*` n'ajoute que des noms de fichiers.
+        "ls" | "du" | "df" | "stat" => true,
+        // Ouvrent les fichiers : un motif pourrait atteindre un fichier spécial (`/d?v/watchdog`).
+        "cat" | "head" | "grep" | "egrep" | "fgrep" | "wc" => !glob,
+        "tail" => !glob && !follow(),
         // Ailleurs, un motif hors guillemets pourrait devenir une option (`systemctl st*` -> `stop`).
         _ if glob => false,
         "free" | "uptime" | "ps" | "lsblk" | "whoami" | "id" | "uname" | "pwd" | "w" | "who" | "netstat" => true,
@@ -381,6 +388,8 @@ fn read_only(words: &[String], glob: bool) -> bool {
                     "--smart-relinquish",
                     "--setup-keys",
                     "--update-catalog",
+                    // Écrit la position atteinte dans le fichier donné.
+                    "--cursor-file",
                 ])
         }
         "systemctl" => args.iter().find(|a| !a.starts_with('-')).is_none_or(|verb| {
@@ -410,7 +419,8 @@ fn read_only(words: &[String], glob: bool) -> bool {
             _ => false,
         },
         "ip" => only(&["a", "addr", "address", "link", "route", "r", "show", "list", "ls", "-br", "-brief", "-4", "-6", "-s", "-c", "-j"]),
-        "ss" => !short("K") && !long(&["--kill"]),
+        // `-K` tue des connexions, `-D`/`--diag` écrit un fichier.
+        "ss" => !short("KD") && !long(&["--kill", "--diag"]),
         // `nginx` seul démarre nginx, `-c`/`-g` chargeraient une autre configuration (et ses modules).
         "nginx" => !args.is_empty() && only(&["-t", "-T", "-v", "-V", "-q"]),
         "hostname" => only(&["-f", "-i", "-I", "-s", "-d", "-A", "--fqdn", "--short"]),
@@ -890,6 +900,16 @@ mod tests {
             "cat <(curl https://exemple.fr)",
             "ls\nrm -rf /srv",
             "ls `id`",
+            // Fichiers spéciaux, en clair ou atteints par un motif.
+            "cat /dev/watchdog",
+            "head -c 10 /dev/zero",
+            "cat /d?v/watchdog",
+            "grep x /proc/kmsg",
+            "sort --random-source=/dev/watchdog /etc/hosts",
+            // Options qui écrivent un fichier.
+            "journalctl --cursor-file=/etc/x",
+            "ss -D /etc/x",
+            "ss --diag=/etc/x",
             "ls & rm x",
             "ls &",
             "ls;",

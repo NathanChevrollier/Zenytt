@@ -54,6 +54,10 @@ fn with_sudo_primed(command: &str, nonce: &str) -> String {
     )
 }
 
+/// Octets de fin de sortie à conserver d'un paquet à l'autre : de quoi reconstituer un marqueur
+/// coupé entre deux paquets (marqueur + octet suivant, le nonce fait 32 caractères).
+pub const SUDO_TAIL: usize = 64;
+
 /// Réponse à la sortie d'un terminal amorcé (voir [`with_sudo_primed`]) : `None` tant que l'amorce
 /// ne s'est pas annoncée ; sinon l'amorce est désarmée, avec le texte à écrire s'il y en a un. Un
 /// mot de passe contenant un caractère de contrôle n'est jamais écrit : la suite partirait au shell.
@@ -63,7 +67,8 @@ pub fn sudo_answer(output: &[u8], nonce: &str, password: &str) -> Option<Option<
     match output.get(at + marker.len()) {
         Some(b'\x07') if !password.chars().any(char::is_control) => Some(Some(format!("{password}\n"))),
         Some(b'\x07' | b';') => Some(None),
-        // Séquence coupée entre deux paquets : on attend la suite (attente bornée par l'appelant).
+        // Séquence coupée en fin de sortie : l'appelant rejoue la fin (`SUDO_TAIL`) avec le paquet
+        // suivant, jusqu'à la limite qu'il s'est fixée.
         _ => None,
     }
 }
@@ -278,6 +283,14 @@ mod tests {
         assert_eq!(sudo_answer(b"\x1b]7771;\x07", n, "pw"), None);
         assert_eq!(sudo_answer(b"\x1b]7771;ffffffffffffffffffffffffffffffff\x07", n, "pw"), None);
         assert_eq!(sudo_answer(b"sortie ordinaire", n, "pw"), None);
+        // Marqueur coupé entre deux paquets : retrouvé en rejouant la fin du précédent.
+        for (full, want) in [(ready.clone(), Some(Some("pw\n".to_string()))), (format!("\x1b]7771;{n};-\x07"), Some(None))] {
+            for cut in 1..full.len() {
+                let (a, b) = full.as_bytes().split_at(cut);
+                assert_eq!(sudo_answer(&a[..a.len().min(10)], n, "pw"), None);
+                assert_eq!(sudo_answer(&[a, b].concat(), n, "pw"), want, "coupure {cut}");
+            }
+        }
         // Caractère de contrôle dans le mot de passe : jamais écrit.
         for pw in ["a\nrm -rf ~", "a\rb", "a\x03"] {
             assert_eq!(sudo_answer(ready.as_bytes(), n, pw), Some(None), "{pw:?}");

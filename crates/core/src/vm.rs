@@ -488,7 +488,7 @@ fn valid_disk_target(t: &str) -> bool {
 
 /// `storage` : disques à supprimer (cibles `vda`…), désignés un par un plutôt que
 /// `--remove-all-storage`, qui prendrait aussi les ISO et les disques partagés.
-pub fn delete_args(uuid: &str, storage: &[String], uefi: bool) -> String {
+pub fn delete_args(uuid: &str, storage: &[String], uefi: bool) -> Result<String> {
     let mut args = format!("undefine {} --managed-save --snapshots-metadata", shell_quote(uuid));
     if uefi {
         args.push_str(" --nvram");
@@ -496,11 +496,13 @@ pub fn delete_args(uuid: &str, storage: &[String], uefi: bool) -> String {
     if !storage.is_empty() {
         // Les cibles viennent du XML de la VM : seules celles qui ressemblent à `vda`/`sda` passent.
         let ok: Vec<&str> = storage.iter().map(String::as_str).filter(|t| valid_disk_target(t)).collect();
-        if !ok.is_empty() {
-            args.push_str(&format!(" --storage {}", shell_quote(&ok.join(","))));
+        // Aucune cible valide : mieux vaut refuser que retirer la VM en laissant ses disques.
+        if ok.is_empty() {
+            return Err(Error::Other("aucun disque valide à supprimer : suppression annulée".into()));
         }
+        args.push_str(&format!(" --storage {}", shell_quote(&ok.join(","))));
     }
-    args
+    Ok(args)
 }
 
 /// Fichiers que virsh n'a pas pu supprimer (hors d'un pool libvirt) : il le signale, sans échouer.
@@ -530,7 +532,7 @@ pub async fn delete(
         return Err(Error::Other("identifiant de VM invalide".into()));
     }
     let _ = run(conn, access, sudo, &format!("destroy {}", shell_quote(uuid))).await;
-    let out = run(conn, access, sudo, &delete_args(uuid, storage, uefi)).await?.into_result()?;
+    let out = run(conn, access, sudo, &delete_args(uuid, storage, uefi)?).await?.into_result()?;
     Ok(leftover_files(&format!(
         "{}
 {}",
@@ -679,11 +681,11 @@ mod tests {
         assert_eq!(action_args(VmAction::Shutdown, u), format!("shutdown '{u}' --mode acpi"));
         assert_eq!(action_args(VmAction::ForceOff, u), format!("destroy '{u}' --graceful"));
         assert_eq!(action_args(VmAction::AutostartOff, u), format!("autostart '{u}' --disable"));
-        assert_eq!(delete_args(u, &["vda;id".into(), "-x".into()], false), format!("undefine '{u}' --managed-save --snapshots-metadata"));
-        assert_eq!(delete_args(u, &[], false), format!("undefine '{u}' --managed-save --snapshots-metadata"));
+        assert!(delete_args(u, &["vda;id".into(), "-x".into()], false).is_err());
+        assert_eq!(delete_args(u, &[], false).unwrap(), format!("undefine '{u}' --managed-save --snapshots-metadata"));
         // Disques désignés un par un : jamais --remove-all-storage (il prendrait aussi une ISO partagée).
         assert_eq!(
-            delete_args(u, &["vda".into(), "vdb".into()], true),
+            delete_args(u, &["vda".into(), "vdb".into()], true).unwrap(),
             format!("undefine '{u}' --managed-save --snapshots-metadata --nvram --storage 'vda,vdb'")
         );
     }

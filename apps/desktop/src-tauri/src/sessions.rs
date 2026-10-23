@@ -281,6 +281,7 @@ impl Sessions {
             let mut code = None;
             let mut next = None;
             let mut sudo_seen = 0usize;
+            let mut sudo_tail: Vec<u8> = Vec::new();
             loop {
                 let msg = match next.take() {
                     Some(m) => m,
@@ -306,7 +307,10 @@ impl Sessions {
                             }
                         }
                         if let Some((pw, nonce)) = &sudo {
-                            if let Some(answer) = crate::commands::terminal::sudo_answer(&buf, nonce, pw) {
+                            // Le marqueur peut être coupé entre deux paquets : on rejoue la fin du précédent.
+                            let joined = [sudo_tail.as_slice(), buf.as_slice()].concat();
+                            sudo_tail = joined[joined.len().saturating_sub(crate::commands::terminal::SUDO_TAIL)..].to_vec();
+                            if let Some(answer) = crate::commands::terminal::sudo_answer(&joined, nonce, pw) {
                                 if let Some(line) = answer {
                                     let _ = writer.data(line.as_bytes()).await;
                                 }

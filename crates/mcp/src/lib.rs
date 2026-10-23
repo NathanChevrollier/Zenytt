@@ -103,11 +103,11 @@ pub fn readable(path: &str) -> bool {
         && !READ_DENY.iter().any(|d| path.contains(d))
 }
 
-/// Fichier `.env` (`.env`, `.env.production`, `prod.env`) : toutes ses valeurs sont masquées.
+/// Fichier `.env` (`.env`, `.env.production`, `.env-prod`, `.envrc`, `prod.env`) : toutes ses valeurs sont masquées.
 /// À décider sur le chemin réel : un lien `config -> .env` ne doit pas y échapper.
 pub fn is_dotenv(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
-    name == ".env" || name.starts_with(".env.") || name.ends_with(".env")
+    name.starts_with(".env") || name.ends_with(".env")
 }
 
 /// Chemin réel (liens symboliques résolus) : un lien placé dans un dossier autorisé ne doit pas
@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn dotenv_names() {
-        for p in ["/opt/app/.env", "/opt/app/.env.production", "/srv/x/prod.env"] {
+        for p in ["/opt/app/.env", "/opt/app/.env.production", "/srv/x/prod.env", "/a/.env-prod", "/a/.env_local", "/a/.envrc"] {
             assert!(is_dotenv(p), "{p}");
         }
         for p in ["/opt/app/config", "/opt/app/env.yml", "/opt/.envoy/x.yml", "/opt/app/docker-compose.yml"] {
