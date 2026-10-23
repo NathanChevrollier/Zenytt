@@ -31,6 +31,10 @@ pub enum Auth {
 
 /// Délai maximal par défaut d'une commande distante.
 pub const DEFAULT_EXEC_LIMIT: Duration = Duration::from_secs(120);
+/// Commandes ponctuelles simultanées par connexion : laisse de la place aux terminaux et à SFTP sous la limite `MaxSessions` (10 par défaut).
+const MAX_PARALLEL_EXECS: usize = 4;
+/// Nouvelles tentatives quand le serveur refuse un canal (200 ms, puis 400, 800, 1 600).
+const OPEN_RETRIES: usize = 4;
 /// Délai des opérations longues : installations, mises à jour, sauvegardes, pull d'images, certbot.
 pub const LONG_EXEC_LIMIT: Duration = Duration::from_secs(30 * 60);
 const AUTH_LIMIT: Duration = Duration::from_secs(60);
@@ -109,6 +113,9 @@ impl client::Handler for HostKeyCheck {
 #[derive(Clone)]
 pub struct Connection {
     handle: Arc<Handle<HostKeyCheck>>,
+    /// Commandes ponctuelles simultanées : sshd n'accepte que `MaxSessions` canaux par connexion
+    /// (10 par défaut), partagés avec les terminaux, SFTP et les flux de journaux.
+    execs: Arc<tokio::sync::Semaphore>,
     pub fingerprint: String,
 }
 
@@ -176,7 +183,23 @@ impl Connection {
         tokio::time::timeout(AUTH_LIMIT, authenticate(&mut handle, &params.username, &params.auth))
             .await
             .map_err(|_| Error::Connection(format!("délai dépassé pendant l'authentification sur {}:{}", params.host, params.port)))??;
-        Ok(Self { handle: Arc::new(handle), fingerprint })
+        Ok(Self { handle: Arc::new(handle), execs: Arc::new(tokio::sync::Semaphore::new(MAX_PARALLEL_EXECS)), fingerprint })
+    }
+
+    /// Ouvre un canal ; un refus du serveur (limite `MaxSessions` atteinte un instant) est
+    /// réessayé quelques fois au lieu de remonter une erreur à l'interface.
+    async fn open_session(&self) -> Result<Channel<Msg>> {
+        let mut delay = Duration::from_millis(200);
+        for _ in 0..OPEN_RETRIES {
+            match self.handle.channel_open_session().await {
+                Err(russh::Error::ChannelOpenFailure(_)) if !self.handle.is_closed() => {
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                }
+                other => return Ok(other?),
+            }
+        }
+        Ok(self.handle.channel_open_session().await?)
     }
 
     /// Vrai si les deux valeurs désignent la même connexion SSH.
@@ -197,7 +220,8 @@ impl Connection {
     /// une commande bloquée (`df` sur un montage mort, dockerd figé…) ne fige pas l'interface.
     pub async fn exec(&self, command: &str, stdin: Option<&[u8]>) -> Result<ExecOutput> {
         let limit = EXEC_LIMIT.try_with(|l| *l).unwrap_or(DEFAULT_EXEC_LIMIT);
-        let mut channel = self.handle.channel_open_session().await?;
+        let _slot = self.execs.acquire().await.map_err(|e| Error::Connection(e.to_string()))?;
+        let mut channel = self.open_session().await?;
         channel.exec(true, with_admin_path(command)).await?;
 
         let run = async {
@@ -279,7 +303,7 @@ impl Connection {
 
     /// Ouvre un shell interactif avec pseudo-terminal.
     pub async fn open_shell(&self, cols: u32, rows: u32) -> Result<Channel<Msg>> {
-        let channel = self.handle.channel_open_session().await?;
+        let channel = self.open_session().await?;
         channel.request_pty(true, "xterm-256color", cols, rows, 0, 0, &[]).await?;
         channel.request_shell(true).await?;
         Ok(channel)
@@ -287,7 +311,7 @@ impl Connection {
 
     /// Ouvre un canal qui exécute une commande en flux continu (`docker logs -f`, `docker exec -it`…).
     pub async fn open_exec(&self, command: &str, pty: Option<(u32, u32)>) -> Result<Channel<Msg>> {
-        let channel = self.handle.channel_open_session().await?;
+        let channel = self.open_session().await?;
         if let Some((cols, rows)) = pty {
             channel.request_pty(true, "xterm-256color", cols, rows, 0, 0, &[]).await?;
         }
@@ -321,7 +345,7 @@ impl Connection {
 
     /// Ouvre une session SFTP.
     pub async fn sftp(&self) -> Result<russh_sftp::client::SftpSession> {
-        let channel = self.handle.channel_open_session().await?;
+        let channel = self.open_session().await?;
         channel.request_subsystem(true, "sftp").await?;
         russh_sftp::client::SftpSession::new(channel.into_stream()).await.map_err(|e| Error::Sftp(e.to_string()))
     }

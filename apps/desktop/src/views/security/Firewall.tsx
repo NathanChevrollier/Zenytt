@@ -56,7 +56,7 @@ export default function Firewall({ serverId, onCount, onAudit }: { serverId: str
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex items-center gap-2 text-[13px]">
         <BrickWall size={15} className="text-muted" />
         {state.kind === "none" ? (
           <span className="flex items-center gap-2 text-warn">
@@ -84,7 +84,7 @@ export default function Firewall({ serverId, onCount, onAudit }: { serverId: str
           <span className="text-[13px] font-semibold">Ports en écoute</span>
           <span className="text-xs text-muted">· {exposed.length} joignable(s) depuis Internet</span>
         </header>
-        <table className="w-full text-sm">
+        <table className="w-full text-[13px]">
           <tbody>
             {state.exposures.map((e) => (
               <tr key={`${e.proto}${e.port}${e.public}`} className="border-t border-border/50 align-top first:border-t-0">
@@ -110,11 +110,11 @@ export default function Firewall({ serverId, onCount, onAudit }: { serverId: str
             {state.sshPorts.length > 0 && <span className="text-xs text-muted">· SSH sur le port {state.sshPorts.join(", ")} (règles protégées)</span>}
           </header>
           {state.rules.length === 0 ? (
-            <p className="px-4 py-3 text-sm text-muted">Aucune règle.</p>
+            <p className="px-4 py-3 text-[13px] text-muted">Aucune règle.</p>
           ) : (
             <ul className="divide-y divide-border/50">
               {state.rules.map((r) => (
-                <li key={r.num} className="flex items-center gap-3 px-4 py-1.5 text-sm">
+                <li key={r.num} className="flex items-center gap-3 px-4 py-1.5 text-[13px]">
                   <span className="w-8 text-xs text-muted">#{r.num}</span>
                   <span className="w-56 font-mono text-xs">{r.to}</span>
                   <Badge tone={r.action.startsWith("ALLOW") || r.action.startsWith("LIMIT") ? "ok" : "danger"}>{r.action}</Badge>
@@ -142,7 +142,7 @@ export default function Firewall({ serverId, onCount, onAudit }: { serverId: str
               void run(() => api.fwAllow(serverId, p, proto), `Port ${p}/${proto} ouvert`).then(() => setPort(""));
             }}
           >
-            <span className="text-sm">Ouvrir un port :</span>
+            <span className="text-[13px]">Ouvrir un port :</span>
             <Input className="!w-24 font-mono" placeholder="8080" value={port} onChange={(e) => setPort(e.target.value)} />
             <Select aria-label="Protocole" value={proto} onChange={setProto} options={[{ value: "tcp", label: "tcp" }, { value: "udp", label: "udp" }]} />
             <Button size="sm" icon={<Plus size={13} />} type="submit" disabled={!port}>
@@ -153,8 +153,8 @@ export default function Firewall({ serverId, onCount, onAudit }: { serverId: str
       )}
 
       {state.kind === "firewalld" && state.raw && (
-        <section className="rounded-lg border border-border bg-panel p-4">
-          <h2 className="mb-2 font-medium">Configuration firewalld (lecture seule)</h2>
+        <section className="rounded-xl border border-border bg-panel p-4">
+          <h2 className="mb-2 text-[13px] font-semibold">Configuration firewalld (lecture seule)</h2>
           <pre className="overflow-auto rounded-md bg-bg p-3 font-mono text-xs whitespace-pre-wrap">{state.raw}</pre>
         </section>
       )}

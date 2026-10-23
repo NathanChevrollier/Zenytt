@@ -1,20 +1,41 @@
-// Système : alimentation, nom d'hôte, fuseau horaire, mises à jour et pilotage par l'hébergeur.
-// La section « Hébergeur » reste utilisable quand SSH ne répond pas : c'est tout son intérêt.
+// Système : vue d'ensemble et alimentation, sécurité, mises à jour, inventaire et pilotage par l'hébergeur.
+// L'onglet « Hébergeur » reste utilisable quand SSH ne répond pas : c'est tout son intérêt.
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Power, PowerOff, RefreshCw, RotateCw } from "lucide-react";
-import { api, errorMessage, formatBytes, formatDuration, type SystemInfo, type SystemUpdate } from "../lib/api";
+import { Cloud, Loader2, PlugZap } from "lucide-react";
+import { api, errorMessage, type IgnoredFinding, type SecurityReport, type SystemInfo, type SystemUpdate } from "../lib/api";
 import { ensureConnected, useApp } from "../lib/store";
-import { Badge, Button, Card, CodeBlock, DataTable, ErrorState, Field, Input, KeyValue, Modal, ResultBanner, Section, type Column } from "../components/ui";
+import { useTabIntent } from "../lib/shell";
+import { useCachedState } from "../lib/cache";
+import { useAutoRefresh } from "../lib/refresh";
+import { auditSummary, splitTab } from "../lib/system";
+import { Button, EmptyState } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 import ServerGate, { ServerContext } from "../components/ServerGate";
-import Provider from "./system/Provider";
+import Overview from "./system/Overview";
+import Security, { SEC_TABS, type SecTab } from "./system/Security";
+import Updates from "./system/Updates";
 import Inventory from "./system/Inventory";
+import Provider from "./system/Provider";
+
+type TabId = "overview" | "security" | "updates" | "inventory" | "provider";
+type Badges = { updates?: number; problems?: number; serious?: number };
 
 export default function SystemView() {
   const serverId = useApp((s) => s.activeServerId);
   const server = useApp((s) => s.servers.find((x) => x.id === s.activeServerId));
+  // `navigate("system", "security/fail2ban")` ouvre Sécurité sur son sous-onglet.
+  const [rawTab, setRawTab] = useTabIntent<string>("system", "overview");
+  const [main, wanted] = splitTab(rawTab);
+  const tab = main as TabId;
+  const [secTab, setSecTab] = useState<SecTab>("audit");
   const [ready, setReady] = useState(false);
   const [trying, setTrying] = useState(false);
+  const [badges, setBadges] = useState<Badges>({});
+
+  useEffect(() => {
+    if (wanted && SEC_TABS.includes(wanted as SecTab)) setSecTab(wanted as SecTab);
+    if (wanted) setRawTab(main);
+  }, [main, wanted, setRawTab]);
 
   const connect = useCallback(
     async (force = false) => {
@@ -27,287 +48,204 @@ export default function SystemView() {
   );
   useEffect(() => {
     setReady(!!useApp.getState().servers.find((x) => x.id === serverId)?.connected);
+    setBadges({});
     void connect();
   }, [serverId, connect]);
 
   if (!serverId || !server) return <ServerGate title="Système">{() => null}</ServerGate>;
+  const sshTab = tab !== "provider";
   return (
-    <PageLayout title="Système" guide={undefined} context={<ServerContext server={server} />} subtitle="Alimentation, réglages et mises à jour du serveur.">
-      <div className="flex flex-col gap-6 pb-6">
+    <PageLayout
+      title="Système"
+      guide={tab === "security" ? "security" : undefined}
+      context={<ServerContext server={server} />}
+      subtitle="Alimentation, sécurité, mises à jour et réglages du serveur."
+      tabs={[
+        { id: "overview", label: "Vue d'ensemble" },
+        { id: "security", label: "Sécurité", count: badges.problems || undefined, tone: badges.serious ? "danger" : badges.problems ? "warn" : undefined },
+        { id: "updates", label: "Mises à jour", count: badges.updates || undefined, tone: badges.updates ? "warn" : undefined },
+        { id: "inventory", label: "Inventaire" },
+        { id: "provider", label: "Hébergeur" },
+      ]}
+      activeTab={tab}
+      onTab={setRawTab}
+    >
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-7 py-5">
+        {/* Toujours monté une fois connecté : l'attente du redémarrage survit à un détour par l'onglet Hébergeur. */}
         {ready ? (
-          <SshPanels key={serverId} serverId={serverId} name={server.name} />
+          <SshTabs key={serverId} serverId={serverId} name={server.name} tab={tab} setTab={setRawTab} secTab={secTab} setSecTab={setSecTab} onBadges={setBadges} />
         ) : (
-          <Card className="flex items-center gap-3 text-[13px] text-muted">
-            {trying ? <Loader2 size={16} className="animate-spin" /> : null}
-            {trying ? `Connexion à ${server.name}…` : `${server.name} n'est pas joignable en SSH. Tu peux quand même le piloter via l'hébergeur ci-dessous.`}
-            {!trying && (
-              <Button className="ml-auto" onClick={() => void connect(true)}>
-                Se connecter
-              </Button>
-            )}
-          </Card>
+          sshTab &&
+          (trying ? (
+            <EmptyState icon={<Loader2 className="animate-spin" />} title={`Connexion à ${server.name}…`}>
+              Ouverture de la session SSH.
+            </EmptyState>
+          ) : (
+            <EmptyState
+              icon={<PlugZap />}
+              title={`${server.name} ne répond pas en SSH`}
+              action={
+                <>
+                  <Button variant="primary" onClick={() => void connect(true)}>
+                    Se connecter
+                  </Button>
+                  <Button icon={<Cloud size={14} />} onClick={() => setRawTab("provider")}>
+                    Piloter via l'hébergeur
+                  </Button>
+                </>
+              }
+            >
+              Cet onglet passe par SSH. L'onglet Hébergeur reste disponible pour redémarrer ou rallumer le serveur.
+            </EmptyState>
+          ))
         )}
-        <Provider key={`p${serverId}`} serverId={serverId} serverName={server.name} />
+        {tab === "provider" && <Provider key={`p${serverId}`} serverId={serverId} serverName={server.name} />}
       </div>
     </PageLayout>
   );
 }
 
-type PowerKind = "reboot" | "poweroff";
-
-function PowerModal({ kind, name, onClose, onConfirm }: { kind: PowerKind; name: string; onClose: () => void; onConfirm: (delay: number) => void }) {
-  const [delay, setDelay] = useState("0");
-  const [typed, setTyped] = useState("");
-  const off = kind === "poweroff";
-  const minutes = Math.max(0, Math.floor(Number(delay) || 0));
-  return (
-    <Modal
-      title={off ? `Éteindre ${name} ?` : `Redémarrer ${name} ?`}
-      width="max-w-md"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Annuler
-          </Button>
-          <Button variant="danger" disabled={off && typed !== name} onClick={() => onConfirm(minutes)}>
-            {off ? "Éteindre" : "Redémarrer"}
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-3">
-        <p className="text-[13px] leading-relaxed text-muted">
-          {off
-            ? "Le serveur s'éteint et ne répondra plus tant qu'il n'est pas rallumé (depuis le panneau de l'hébergeur ou via l'API)."
-            : "Toutes les sessions et tous les services sont interrompus le temps du redémarrage."}
-        </p>
-        <Field label="Délai en minutes" hint="0 = immédiat">
-          <Input type="number" min={0} value={delay} onChange={(e) => setDelay(e.target.value)} />
-        </Field>
-        {off && (
-          <Field label={`Tape « ${name} » pour confirmer`}>
-            <Input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
-          </Field>
-        )}
-      </div>
-    </Modal>
-  );
-}
-
-function SshPanels({ serverId, name }: { serverId: string; name: string }) {
-  const { notify, ask, refreshServers } = useApp.getState();
+/**
+ * Onglets SSH : ils partagent la fiche du serveur, la liste des mises à jour et l'audit de sécurité
+ * (résumés dans la vue d'ensemble) et restent montés. Les panneaux de sécurité (pare-feu, fail2ban,
+ * accès) ne sont lus qu'à la première visite de l'onglet Sécurité.
+ */
+function SshTabs({
+  serverId,
+  name,
+  tab,
+  setTab,
+  secTab,
+  setSecTab,
+  onBadges,
+}: {
+  serverId: string;
+  name: string;
+  tab: TabId;
+  setTab: (t: string) => void;
+  secTab: SecTab;
+  setSecTab: (t: SecTab) => void;
+  onBadges: (b: Badges) => void;
+}) {
   const [info, setInfo] = useState<SystemInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [power, setPower] = useState<PowerKind | null>(null);
-  const [waiting, setWaiting] = useState(false);
-  const [hostname, setHostname] = useState("");
-  const [tz, setTz] = useState("");
-  const [zones, setZones] = useState<string[]>([]);
+  const [infoError, setInfoError] = useState<string | null>(null);
   const [updates, setUpdates] = useState<SystemUpdate[] | null>(null);
-  const [output, setOutput] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [updatesError, setUpdatesError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [report, setReport] = useCachedState<SecurityReport | null>(`security:${serverId}`, null);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditing, setAuditing] = useState(false);
+  const [ignored, setIgnored] = useState<IgnoredFinding[]>([]);
+  const [banned, setBanned] = useState<number | null>(null);
+  const [secMounted, setSecMounted] = useState(tab === "security");
+  useEffect(() => {
+    if (tab === "security") setSecMounted(true);
+  }, [tab]);
 
-  const load = useCallback(async () => {
+  const loadInfo = useCallback(async () => {
     try {
-      const i = await api.systemInfo(serverId);
-      setInfo(i);
-      setHostname(i.hostname);
-      setTz(i.timezone);
-      setError(null);
+      setInfo(await api.systemInfo(serverId));
+      setInfoError(null);
     } catch (e) {
-      setError(errorMessage(e));
+      setInfoError(errorMessage(e));
     }
   }, [serverId]);
 
   const loadUpdates = useCallback(
     async (refresh: boolean) => {
-      setBusy("updates");
+      setChecking(true);
       try {
         setUpdates(await api.systemUpdates(serverId, refresh));
+        setUpdatesError(null);
       } catch (e) {
-        setUpdates(null);
-        notify(errorMessage(e), "error");
+        setUpdatesError(errorMessage(e));
       } finally {
-        setBusy(null);
+        setChecking(false);
       }
     },
-    [serverId, notify],
+    [serverId],
   );
 
+  const loadAudit = useCallback(async () => {
+    setAuditing(true);
+    setAuditError(null);
+    try {
+      setReport(await api.securityAudit(serverId));
+    } catch (e) {
+      setAuditError(errorMessage(e));
+    } finally {
+      setAuditing(false);
+    }
+  }, [serverId, setReport]);
+
+  const loadIgnored = useCallback(() => void api.findingsIgnored(serverId).then(setIgnored, () => {}), [serverId]);
+
   useEffect(() => {
-    void load();
+    void loadInfo();
     void loadUpdates(false);
-    void api.systemTimezones(serverId).then(setZones, () => {});
-  }, [serverId, load, loadUpdates]);
+    void loadAudit();
+    loadIgnored();
+  }, [loadInfo, loadUpdates, loadAudit, loadIgnored]);
+  useAutoRefresh(() => Promise.all([loadInfo(), loadUpdates(false), loadAudit()]), { serverId, auto: false });
 
-  /** Lance une action d'écriture : bouton occupé, erreur en toast. */
-  const run = async (label: string, fn: () => Promise<unknown>, ok?: string) => {
-    setBusy(label);
-    try {
-      await fn();
-      if (ok) notify(ok, "success");
-      await load();
-    } catch (e) {
-      notify(errorMessage(e), "error");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const summary = report ? auditSummary(report.findings, ignored.map((i) => i.findingId)) : null;
+  useEffect(() => {
+    onBadges({ updates: updates?.length, problems: summary?.problems.length, serious: summary?.serious });
+  }, [updates?.length, summary?.problems.length, summary?.serious, onBadges]);
 
-  const doPower = async (kind: PowerKind, delay: number) => {
-    setPower(null);
-    try {
-      await api.systemPower(serverId, kind, delay);
-    } catch (e) {
-      notify(errorMessage(e), "error");
-      return;
-    }
-    if (delay > 0) {
-      notify(`${kind === "reboot" ? "Redémarrage" : "Extinction"} planifié dans ${delay} min`, "success");
-      void load();
-      return;
-    }
-    if (kind === "poweroff") {
-      notify(`${name} s'éteint`, "info");
-      setTimeout(() => void refreshServers(), 6000);
-      return;
-    }
-    setWaiting(true);
-    try {
-      const secs = await api.systemWaitOnline(serverId, info?.bootTime);
-      notify(`${name} est de retour après ${formatDuration(secs)}`, "success");
-      void refreshServers();
-      void load();
-    } catch (e) {
-      notify(errorMessage(e), "error");
-    } finally {
-      setWaiting(false);
-    }
-  };
+  const showUpdates = useCallback(() => setTab("updates"), [setTab]);
+  const show = (t: TabId) => (tab === t ? "contents" : "hidden");
 
-  const apply = async () => {
-    if (!(await ask({ title: `Appliquer ${updates?.length ?? 0} mises à jour ?`, body: "Les paquets sont mis à jour sans interaction. Certains services peuvent redémarrer, et un redémarrage du serveur peut ensuite être nécessaire.", confirmLabel: "Appliquer", danger: true }))) return;
-    await run("apply", async () => {
-      setOutput("");
-      setOutput(await api.systemApplyUpdates(serverId));
-      await loadUpdates(false);
-    }, "Mises à jour appliquées");
-  };
-
-  const columns: Column<SystemUpdate>[] = [
-    { key: "name", header: "Paquet", render: (u) => <span className="font-mono text-xs">{u.name}</span>, sortValue: (u) => u.name },
-    { key: "current", header: "Actuelle", width: "minmax(0,1fr)", render: (u) => <span className="font-mono text-xs text-muted">{u.current || "—"}</span> },
-    { key: "candidate", header: "Disponible", width: "minmax(0,1fr)", render: (u) => <span className="font-mono text-xs">{u.candidate}</span> },
-  ];
-
-  if (error && !info) return <ErrorState message={error} onRetry={() => void load()} />;
   return (
     <>
-      {waiting && <ResultBanner tone="accent" title="En attente du retour du serveur…">Reconnexion automatique toutes les 5 secondes.</ResultBanner>}
-      <Section
-        title="Informations"
-        actions={
-          <>
-            <Button size="sm" icon={<RotateCw size={13} />} disabled={waiting} onClick={() => setPower("reboot")}>
-              Redémarrer
-            </Button>
-            <Button size="sm" variant="danger" icon={<PowerOff size={13} />} disabled={waiting} onClick={() => setPower("poweroff")}>
-              Éteindre
-            </Button>
-          </>
-        }
-      >
-        <Card className="flex flex-col gap-3">
-          {info && (
-            <KeyValue
-              items={[
-                ["Nom d'hôte", info.hostname],
-                ["Système", info.os],
-                ["Noyau", info.kernel],
-                ["En marche depuis", `${formatDuration(info.uptimeSecs)} (démarré le ${new Date(info.bootTime * 1000).toLocaleString()})`],
-                ["Fuseau horaire", info.timezone],
-                ["Processeur", `${info.cpuModel} × ${info.cpuCount}`],
-                ["Mémoire", formatBytes(info.memoryTotal)],
-                ["Gestionnaire de paquets", info.packageManager ?? "inconnu"],
-              ]}
-            />
-          )}
-          {info?.rebootRequired && <Badge tone="warn">Redémarrage nécessaire (mises à jour installées)</Badge>}
-          {info?.scheduled && (
-            <ResultBanner
-              tone="warn"
-              title={`${info.scheduled.mode === "reboot" ? "Redémarrage" : "Extinction"} planifié le ${new Date(info.scheduled.at * 1000).toLocaleString()}`}
-              action={
-                <Button size="sm" loading={busy === "cancel"} onClick={() => void run("cancel", () => api.systemCancelPower(serverId), "Planification annulée")}>
-                  Annuler
-                </Button>
-              }
-            />
-          )}
-        </Card>
-      </Section>
-
-      <Section title="Réglages">
-        <Card className="grid gap-4 md:grid-cols-2">
-          <Field label="Nom d'hôte" hint="Lettres, chiffres et tirets (63 caractères au plus)">
-            <div className="flex gap-2">
-              <Input value={hostname} onChange={(e) => setHostname(e.target.value)} />
-              <Button loading={busy === "host"} disabled={!hostname || hostname === info?.hostname} onClick={() => void run("host", () => api.systemSetHostname(serverId, hostname), "Nom d'hôte modifié")}>
-                Appliquer
-              </Button>
-            </div>
-          </Field>
-          <Field label="Fuseau horaire">
-            <div className="flex gap-2">
-              <Input list="zenytt-timezones" value={tz} onChange={(e) => setTz(e.target.value)} placeholder="Europe/Paris" />
-              <datalist id="zenytt-timezones">
-                {zones.map((z) => (
-                  <option key={z} value={z} />
-                ))}
-              </datalist>
-              <Button loading={busy === "tz"} disabled={!tz || tz === info?.timezone} onClick={() => void run("tz", () => api.systemSetTimezone(serverId, tz), "Fuseau horaire modifié")}>
-                Appliquer
-              </Button>
-            </div>
-          </Field>
-        </Card>
-      </Section>
-
-      <Inventory serverId={serverId} />
-
-      <div id="system-updates" className="scroll-mt-4">
-      <Section
-        title="Mises à jour"
-        count={updates?.length}
-        actions={
-          <>
-            <Button size="sm" icon={<RefreshCw size={13} />} loading={busy === "updates"} disabled={!!busy} onClick={() => void loadUpdates(true)}>
-              Actualiser
-            </Button>
-            <Button size="sm" variant="primary" icon={<Power size={13} />} loading={busy === "apply"} disabled={!updates?.length || !!busy} onClick={() => void apply()}>
-              Appliquer
-            </Button>
-          </>
-        }
-      >
-        <Card padded={false}>
-          <div className="flex h-64 flex-col">
-            <DataTable
-              className="min-h-0 flex-1"
-              rows={updates ?? []}
-              rowKey={(u) => u.name}
-              columns={columns}
-              rowHeight={34}
-              empty={updates ? "Le système est à jour." : "Liste indisponible (apt et dnf sont pris en charge)."}
-            />
-          </div>
-        </Card>
-        {output && <CodeBlock code={output.split("\n").slice(-200).join("\n")} />}
-      </Section>
+      <div className={show("overview")}>
+        <Overview
+          serverId={serverId}
+          name={name}
+          info={info}
+          error={infoError}
+          reload={loadInfo}
+          updates={updates}
+          onShowUpdates={showUpdates}
+          security={summary && { ...summary, banned }}
+          auditing={auditing}
+          onShowSecurity={(sub) => {
+            if (sub) setSecTab(sub);
+            setTab("security");
+          }}
+        />
       </div>
-
-      {power && <PowerModal kind={power} name={name} onClose={() => setPower(null)} onConfirm={(d) => void doPower(power, d)} />}
+      {secMounted && (
+        <div className={show("security")}>
+          <Security
+            serverId={serverId}
+            sub={secTab}
+            onSub={setSecTab}
+            report={report}
+            error={auditError}
+            loading={auditing}
+            reload={() => void loadAudit()}
+            ignored={ignored}
+            reloadIgnored={loadIgnored}
+            onShowUpdates={showUpdates}
+            onBanned={setBanned}
+          />
+        </div>
+      )}
+      <div className={show("updates")}>
+        <Updates
+          serverId={serverId}
+          updates={updates}
+          error={updatesError}
+          checking={checking}
+          packageManager={info?.packageManager ?? null}
+          refresh={() => void loadUpdates(true)}
+          onApplied={() => void Promise.all([loadUpdates(false), loadInfo(), loadAudit()])}
+        />
+      </div>
+      <div className={show("inventory")}>
+        <Inventory serverId={serverId} onShowUpdates={showUpdates} />
+      </div>
     </>
   );
 }

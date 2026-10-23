@@ -84,6 +84,27 @@ pub fn valid_token(t: &str) -> bool {
     !t.is_empty() && t.len() <= 255 && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// Message d'erreur selon la réponse de GitHub : jeton invalide (401), limite de requêtes (429, ou 403 avec
+/// `x-ratelimit-remaining: 0` / `retry-after`), permission manquante (autre 403), introuvable (404).
+pub fn map_http_error(status: u16, remaining: Option<&str>, retry_after: Option<&str>, body: &str) -> String {
+    let msg =
+        serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| v["message"].as_str().map(str::to_string)).unwrap_or_default();
+    let lower = msg.to_lowercase();
+    match status {
+        401 => "jeton refusé par GitHub (401) : invalide, expiré ou révoqué".into(),
+        429 => "limite de requêtes GitHub atteinte (429, rate limit) : réessaie dans quelques minutes".into(),
+        403 if remaining == Some("0") || retry_after.is_some() || lower.contains("rate limit") => {
+            "limite de requêtes GitHub atteinte (403, rate limit) : réessaie dans quelques minutes".into()
+        }
+        403 => format!(
+            "permission manquante (403) : le jeton n'a pas le droit demandé (Metadata et Contents en lecture, ou « repo » pour un jeton classique){}",
+            if msg.is_empty() { String::new() } else { format!(" — GitHub : {msg}") }
+        ),
+        404 => "introuvable (404) : dépôt inexistant ou non accordé à ce jeton".into(),
+        s => format!("GitHub a répondu {s}"),
+    }
+}
+
 fn get(agent: &ureq::Agent, token: &str, url: &str) -> Result<String> {
     let mut resp = agent
         .get(url)
@@ -94,11 +115,12 @@ fn get(agent: &ureq::Agent, token: &str, url: &str) -> Result<String> {
         .call()
         .map_err(|e| Error::Other(format!("GitHub injoignable : {e}")))?;
     let status = resp.status().as_u16();
+    let header = |n: &str| resp.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let (remaining, retry) = (header("x-ratelimit-remaining"), header("retry-after"));
     let text = resp.body_mut().read_to_string().map_err(|e| Error::Other(e.to_string()))?;
     match status {
         200..=299 => Ok(text),
-        401 | 403 => Err(Error::Other("jeton refusé par GitHub (401/403) : expiré, révoqué ou sans droit de lecture".into())),
-        s => Err(Error::Other(format!("GitHub a répondu {s}"))),
+        _ => Err(Error::Other(map_http_error(status, remaining.as_deref(), retry.as_deref(), &text))),
     }
 }
 
@@ -128,7 +150,11 @@ pub async fn repos(token: &str) -> Result<Vec<Repo>> {
         let agent = agent();
         let mut all = Vec::new();
         for page in 1..=MAX_PAGES {
-            let text = get(&agent, &token, &format!("{API}/user/repos?per_page=100&sort=updated&page={page}"))?;
+            let text = get(
+                &agent,
+                &token,
+                &format!("{API}/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member&page={page}"),
+            )?;
             let count = serde_json::from_str::<Vec<serde_json::Value>>(&text).map(|v| v.len()).unwrap_or(0);
             all.extend(parse_repos(&text)?);
             if count < 100 {
@@ -139,6 +165,402 @@ pub async fn repos(token: &str) -> Result<Vec<Repo>> {
     })
     .await
     .map_err(|e| Error::Other(e.to_string()))?
+}
+
+// ---- Informations d'un dépôt (CI, PR, tickets, sécurité, déploiements, version) ---------------
+
+/// Lien github.com seulement : toute autre origine est écartée avant d'atteindre l'interface.
+fn gh_url(u: Option<String>) -> Option<String> {
+    u.filter(|u| u.starts_with("https://github.com/"))
+}
+
+fn parse<T: serde::de::DeserializeOwned>(json: &str) -> Result<T> {
+    serde_json::from_str(json).map_err(|e| Error::Other(format!("réponse GitHub illisible : {e}")))
+}
+
+#[derive(Deserialize)]
+struct RawUser {
+    login: String,
+}
+
+/// Exécution d'un workflow GitHub Actions.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CiRun {
+    pub name: String,
+    pub branch: String,
+    pub event: String,
+    /// `queued`, `in_progress`, `completed`…
+    pub status: String,
+    /// `success`, `failure`, `cancelled`… (seulement une fois terminée).
+    pub conclusion: Option<String>,
+    pub url: Option<String>,
+    pub started_at: Option<String>,
+    /// Dernière mise à jour : avec `started_at`, donne la durée d'un run terminé.
+    pub updated_at: Option<String>,
+}
+
+pub fn parse_runs(json: &str) -> Result<Vec<CiRun>> {
+    #[derive(Deserialize)]
+    struct Run {
+        name: Option<String>,
+        display_title: Option<String>,
+        head_branch: Option<String>,
+        #[serde(default)]
+        event: String,
+        status: Option<String>,
+        conclusion: Option<String>,
+        html_url: Option<String>,
+        run_started_at: Option<String>,
+        created_at: Option<String>,
+        updated_at: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Page {
+        workflow_runs: Vec<Run>,
+    }
+    Ok(parse::<Page>(json)?
+        .workflow_runs
+        .into_iter()
+        .map(|r| CiRun {
+            name: r.name.or(r.display_title).unwrap_or_default(),
+            branch: r.head_branch.unwrap_or_default(),
+            event: r.event,
+            status: r.status.unwrap_or_default(),
+            conclusion: r.conclusion,
+            url: gh_url(r.html_url),
+            started_at: r.run_started_at.or(r.created_at),
+            updated_at: r.updated_at,
+        })
+        .collect())
+}
+
+/// Demande de fusion ouverte.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Pull {
+    pub number: u32,
+    pub title: String,
+    pub author: String,
+    pub draft: bool,
+    pub created_at: Option<String>,
+    pub url: Option<String>,
+}
+
+pub fn parse_pulls(json: &str) -> Result<Vec<Pull>> {
+    #[derive(Deserialize)]
+    struct P {
+        number: u32,
+        #[serde(default)]
+        title: String,
+        user: Option<RawUser>,
+        #[serde(default)]
+        draft: bool,
+        created_at: Option<String>,
+        html_url: Option<String>,
+    }
+    Ok(parse::<Vec<P>>(json)?
+        .into_iter()
+        .map(|p| Pull {
+            number: p.number,
+            title: p.title,
+            author: p.user.map(|u| u.login).unwrap_or_default(),
+            draft: p.draft,
+            created_at: p.created_at,
+            url: gh_url(p.html_url),
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Label {
+    pub name: String,
+    /// Hexadécimal sur 6 caractères, ou vide s'il est illisible (la couleur finit dans un style).
+    pub color: String,
+}
+
+/// Ticket ouvert (les demandes de fusion, que l'API des tickets renvoie aussi, sont exclues).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Issue {
+    pub number: u32,
+    pub title: String,
+    pub author: String,
+    pub labels: Vec<Label>,
+    pub created_at: Option<String>,
+    pub url: Option<String>,
+}
+
+pub fn parse_issues(json: &str) -> Result<Vec<Issue>> {
+    #[derive(Deserialize)]
+    struct L {
+        name: String,
+        #[serde(default)]
+        color: String,
+    }
+    #[derive(Deserialize)]
+    struct I {
+        number: u32,
+        #[serde(default)]
+        title: String,
+        user: Option<RawUser>,
+        #[serde(default)]
+        labels: Vec<L>,
+        created_at: Option<String>,
+        html_url: Option<String>,
+        pull_request: Option<serde_json::Value>,
+    }
+    let hex = |c: String| if c.len() == 6 && c.bytes().all(|b| b.is_ascii_hexdigit()) { c } else { String::new() };
+    Ok(parse::<Vec<I>>(json)?
+        .into_iter()
+        .filter(|i| i.pull_request.is_none())
+        .map(|i| Issue {
+            number: i.number,
+            title: i.title,
+            author: i.user.map(|u| u.login).unwrap_or_default(),
+            labels: i.labels.into_iter().map(|l| Label { name: l.name, color: hex(l.color) }).collect(),
+            created_at: i.created_at,
+            url: gh_url(i.html_url),
+        })
+        .collect())
+}
+
+/// Alerte Dependabot ouverte.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Alert {
+    pub package: String,
+    pub ecosystem: String,
+    /// `critical`, `high`, `medium`, `low`.
+    pub severity: String,
+    pub summary: String,
+    pub manifest: String,
+    pub created_at: Option<String>,
+    pub url: Option<String>,
+}
+
+/// 0 = le plus grave.
+fn severity_rank(s: &str) -> usize {
+    ["critical", "high", "medium", "low"].iter().position(|x| *x == s).unwrap_or(4)
+}
+
+/// Alertes triées de la plus grave à la moins grave.
+pub fn parse_alerts(json: &str) -> Result<Vec<Alert>> {
+    #[derive(Deserialize, Default)]
+    struct Pkg {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        ecosystem: String,
+    }
+    #[derive(Deserialize, Default)]
+    struct Dep {
+        #[serde(default)]
+        package: Pkg,
+        #[serde(default)]
+        manifest_path: String,
+    }
+    #[derive(Deserialize, Default)]
+    struct Adv {
+        #[serde(default)]
+        severity: String,
+        #[serde(default)]
+        summary: String,
+    }
+    #[derive(Deserialize)]
+    struct A {
+        #[serde(default)]
+        dependency: Dep,
+        #[serde(default)]
+        security_advisory: Adv,
+        created_at: Option<String>,
+        html_url: Option<String>,
+    }
+    let mut v: Vec<Alert> = parse::<Vec<A>>(json)?
+        .into_iter()
+        .map(|a| Alert {
+            package: a.dependency.package.name,
+            ecosystem: a.dependency.package.ecosystem,
+            severity: a.security_advisory.severity,
+            summary: a.security_advisory.summary,
+            manifest: a.dependency.manifest_path,
+            created_at: a.created_at,
+            url: gh_url(a.html_url),
+        })
+        .collect();
+    v.sort_by_key(|a| severity_rank(&a.severity));
+    Ok(v)
+}
+
+/// Déploiement GitHub (Deployments API) avec l'état du dernier statut.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GhDeployment {
+    pub id: u64,
+    pub environment: String,
+    pub reference: String,
+    pub sha: String,
+    pub creator: String,
+    pub created_at: Option<String>,
+    /// `success`, `failure`, `in_progress`… ; `None` si aucun statut n'est publié ou lu.
+    pub state: Option<String>,
+}
+
+pub fn parse_gh_deployments(json: &str) -> Result<Vec<GhDeployment>> {
+    #[derive(Deserialize)]
+    struct D {
+        id: u64,
+        #[serde(default)]
+        environment: String,
+        #[serde(default, rename = "ref")]
+        reference: String,
+        #[serde(default)]
+        sha: String,
+        creator: Option<RawUser>,
+        created_at: Option<String>,
+    }
+    Ok(parse::<Vec<D>>(json)?
+        .into_iter()
+        .map(|d| GhDeployment {
+            id: d.id,
+            environment: d.environment,
+            reference: d.reference,
+            sha: d.sha.chars().take(7).collect(),
+            creator: d.creator.map(|u| u.login).unwrap_or_default(),
+            created_at: d.created_at,
+            state: None,
+        })
+        .collect())
+}
+
+/// État du statut le plus récent (`/deployments/{id}/statuses`, du plus récent au plus ancien).
+pub fn parse_deployment_state(json: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct S {
+        state: String,
+    }
+    serde_json::from_str::<Vec<S>>(json).ok()?.into_iter().next().map(|s| s.state)
+}
+
+/// Dernière version publiée.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Release {
+    pub tag: String,
+    pub name: Option<String>,
+    pub published_at: Option<String>,
+    pub prerelease: bool,
+    pub url: Option<String>,
+}
+
+pub fn parse_release(json: &str) -> Result<Release> {
+    #[derive(Deserialize)]
+    struct R {
+        tag_name: String,
+        name: Option<String>,
+        published_at: Option<String>,
+        #[serde(default)]
+        prerelease: bool,
+        html_url: Option<String>,
+    }
+    let r: R = parse(json)?;
+    Ok(Release {
+        tag: r.tag_name,
+        name: r.name.filter(|n| !n.is_empty()),
+        published_at: r.published_at,
+        prerelease: r.prerelease,
+        url: gh_url(r.html_url),
+    })
+}
+
+/// Données d'un dépôt demandées séparément : chacune a sa permission, donc sa propre erreur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Insight {
+    Ci,
+    Pulls,
+    Issues,
+    Alerts,
+    Deployments,
+    Release,
+}
+
+/// Adresse de l'API pour `insight`. `branch` ne sert qu'à la CI (derniers runs d'une branche) ; `limit` est borné à 1..=30.
+pub fn insight_path(insight: Insight, owner: &str, repo: &str, branch: Option<&str>, limit: u32) -> Result<String> {
+    if !valid_repo(owner, repo) {
+        return Err(Error::Other("nom de dépôt invalide".into()));
+    }
+    let n = limit.clamp(1, 30);
+    let b = match branch {
+        // Un nom de branche contient parfois `/` : seuls des caractères sûrs passent, donc rien à encoder.
+        Some(b)
+            if !b.is_empty()
+                && b.len() <= 200
+                && b.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.' | b'-' | b'/')) =>
+        {
+            format!("&branch={b}")
+        }
+        Some(_) => return Err(Error::Other("nom de branche invalide".into())),
+        None => String::new(),
+    };
+    let base = format!("{API}/repos/{owner}/{repo}");
+    Ok(match insight {
+        Insight::Ci => format!("{base}/actions/runs?per_page={n}{b}"),
+        Insight::Pulls => format!("{base}/pulls?state=open&per_page={n}"),
+        // L'API des tickets renvoie aussi les PR : on en demande 100 pour qu'il en reste après filtrage.
+        Insight::Issues => format!("{base}/issues?state=open&per_page=100"),
+        Insight::Alerts => format!("{base}/dependabot/alerts?state=open&per_page=100"),
+        Insight::Deployments => format!("{base}/deployments?per_page={n}"),
+        Insight::Release => format!("{base}/releases/latest"),
+    })
+}
+
+async fn fetch(token: &str, url: String) -> Result<String> {
+    let token = token.to_string();
+    tokio::task::spawn_blocking(move || get(&agent(), &token, &url)).await.map_err(|e| Error::Other(e.to_string()))?
+}
+
+pub async fn ci_runs(token: &str, owner: &str, repo: &str, branch: Option<&str>, limit: u32) -> Result<Vec<CiRun>> {
+    parse_runs(&fetch(token, insight_path(Insight::Ci, owner, repo, branch, limit)?).await?)
+}
+
+pub async fn pulls(token: &str, owner: &str, repo: &str) -> Result<Vec<Pull>> {
+    parse_pulls(&fetch(token, insight_path(Insight::Pulls, owner, repo, None, 30)?).await?)
+}
+
+pub async fn issues(token: &str, owner: &str, repo: &str) -> Result<Vec<Issue>> {
+    parse_issues(&fetch(token, insight_path(Insight::Issues, owner, repo, None, 30)?).await?)
+}
+
+pub async fn alerts(token: &str, owner: &str, repo: &str) -> Result<Vec<Alert>> {
+    parse_alerts(&fetch(token, insight_path(Insight::Alerts, owner, repo, None, 30)?).await?)
+}
+
+/// Déploiements GitHub ; le dernier statut est lu pour le plus récent de 6 environnements au plus (un appel chacun).
+pub async fn gh_deployments(token: &str, owner: &str, repo: &str) -> Result<Vec<GhDeployment>> {
+    let mut list = parse_gh_deployments(&fetch(token, insight_path(Insight::Deployments, owner, repo, None, 30)?).await?)?;
+    let mut seen: Vec<String> = Vec::new();
+    for d in list.iter_mut() {
+        if seen.contains(&d.environment) {
+            continue;
+        }
+        if seen.len() >= 6 {
+            break;
+        }
+        seen.push(d.environment.clone());
+        // Un statut illisible ou refusé laisse l'état inconnu.
+        let url = format!("{API}/repos/{owner}/{repo}/deployments/{}/statuses?per_page=1", d.id);
+        d.state = fetch(token, url).await.ok().and_then(|t| parse_deployment_state(&t));
+    }
+    Ok(list)
+}
+
+/// Dernière version ; `None` si le dépôt n'en a pas (GitHub répond 404).
+pub async fn latest_release(token: &str, owner: &str, repo: &str) -> Result<Option<Release>> {
+    match fetch(token, insight_path(Insight::Release, owner, repo, None, 1)?).await {
+        Ok(t) => parse_release(&t).map(Some),
+        Err(Error::Other(m)) if m.starts_with("introuvable (404)") => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 // ---- Validation ----------------------------------------------------------------------------
@@ -320,9 +742,271 @@ pub fn clone_command(owner: &str, repo: &str, folder: &str, with_token: bool) ->
     Ok((sh(&cmd), target))
 }
 
+// ---- Déploiements (clones, images GHCR, dossiers compose) ------------------------------------
+
+/// Une seule commande par serveur : dépôts git (`G<TAB>chemin<TAB>origin`) puis conteneurs Docker
+/// (`C<TAB>nom<TAB>image<TAB>état<TAB>création<TAB>projet compose<TAB>dossier compose<TAB>label source`). Lecture seule, sans sudo.
+pub fn server_scan_command() -> String {
+    sh(r#"t=''; command -v timeout >/dev/null 2>&1 && t='timeout 25'; T=$(printf '\t'); \
+$t find /srv /opt /var/www "$HOME" -maxdepth 5 -name node_modules -prune -o -name .git -type d -print 2>/dev/null | head -300 | \
+while IFS= read -r g; do d=${g%/.git}; r=$(git -c safe.directory='*' -C "$d" remote get-url origin 2>/dev/null) && printf 'G\t%s\t%s\n' "$d" "$r"; done; \
+command -v docker >/dev/null 2>&1 && $t docker ps -a --format "C${T}{{.Names}}${T}{{.Image}}${T}{{.State}}${T}{{.CreatedAt}}${T}{{.Label \"com.docker.compose.project\"}}${T}{{.Label \"com.docker.compose.project.working_dir\"}}${T}{{.Label \"org.opencontainers.image.source\"}}" 2>/dev/null; true"#)
+}
+
+/// `(propriétaire, paquet, étiquette)` d'une image `ghcr.io/owner/pkg[:tag][@digest]`, en minuscules (sauf l'étiquette).
+pub fn parse_ghcr(image: &str) -> Option<(String, String, String)> {
+    let image = image.trim();
+    let rest = image.get(..8).filter(|p| p.eq_ignore_ascii_case("ghcr.io/")).map(|_| &image[8..])?;
+    let rest = rest.split('@').next()?;
+    let (path, tag) = match rest.rsplit_once(':') {
+        Some((p, t)) if !t.contains('/') => (p, t),
+        _ => (rest, "latest"),
+    };
+    let mut seg = path.split('/');
+    let (owner, pkg) = (seg.next()?, seg.next()?);
+    (valid_repo(owner, pkg) && valid_slug(tag)).then(|| (owner.to_ascii_lowercase(), pkg.to_ascii_lowercase(), tag.to_string()))
+}
+
+/// Le paquet GHCR appartient-il au dépôt : même nom, ou `<dépôt>-suffixe` / `<dépôt>_suffixe` ?
+pub fn package_matches(pkg: &str, repo: &str) -> bool {
+    let (p, r) = (pkg.to_ascii_lowercase(), repo.to_ascii_lowercase());
+    p == r || (p.len() > r.len() && p.starts_with(&r) && matches!(p.as_bytes()[r.len()], b'-' | b'_'))
+}
+
+/// Étiquette qui ressemble à un SHA de commit (7 à 40 hexadécimaux dont un chiffre et une lettre), éventuellement `sha-…`.
+pub fn commit_sha(tag: &str) -> Option<String> {
+    let t = tag.strip_prefix("sha-").unwrap_or(tag);
+    let ok = (7..=40).contains(&t.len())
+        && t.bytes().all(|b| b.is_ascii_hexdigit())
+        && t.bytes().any(|b| b.is_ascii_digit())
+        && t.bytes().any(|b| b.is_ascii_alphabetic());
+    ok.then(|| t[..7].to_ascii_lowercase())
+}
+
+/// Nom de dossier comparable : minuscules, `_` ramené à `-`.
+fn norm_name(s: &str) -> String {
+    s.to_ascii_lowercase().replace('_', "-")
+}
+
+/// `2026-01-02 03:04:05 +0000 UTC` (docker) vers `2026-01-02T03:04:05+00:00`.
+pub fn docker_date(s: &str) -> Option<String> {
+    let mut p = s.split_whitespace();
+    let (d, t, z) = (p.next()?, p.next()?, p.next()?);
+    (d.len() == 10 && z.len() == 5 && (z.starts_with('+') || z.starts_with('-'))).then(|| format!("{d}T{t}{}:{}", &z[..3], &z[3..]))
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerInfo {
+    pub name: String,
+    pub image: String,
+    pub tag: String,
+    /// Les 7 premiers caractères si l'étiquette est un SHA de commit.
+    pub sha: Option<String>,
+    pub state: String,
+    pub created: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeploymentKind {
+    Clone,
+    Image,
+    ComposeDir,
+}
+
+/// Un endroit où tourne un dépôt sur un serveur. `certain` : clone avec `origin` correct, ou image / label qui correspond.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Deployment {
+    /// `owner/repo` tel que listé par GitHub.
+    pub repo: String,
+    pub kind: DeploymentKind,
+    pub certain: bool,
+    /// Dossier du clone, ou dossier de travail compose.
+    pub path: Option<String>,
+    pub project: Option<String>,
+    pub containers: Vec<ContainerInfo>,
+}
+
+struct Cont<'a> {
+    name: &'a str,
+    image: &'a str,
+    state: &'a str,
+    created: &'a str,
+    project: &'a str,
+    dir: &'a str,
+    source: &'a str,
+}
+
+/// Dépôt (parmi `repos`) auquel appartient le conteneur : label source identique au dépôt, sinon image GHCR du même
+/// propriétaire. En cas d'ambiguïté (`app` et `app-api`), le nom le plus long gagne.
+fn container_repo<'a>(c: &Cont, repos: &'a [(String, String)]) -> Option<&'a (String, String)> {
+    if let Some(r) = repos.iter().find(|(o, n)| same_repo(c.source, o, n)) {
+        return Some(r);
+    }
+    let (owner, pkg, _) = parse_ghcr(c.image)?;
+    repos.iter().filter(|(o, n)| o.eq_ignore_ascii_case(&owner) && package_matches(&pkg, n)).max_by_key(|(_, n)| n.len())
+}
+
+/// Lit la sortie de `server_scan_command` et la rattache aux dépôts `(propriétaire, nom)` du compte.
+pub fn parse_deployments(out: &str, repos: &[(String, String)]) -> Vec<Deployment> {
+    let mut found: Vec<Deployment> = Vec::new();
+    let mut conts: Vec<Cont> = Vec::new();
+    for line in out.lines() {
+        let f: Vec<&str> = line.splitn(8, '\t').collect();
+        match f.as_slice() {
+            ["G", path, url] if valid_path(path) => {
+                for (o, n) in repos.iter().filter(|(o, n)| same_repo(url, o, n)) {
+                    let repo = format!("{o}/{n}");
+                    if !found.iter().any(|d| d.kind == DeploymentKind::Clone && d.repo == repo && d.path.as_deref() == Some(path)) {
+                        found.push(Deployment {
+                            repo,
+                            kind: DeploymentKind::Clone,
+                            certain: true,
+                            path: Some(path.to_string()),
+                            project: None,
+                            containers: vec![],
+                        });
+                    }
+                }
+            }
+            ["C", name, image, state, created, project, dir, source] if valid_slug(name) => {
+                conts.push(Cont { name, image, state, created, project, dir, source })
+            }
+            _ => {}
+        }
+    }
+    let info = |c: &Cont| {
+        let tag =
+            parse_ghcr(c.image).map(|g| g.2).unwrap_or_else(|| c.image.rsplit_once(':').map(|(_, t)| t.to_string()).unwrap_or_default());
+        ContainerInfo {
+            name: c.name.into(),
+            image: c.image.into(),
+            sha: commit_sha(&tag),
+            tag,
+            state: c.state.into(),
+            created: docker_date(c.created),
+        }
+    };
+    // Images : un déploiement par (dépôt, projet compose), ou par conteneur hors compose.
+    for c in &conts {
+        let Some((o, n)) = container_repo(c, repos) else { continue };
+        let repo = format!("{o}/{n}");
+        let project = (!c.project.is_empty()).then(|| c.project.to_string());
+        let path = valid_path(c.dir).then(|| c.dir.to_string());
+        let existing =
+            found.iter_mut().find(|d| d.kind == DeploymentKind::Image && d.repo == repo && project.is_some() && d.project == project);
+        if let Some(d) = existing {
+            d.containers.push(info(c));
+        } else {
+            found.push(Deployment { repo, kind: DeploymentKind::Image, certain: true, path, project, containers: vec![info(c)] });
+        }
+    }
+    // Dossiers compose au même nom que le dépôt, pas déjà couverts.
+    let mut dirs: Vec<(&str, &str)> = conts.iter().filter(|c| valid_path(c.dir)).map(|c| (c.dir, c.project)).collect();
+    dirs.sort();
+    dirs.dedup();
+    for (dir, project) in dirs {
+        let base = norm_name(dir.rsplit('/').next().unwrap_or_default());
+        for (o, n) in repos.iter().filter(|(_, n)| norm_name(n) == base) {
+            let repo = format!("{o}/{n}");
+            let covered = found.iter().any(|d| {
+                d.repo == repo
+                    && (d.path.as_deref() == Some(dir)
+                        || (d.kind == DeploymentKind::Image && !project.is_empty() && d.project.as_deref() == Some(project)))
+            });
+            if !covered {
+                let containers = conts.iter().filter(|c| c.dir == dir && c.project == project).map(info).collect();
+                found.push(Deployment {
+                    repo,
+                    kind: DeploymentKind::ComposeDir,
+                    certain: false,
+                    path: Some(dir.into()),
+                    project: (!project.is_empty()).then(|| project.into()),
+                    containers,
+                });
+            }
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn repos() -> Vec<(String, String)> {
+        ["MyPage", "scanlib", "Zenytt", "app", "app-api"].iter().map(|n| ("NathanChevrollier".to_string(), n.to_string())).collect()
+    }
+
+    #[test]
+    fn images_ghcr() {
+        assert_eq!(
+            parse_ghcr("ghcr.io/nathanchevrollier/mypage-web:4f0aa05c"),
+            Some(("nathanchevrollier".into(), "mypage-web".into(), "4f0aa05c".into()))
+        );
+        assert_eq!(parse_ghcr("GHCR.io/Octo/App@sha256:abc"), Some(("octo".into(), "app".into(), "latest".into())));
+        assert_eq!(parse_ghcr("docker.io/library/nginx:1"), None);
+        assert_eq!(parse_ghcr("ghcr.io/onlyowner"), None);
+        assert!(package_matches("mypage-web", "MyPage") && package_matches("scanlib_worker", "scanlib") && package_matches("app", "app"));
+        assert!(!package_matches("mypager", "mypage") && !package_matches("my", "mypage"));
+        assert_eq!(commit_sha("4f0aa05c1d2e").as_deref(), Some("4f0aa05"));
+        assert_eq!(commit_sha("sha-ABCDEF1234").as_deref(), Some("abcdef1"));
+        for t in ["latest", "1.2.3", "1234567", "abcdefg", "deadbee"] {
+            assert_eq!(commit_sha(t), None, "{t}");
+        }
+        assert_eq!(docker_date("2026-01-02 03:04:05 +0100 CET").as_deref(), Some("2026-01-02T03:04:05+01:00"));
+    }
+
+    #[test]
+    fn deploiements_mypage_et_scanlib() {
+        let out = "G\t/var/www/html/Zenytt\thttps://github.com/NathanChevrollier/Zenytt.git\n\
+G\t/var/www/html/scanlib\tgit@github.com:nathanchevrollier/scanlib.git\n\
+G\t/x/other\thttps://gitlab.com/NathanChevrollier/MyPage.git\n\
+C\tmypage-web-1\tghcr.io/nathanchevrollier/mypage-web:4f0aa05c1d2e\trunning\t2026-01-02 03:04:05 +0000 UTC\tmypage\t/srv/apps/mypage\thttps://github.com/nginx/docker-nginx-unprivileged\n\
+C\tmypage-status-1\tghcr.io/nathanchevrollier/mypage-status:4f0aa05c1d2e\texited\t2026-01-02 03:04:05 +0000 UTC\tmypage\t/srv/apps/mypage\t\n\
+C\tlab\tmyimg:1\trunning\t2026-01-02 03:04:05 +0000 UTC\t\t\thttps://github.com/NathanChevrollier/scanlib\n\
+C\tapi\tghcr.io/nathanchevrollier/app-api:v1\trunning\t2026-01-02 03:04:05 +0000 UTC\t\t\t\n\
+C\tzenytt-sync\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tzenytt-sync\t/opt/stacks/zenytt-sync\t\n\
+C\tfoo\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tscan_lib\t/opt/scan_lib\t\n\
+C\tfoo2\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tx\t/opt/stacks/mypage\t\nbad\n";
+        let d = parse_deployments(out, &repos());
+        let of =
+            |r: &str, k: DeploymentKind| d.iter().filter(|x| x.repo == format!("NathanChevrollier/{r}") && x.kind == k).collect::<Vec<_>>();
+        assert_eq!(of("Zenytt", DeploymentKind::Clone).len(), 1);
+        assert_eq!(of("MyPage", DeploymentKind::Clone).len(), 0, "gitlab ignoré");
+        let img = of("MyPage", DeploymentKind::Image);
+        assert_eq!(img.len(), 1);
+        assert!(img[0].certain && img[0].project.as_deref() == Some("mypage") && img[0].path.as_deref() == Some("/srv/apps/mypage"));
+        assert_eq!(img[0].containers.len(), 2, "le label vers nginx n'a aucun effet");
+        assert_eq!(img[0].containers[0].sha.as_deref(), Some("4f0aa05"));
+        assert_eq!(img[0].containers[1].state, "exited");
+        // /srv/apps/mypage est couvert par l'image ; /opt/stacks/mypage ne l'est pas : « probable »
+        let probable = of("MyPage", DeploymentKind::ComposeDir);
+        assert_eq!(probable.len(), 1);
+        assert!(!probable[0].certain && probable[0].path.as_deref() == Some("/opt/stacks/mypage"));
+        // label source identique -> image certaine
+        assert_eq!(of("scanlib", DeploymentKind::Image).len(), 1);
+        assert_eq!(of("scanlib", DeploymentKind::ComposeDir).len(), 0, "scan_lib != scanlib");
+        // le nom le plus long gagne
+        assert_eq!(of("app-api", DeploymentKind::Image).len(), 1);
+        assert_eq!(of("app", DeploymentKind::Image).len(), 0);
+        assert_eq!(of("Zenytt", DeploymentKind::ComposeDir).len(), 0);
+        assert!(server_scan_command().contains("docker ps -a --format"));
+    }
+
+    #[test]
+    fn erreurs_http() {
+        let perm = r#"{"message":"Resource not accessible by personal access token"}"#;
+        assert!(map_http_error(401, None, None, "").contains("jeton refusé"));
+        assert!(map_http_error(403, Some("0"), None, "").contains("rate limit"));
+        assert!(map_http_error(403, None, Some("60"), "").contains("rate limit"));
+        let p = map_http_error(403, Some("4000"), None, perm);
+        assert!(p.contains("permission manquante") && p.contains("Resource not accessible") && !p.contains("rate limit"));
+        assert!(map_http_error(429, None, None, "").contains("429"));
+        assert!(map_http_error(404, None, None, "").contains("introuvable"));
+    }
 
     #[test]
     fn urls_origin_reconnues() {
@@ -427,6 +1111,88 @@ mod tests {
                 assert!(c.contains(h), "{t} {h}");
             }
         }
+    }
+
+    // Formes relevées sur l'API (Zenytt) puis réduites ; les alertes suivent la documentation de l'API Dependabot.
+    #[test]
+    fn lecture_des_runs() {
+        let json = r#"{"total_count":2,"workflow_runs":[
+{"id":1,"name":"Mobile","display_title":"Mobile","head_branch":"feat/mobile-ipa","event":"workflow_dispatch","status":"queued","conclusion":null,
+"html_url":"https://github.com/NathanChevrollier/Zenytt/actions/runs/39993224328","run_started_at":"2026-10-23T17:12:55Z","created_at":"2026-10-23T17:12:50Z","updated_at":"2026-10-23T17:12:55Z"},
+{"id":2,"name":null,"display_title":"CI","head_branch":"main","event":"push","status":"completed","conclusion":"failure",
+"html_url":"https://evil.example/x","run_started_at":null,"created_at":"2026-10-23T10:00:00Z","updated_at":"2026-10-23T10:04:30Z"}]}"#;
+        let r = parse_runs(json).unwrap();
+        assert_eq!((r[0].status.as_str(), r[0].conclusion.clone()), ("queued", None));
+        assert_eq!(r[0].url.as_deref(), Some("https://github.com/NathanChevrollier/Zenytt/actions/runs/39993224328"));
+        assert_eq!(
+            (r[1].name.as_str(), r[1].conclusion.as_deref(), r[1].url.clone()),
+            ("CI", Some("failure"), None),
+            "hôte étranger écarté"
+        );
+        assert_eq!(r[1].started_at.as_deref(), Some("2026-10-23T10:00:00Z"));
+        assert_eq!(parse_runs(r#"{"total_count":0,"workflow_runs":[]}"#).unwrap(), vec![]);
+        assert!(parse_runs("[]").is_err());
+    }
+
+    #[test]
+    fn lecture_des_pr_et_tickets_sans_melange() {
+        let pulls = r#"[{"number":45,"title":"Refonte","draft":false,"html_url":"https://github.com/o/r/pull/45","created_at":"2026-10-23T16:45:08Z","user":{"login":"octo"}},
+{"number":46,"title":"WIP","draft":true,"html_url":"https://github.com/o/r/pull/46","user":null}]"#;
+        let p = parse_pulls(pulls).unwrap();
+        assert_eq!((p[0].number, p[0].draft, p[0].author.as_str()), (45, false, "octo"));
+        assert!(p[1].draft && p[1].author.is_empty());
+        let issues = r#"[{"number":45,"title":"une PR","html_url":"https://github.com/o/r/pull/45","labels":[],"pull_request":{"url":"https://api.github.com/repos/o/r/pulls/45"},"user":{"login":"octo"}},
+{"number":44,"title":"Suggestion","html_url":"https://github.com/o/r/issues/44","labels":[{"name":"enhancement","color":"a2eeef"},{"name":"x","color":"red;}"}],"pull_request":null,"created_at":"2026-10-23T15:56:20Z","user":{"login":"octo"}}]"#;
+        let i = parse_issues(issues).unwrap();
+        assert_eq!(i.len(), 1, "la PR est exclue");
+        assert_eq!(i[0].number, 44);
+        assert_eq!((i[0].labels[0].color.as_str(), i[0].labels[1].color.as_str()), ("a2eeef", ""));
+    }
+
+    #[test]
+    fn lecture_des_alertes_triees() {
+        let json = r#"[
+{"number":3,"state":"open","dependency":{"package":{"ecosystem":"npm","name":"lodash"},"manifest_path":"pnpm-lock.yaml","scope":"runtime"},
+"security_advisory":{"ghsa_id":"GHSA-x","summary":"Prototype pollution","severity":"medium"},"html_url":"https://github.com/o/r/security/dependabot/3","created_at":"2026-01-01T00:00:00Z"},
+{"number":4,"state":"open","dependency":{"package":{"ecosystem":"rust","name":"tokio"},"manifest_path":"Cargo.lock"},
+"security_advisory":{"summary":"Boum","severity":"critical"},"html_url":"https://github.com/o/r/security/dependabot/4"}]"#;
+        let a = parse_alerts(json).unwrap();
+        assert_eq!(
+            (a[0].package.as_str(), a[0].severity.as_str(), a[0].ecosystem.as_str(), a[0].manifest.as_str()),
+            ("tokio", "critical", "rust", "Cargo.lock")
+        );
+        assert_eq!(a[1].package, "lodash");
+        assert_eq!(parse_alerts("[]").unwrap(), vec![]);
+    }
+
+    #[test]
+    fn lecture_des_deploiements_et_version() {
+        let json = r#"[{"url":"https://api.github.com/repos/o/r/deployments/7281125823","id":7281125823,"sha":"4f0aa05c1d2e3f4a","ref":"v1.3.0","task":"deploy",
+"environment":"release","creator":{"login":"octo","id":1},"created_at":"2026-10-23T14:45:04Z"}]"#;
+        let d = parse_gh_deployments(json).unwrap();
+        assert_eq!(
+            (d[0].environment.as_str(), d[0].reference.as_str(), d[0].sha.as_str(), d[0].creator.as_str()),
+            ("release", "v1.3.0", "4f0aa05", "octo")
+        );
+        assert_eq!(parse_deployment_state(r#"[{"state":"success","id":1},{"state":"in_progress"}]"#).as_deref(), Some("success"));
+        assert_eq!(parse_deployment_state("[]"), None);
+        let rel = parse_release(r#"{"tag_name":"v1.3.0","name":"Zenytt v1.3.0","prerelease":false,"published_at":"2026-10-23T14:45:16Z","html_url":"https://github.com/o/r/releases/tag/v1.3.0"}"#).unwrap();
+        assert_eq!((rel.tag.as_str(), rel.name.as_deref(), rel.prerelease), ("v1.3.0", Some("Zenytt v1.3.0"), false));
+    }
+
+    #[test]
+    fn adresses_de_l_api() {
+        let p = |i, b: Option<&str>, n| insight_path(i, "octo", "app", b, n);
+        assert_eq!(
+            p(Insight::Ci, Some("feat/x"), 1).unwrap(),
+            "https://api.github.com/repos/octo/app/actions/runs?per_page=1&branch=feat/x"
+        );
+        assert!(p(Insight::Ci, None, 999).unwrap().ends_with("per_page=30"));
+        assert!(p(Insight::Ci, Some("a&b"), 1).is_err() && p(Insight::Ci, Some(""), 1).is_err());
+        assert!(p(Insight::Release, None, 1).unwrap().ends_with("/releases/latest"));
+        assert!(
+            insight_path(Insight::Pulls, "o/x", "app", None, 1).is_err() && insight_path(Insight::Pulls, "octo", "..", None, 1).is_err()
+        );
     }
 
     #[test]

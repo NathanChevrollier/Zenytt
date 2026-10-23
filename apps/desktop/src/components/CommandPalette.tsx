@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Box, Cable, CircleHelp, FolderOpen, Globe, History, Layers, Monitor, Plug, Power, RotateCw, ScrollText, Search, Server, SquareTerminal, Star, Stethoscope, Zap } from "lucide-react";
+import { Box, Cable, CircleHelp, FolderOpen, Globe, History, Layers, Monitor, Plug, Power, RotateCw, ScrollText, Search, Server, ShieldCheck, SquareTerminal, Star, Stethoscope, Zap } from "lucide-react";
 import { useDoctor } from "./ConnectionDoctor";
 import { focusedTerminal } from "../lib/focus";
 import { api, errorMessage, hasShell, shellQuote, type DesktopView, type DockerOverview, type Snippet, type TunnelView, type WebEngine } from "../lib/api";
@@ -9,7 +9,7 @@ import { needsShell, SECTIONS } from "../sections";
 import { GUIDES } from "../lib/guides";
 import { ensureConnected, useApp, useAppPick } from "../lib/store";
 import { composeLockKey, confirmDestructive } from "../lib/folders";
-import { useShell } from "../lib/shell";
+import { navigate, useShell } from "../lib/shell";
 import { peekCached } from "../lib/cache";
 import { display, shortcutOf } from "../lib/shortcuts";
 import { Kbd } from "./ui";
@@ -105,6 +105,10 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
 
   const actions = useMemo<Action[]>(() => {
     const list: Action[] = SECTIONS.filter((s) => hasShell(server) || !needsShell(s.id)).map((s) => ({ group: "Navigation", id: `go:${s.id}`, label: `Aller à ${s.label}`, icon: <s.icon size={15} />, run: () => setSection(s.id) }));
+    // La sécurité vit dans Système : ses sous-parties restent trouvables par leur nom.
+    if (hasShell(server))
+      for (const [tab, label] of [["security", "Sécurité"], ["security/firewall", "Pare-feu"], ["security/fail2ban", "fail2ban"], ["security/access", "Accès SSH"]])
+        list.push({ group: "Navigation", id: `go:system:${tab}`, label: `Aller à Système › ${label}`, icon: <ShieldCheck size={15} />, run: () => navigate("system", tab) });
     // Les fiches d'aide sont cherchables ici : « tmux », « compose », « restic »… mènent droit au mode d'emploi.
     for (const g of GUIDES) {
       list.push({ group: "Aide", id: `guide:${g.id}`, label: `Aide : ${g.title}`, hint: g.summary, icon: <CircleHelp size={15} />, run: () => useApp.getState().openHelpPage(g.id) });

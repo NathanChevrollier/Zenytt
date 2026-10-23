@@ -63,6 +63,8 @@ export interface Guide {
   topic: GuideTopic;
   summary: string;
   section?: SectionId;
+  /** Onglet de la section à ouvrir (« Ouvrir … »). */
+  tab?: string;
   automatic?: string;
   /** Comment la fonctionnalité marche dans Zenytt : ce que l'app fait, où l'on clique. */
   how?: string[];
@@ -461,13 +463,14 @@ export const GUIDES: Guide[] = [
     id: "security",
     title: "Audit de sécurité et corrections",
     topic: "securite",
-    section: "security",
+    section: "system",
+    tab: "security",
     summary: "État de SSH, du pare-feu, de fail2ban, des mises à jour, des ports exposés et des comptes privilégiés, avec des corrections guidées.",
     how: [
       "L'audit est en lecture seule : rien n'est modifié sans ton accord explicite.",
       "Avant de toucher à SSH ou au pare-feu, Zenytt garde une connexion de contrôle ouverte ; si la modification te coupe l'accès, elle est annulée automatiquement.",
       "Une alerte qui ne te concerne pas peut être ignorée : elle passe dans les archivées, avec la raison.",
-      "Le pare-feu et fail2ban se pilotent depuis la même page : règles, prisons, bannissements en cours.",
+      "Tout se trouve dans Système › Sécurité : audit, pare-feu (règles), fail2ban (prisons, bannissements en cours) et accès SSH. Le correctif « mises à jour en attente » renvoie vers l'onglet Mises à jour.",
       "fail2ban → Réglages : durée de bannissement, nombre d'échecs et fenêtre par défaut ou par jail, bannissement progressif, jails à activer (recidive, nginx…). Zenytt les écrit dans son propre fichier, teste la configuration et la restaure si fail2ban la refuse.",
     ],
     requirements: ["un mot de passe sudo pour appliquer les corrections", "ufw ou firewalld, fail2ban"],

@@ -65,6 +65,47 @@ fn check_repo(owner: &str, repo: &str) -> Result<(), String> {
     }
 }
 
+// Une commande par type de donnée : chacune demande sa propre permission au jeton, donc échoue seule.
+// Le jeton ne sort pas du coffre ; il part en en-tête vers api.github.com et n'est pas journalisé.
+
+/// Derniers runs GitHub Actions (`branch` : seulement ceux de cette branche), 30 au plus.
+#[tauri::command]
+pub async fn github_ci(owner: String, repo: String, branch: Option<String>, limit: Option<u32>) -> Result<Vec<github::CiRun>, String> {
+    check_repo(&owner, &repo)?;
+    github::ci_runs(&token()?, &owner, &repo, branch.as_deref(), limit.unwrap_or(8)).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn github_pulls(owner: String, repo: String) -> Result<Vec<github::Pull>, String> {
+    check_repo(&owner, &repo)?;
+    github::pulls(&token()?, &owner, &repo).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn github_issues(owner: String, repo: String) -> Result<Vec<github::Issue>, String> {
+    check_repo(&owner, &repo)?;
+    github::issues(&token()?, &owner, &repo).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn github_alerts(owner: String, repo: String) -> Result<Vec<github::Alert>, String> {
+    check_repo(&owner, &repo)?;
+    github::alerts(&token()?, &owner, &repo).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn github_gh_deployments(owner: String, repo: String) -> Result<Vec<github::GhDeployment>, String> {
+    check_repo(&owner, &repo)?;
+    github::gh_deployments(&token()?, &owner, &repo).await.map_err(err)
+}
+
+/// Dernière version publiée, ou `None` si le dépôt n'en a pas.
+#[tauri::command]
+pub async fn github_release(owner: String, repo: String) -> Result<Option<github::Release>, String> {
+    check_repo(&owner, &repo)?;
+    github::latest_release(&token()?, &owner, &repo).await.map_err(err)
+}
+
 async fn shell_conn(store: &Store, sessions: &Sessions, server_id: &str) -> Result<Connection, String> {
     need_shell(store, server_id)?;
     sessions.get(store, server_id).await
@@ -107,6 +148,34 @@ pub async fn github_clones(
         return Ok(vec![]);
     }
     details(&conn, &dirs).await
+}
+
+#[derive(serde::Deserialize)]
+pub struct RepoRef {
+    owner: String,
+    name: String,
+}
+
+/// Tout ce qui tourne sur ce serveur pour les dépôts donnés (clones, images GHCR, dossiers compose) : une seule
+/// commande en lecture seule, quel que soit le nombre de dépôts.
+#[tauri::command]
+pub async fn github_server_deployments(
+    store: State<'_, Store>,
+    sessions: State<'_, Sessions>,
+    server_id: String,
+    repos: Vec<RepoRef>,
+) -> Result<Vec<github::Deployment>, String> {
+    if repos.len() > 2000 {
+        return Err("trop de dépôts".into());
+    }
+    let mut list = Vec::with_capacity(repos.len());
+    for r in repos {
+        check_repo(&r.owner, &r.name)?;
+        list.push((r.owner, r.name));
+    }
+    let conn = shell_conn(&store, &sessions, &server_id).await?;
+    let out = conn.exec(&github::server_scan_command(), None).await.map_err(err)?;
+    Ok(github::parse_deployments(&out.stdout, &list))
 }
 
 /// Relit l'état d'un clone ; `fetch` interroge d'abord GitHub (sinon avance/retard datent du dernier fetch).

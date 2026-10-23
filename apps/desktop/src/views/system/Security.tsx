@@ -1,20 +1,25 @@
-// Sécurité : audit (score et constats par gravité), pare-feu, fail2ban et accès SSH en onglets.
-import { useCallback, useEffect, useMemo, useState } from "react";
+// Sécurité (onglet de Système) : audit (score et constats par gravité), pare-feu, fail2ban et accès SSH.
+// L'audit et les constats ignorés viennent de la page Système, qui en tire aussi le résumé de la vue d'ensemble.
+import { useEffect, useMemo, useState } from "react";
 import { Archive, ArchiveRestore, AlertTriangle, CheckCircle2, Info, OctagonAlert, RefreshCw, Wrench } from "lucide-react";
-import { api, errorMessage, type Finding, type FixPlan, type IgnoredFinding, type SecurityReport, type Severity } from "../lib/api";
-import { useApp, useAppPick } from "../lib/store";
-import { useTabIntent } from "../lib/shell";
-import { Badge, Button, Card, ErrorState, Loading, Modal, ResultBanner, Section } from "../components/ui";
-import PageLayout from "../components/PageLayout";
-import ServerGate, { ServerContext } from "../components/ServerGate";
-import Fail2ban from "./security/Fail2ban";
-import Firewall from "./security/Firewall";
-import Access from "./security/Access";
-import { useCachedState } from "../lib/cache";
-import { useAutoRefresh } from "../lib/refresh";
+import { api, errorMessage, type Finding, type FixPlan, type IgnoredFinding, type SecurityReport, type Severity } from "../../lib/api";
+import { auditSummary, PENALTY, scoreVerdict } from "../../lib/system";
+import { useAppPick } from "../../lib/store";
+import { Badge, Button, Card, ErrorState, Loading, Modal, ResultBanner, Section, Segmented } from "../../components/ui";
+import Fail2ban from "../security/Fail2ban";
+import Firewall from "../security/Firewall";
+import Access from "../security/Access";
+
+export type SecTab = "audit" | "firewall" | "fail2ban" | "access";
+export const SEC_TABS: SecTab[] = ["audit", "firewall", "fail2ban", "access"];
 
 const LABEL: Record<Severity, string> = { critical: "critique", high: "élevé", medium: "moyen", low: "faible", ok: "OK" };
 const TONE: Record<Severity, "danger" | "warn" | "accent" | "muted" | "ok"> = { critical: "danger", high: "danger", medium: "warn", low: "muted", ok: "ok" };
+const GROUPS: { title: string; severities: Severity[] }[] = [
+  { title: "À corriger en priorité", severities: ["critical", "high"] },
+  { title: "À prévoir", severities: ["medium"] },
+  { title: "Améliorations", severities: ["low"] },
+];
 
 function SeverityIcon({ s }: { s: Severity }) {
   if (s === "ok") return <CheckCircle2 size={16} className="text-ok" />;
@@ -23,42 +28,44 @@ function SeverityIcon({ s }: { s: Severity }) {
   return <Info size={16} className="text-muted" />;
 }
 
-export default function SecurityView() {
-  return <ServerGate title="Sécurité" guide="security">{(serverId) => <Security key={serverId} serverId={serverId} />}</ServerGate>;
-}
-
-type TabId = "audit" | "firewall" | "fail2ban" | "access";
-const PENALTY: Record<Severity, number> = { critical: 30, high: 15, medium: 6, low: 2, ok: 0 };
-const GROUPS: { title: string; severities: Severity[] }[] = [
-  { title: "À corriger en priorité", severities: ["critical", "high"] },
-  { title: "À prévoir", severities: ["medium"] },
-  { title: "Améliorations", severities: ["low"] },
-];
-
-function Security({ serverId }: { serverId: string }) {
-  const { openTab, ask, notify } = useAppPick("openTab", "ask", "notify");
-  const server = useApp((s) => s.servers.find((x) => x.id === serverId));
-  const [tab, setTab] = useTabIntent<TabId>("security", "audit");
-  const [report, setReport] = useCachedState<SecurityReport | null>(`security:${serverId}`, null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+export default function Security({
+  serverId,
+  sub,
+  onSub,
+  report,
+  error,
+  loading,
+  reload,
+  ignored,
+  reloadIgnored,
+  onShowUpdates,
+  onBanned,
+}: {
+  serverId: string;
+  sub: SecTab;
+  onSub: (t: SecTab) => void;
+  report: SecurityReport | null;
+  error: string | null;
+  loading: boolean;
+  reload: () => void;
+  ignored: IgnoredFinding[];
+  reloadIgnored: () => void;
+  onShowUpdates: () => void;
+  onBanned: (n: number) => void;
+}) {
+  const { ask, notify } = useAppPick("ask", "notify");
   const [fixing, setFixing] = useState<{ finding: Finding; plan: FixPlan } | null>(null);
-  const [ignored, setIgnored] = useState<IgnoredFinding[]>([]);
   const [showIgnored, setShowIgnored] = useState(false);
   const [counts, setCounts] = useState<{ firewall?: number; fail2ban?: number; access?: number }>({});
   // Rappels stables : les panneaux remontent leur compteur sans relancer de rendu en boucle.
-  const onCount = useMemo(
-    () => ({
-      firewall: (n: number) => setCounts((c) => (c.firewall === n ? c : { ...c, firewall: n })),
-      fail2ban: (n: number) => setCounts((c) => (c.fail2ban === n ? c : { ...c, fail2ban: n })),
-      access: (n: number) => setCounts((c) => (c.access === n ? c : { ...c, access: n })),
-    }),
-    [],
-  );
-  const toAudit = useCallback(() => setTab("audit"), [setTab]);
-
-  const loadIgnored = useCallback(() => void api.findingsIgnored(serverId).then(setIgnored, () => {}), [serverId]);
-  useEffect(loadIgnored, [loadIgnored]);
+  const onCount = useMemo(() => {
+    const make = (k: "firewall" | "fail2ban" | "access") => (n: number) => setCounts((c) => (c[k] === n ? c : { ...c, [k]: n }));
+    return { firewall: make("firewall"), fail2ban: make("fail2ban"), access: make("access") };
+  }, []);
+  useEffect(() => {
+    if (counts.fail2ban != null) onBanned(counts.fail2ban);
+  }, [counts.fail2ban, onBanned]);
+  const toAudit = () => onSub("audit");
 
   /** Met un constat de côté, avec une raison facultative : il rejoint les constats ignorés. */
   const ignore = async (f: Finding) => {
@@ -71,7 +78,7 @@ function Security({ serverId }: { serverId: string }) {
     if (reason === null || reason === false) return;
     try {
       await api.findingIgnore(serverId, f.id, f.title, typeof reason === "string" ? reason : "");
-      loadIgnored();
+      reloadIgnored();
     } catch (e) {
       notify(errorMessage(e), "error");
     }
@@ -80,34 +87,15 @@ function Security({ serverId }: { serverId: string }) {
   const unignore = async (f: IgnoredFinding) => {
     try {
       await api.findingUnignore(serverId, f.findingId);
-      loadIgnored();
+      reloadIgnored();
     } catch (e) {
       notify(errorMessage(e), "error");
     }
   };
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setReport(await api.securityAudit(serverId));
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [serverId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-  useAutoRefresh(load, { serverId, auto: false });
-
   const startFix = async (f: Finding) => {
-    if (f.fix === "apply-updates") {
-      openTab(serverId, { title: "Mises à jour", command: "sudo apt-get update && sudo apt-get upgrade; echo; echo 'Terminé. Tu peux fermer cet onglet.'; exec \"$SHELL\" -l" });
-      return;
-    }
+    // Un seul chemin pour les paquets : l'onglet Mises à jour (application non interactive et journal).
+    if (f.fix === "apply-updates") return onShowUpdates();
     try {
       setFixing({ finding: f, plan: await api.securityFixPlan(f.fix!) });
     } catch (e) {
@@ -115,75 +103,72 @@ function Security({ serverId }: { serverId: string }) {
     }
   };
 
-  const ignoredIds = ignored.map((i) => i.findingId);
-  const problems = report?.findings.filter((f) => f.severity !== "ok" && !ignoredIds.includes(f.id)) ?? [];
-  const ok = report?.findings.filter((f) => f.severity === "ok") ?? [];
-  const serious = problems.filter((f) => f.severity === "critical" || f.severity === "high").length;
-  const score = report ? Math.max(0, 100 - problems.reduce((n, f) => n + PENALTY[f.severity], 0)) : null;
+  const summary = report ? auditSummary(report.findings, ignored.map((i) => i.findingId)) : null;
+  const count = (n: number | undefined, tone = "bg-hover-strong text-muted") =>
+    n ? <span className={`rounded-full px-1.5 text-[11px] leading-[17px] tabular-nums ${tone}`}>{n}</span> : null;
 
   return (
-    <PageLayout
-      context={server && <ServerContext server={server} />}
-      title="Sécurité"
-      subtitle={report ? `${report.os} · SSH sur le port ${report.sshPorts.join(", ") || "?"}` : "Audit en lecture seule : rien n'est modifié sans ton accord."}
-      guide="security"
-      tabs={[
-        { id: "audit", label: "Audit", count: report ? problems.length || undefined : undefined, tone: serious ? "danger" : problems.length ? "warn" : undefined },
-        { id: "firewall", label: "Pare-feu", count: counts.firewall || undefined, tone: counts.firewall ? "warn" : undefined },
-        { id: "fail2ban", label: "fail2ban", count: counts.fail2ban || undefined },
-        { id: "access", label: "Accès SSH", count: counts.access },
-      ]}
-      activeTab={tab}
-      onTab={setTab}
-      actions={
-        tab === "audit" && (
-          <Button icon={<RefreshCw size={14} className={loading ? "animate-spin" : ""} />} disabled={loading} onClick={() => void load()}>
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <Segmented
+          label="Sécurité"
+          value={sub}
+          onChange={onSub}
+          options={[
+            { value: "audit", label: <>Audit{count(summary?.problems.length, summary?.serious ? "bg-danger/16 text-danger" : "bg-warn/16 text-warn")}</> },
+            { value: "firewall", label: <>Pare-feu{count(counts.firewall, "bg-warn/16 text-warn")}</> },
+            { value: "fail2ban", label: <>fail2ban{count(counts.fail2ban)}</> },
+            { value: "access", label: <>Accès SSH{count(counts.access)}</> },
+          ]}
+        />
+        {sub === "audit" && (
+          <Button size="sm" className="ml-auto" icon={<RefreshCw size={13} className={loading ? "animate-spin" : ""} />} disabled={loading} onClick={reload}>
             Relancer l'audit
           </Button>
-        )
-      }
-    >
-      {/* Les quatre panneaux restent montés : leurs compteurs s'affichent dans les onglets dès
-          l'arrivée sur la page, et revenir sur un onglet ne relance pas sa lecture. */}
-      <div className={tab === "audit" ? "flex flex-col gap-6 px-7 py-5" : "hidden"}>
-        {error && <ErrorState message={error} onRetry={() => void load()} retryLabel="Relancer l'audit" />}
+        )}
+      </div>
+
+      {/* Les quatre panneaux restent montés : leurs compteurs s'affichent dans le sélecteur, et revenir
+          sur un panneau ne relance pas sa lecture. */}
+      <div className={sub === "audit" ? "flex flex-col gap-6" : "hidden"}>
+        {error && <ErrorState message={error} onRetry={reload} retryLabel="Relancer l'audit" />}
         {!report && !error && <Loading label="Audit en cours… (lecture seule)" rows={5} />}
-        {report && score != null && (
+        {report && summary && (
           <>
             <Card className="flex flex-wrap items-center gap-6">
-              <ScoreGauge score={score} />
+              <ScoreGauge score={summary.score} />
               <div className="min-w-0 flex-1">
-                <h2 className="text-[15px] font-semibold">
-                  {score >= 90 ? "Serveur bien protégé" : score >= 70 ? "Quelques points à renforcer" : score >= 40 ? "Des failles à corriger" : "Serveur exposé"}
-                </h2>
+                <h2 className="text-[15px] font-semibold">{scoreVerdict(summary.score)}</h2>
                 <p className="mt-0.5 text-[13px] text-muted">
-                  {problems.length === 0
+                  {summary.problems.length === 0
                     ? "Aucun problème détecté."
-                    : `${problems.length} point${problems.length > 1 ? "s" : ""} à traiter${serious ? `, dont ${serious} prioritaire${serious > 1 ? "s" : ""}` : ""}.`}{" "}
-                  {ok.length} point{ok.length > 1 ? "s" : ""} conforme{ok.length > 1 ? "s" : ""}
-                  {ignored.length ? ` · ${ignored.length} ignoré${ignored.length > 1 ? "s" : ""}` : ""}.
+                    : `${summary.problems.length} point${summary.problems.length > 1 ? "s" : ""} à traiter${summary.serious ? `, dont ${summary.serious} prioritaire${summary.serious > 1 ? "s" : ""}` : ""}.`}{" "}
+                  {summary.ok.length} conforme{summary.ok.length > 1 ? "s" : ""}
+                  {ignored.length ? `, ${ignored.length} ignoré${ignored.length > 1 ? "s" : ""}` : ""}.
                 </p>
-                <p className="mt-2 text-xs text-faint">Lecture seule : chaque correction montre son script et attend ton accord.</p>
+                <p className="mt-2 text-xs text-faint">
+                  {report.os}, SSH sur le port {report.sshPorts.join(", ") || "?"}. Lecture seule : chaque correction montre son script et attend ton accord.
+                </p>
               </div>
             </Card>
 
             {GROUPS.map((g) => {
-              const list = problems.filter((f) => g.severities.includes(f.severity)).sort((x, y) => PENALTY[y.severity] - PENALTY[x.severity]);
+              const list = summary.problems.filter((f) => g.severities.includes(f.severity)).sort((x, y) => PENALTY[y.severity] - PENALTY[x.severity]);
               if (!list.length) return null;
               return (
                 <Section key={g.title} title={g.title} count={list.length}>
-                  <div className="flex flex-col gap-2">
+                  <Card padded={false} className="divide-y divide-border">
                     {list.map((f) => (
-                      <Card key={f.id} className="flex items-start gap-3 !py-3">
+                      <div key={f.id} className="flex items-start gap-3 px-4 py-3">
                         <div className="mt-0.5">
                           <SeverityIcon s={f.severity} />
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium">{f.title}</span>
+                            <span className="text-[13px] font-medium">{f.title}</span>
                             <Badge tone={TONE[f.severity]}>{LABEL[f.severity]}</Badge>
                           </div>
-                          {f.detail && <p className="mt-1 text-[13px] text-muted">{f.detail}</p>}
+                          {f.detail && <p className="mt-0.5 text-xs text-muted">{f.detail}</p>}
                         </div>
                         <div className="flex shrink-0 items-center gap-1.5">
                           <Button size="sm" variant="ghost" onClick={() => void ignore(f)}>
@@ -191,27 +176,27 @@ function Security({ serverId }: { serverId: string }) {
                           </Button>
                           {f.fix && (
                             <Button size="sm" variant={g.severities.includes("critical") ? "primary" : "outline"} icon={<Wrench size={13} />} onClick={() => void startFix(f)}>
-                              {f.fixLabel}
+                              {f.fix === "apply-updates" ? "Voir les mises à jour" : f.fixLabel}
                             </Button>
                           )}
                         </div>
-                      </Card>
+                      </div>
                     ))}
-                  </div>
+                  </Card>
                 </Section>
               );
             })}
 
-            {problems.length === 0 && (
+            {summary.problems.length === 0 && (
               <ResultBanner tone="ok" title="Aucun problème détecté">
-                <span className="text-xs text-muted">Relance l'audit après une mise à jour ou un changement de configuration.</span>
+                Relance l'audit après une mise à jour ou un changement de configuration.
               </ResultBanner>
             )}
 
-            {ok.length > 0 && (
-              <Section title="Points conformes" count={ok.length}>
+            {summary.ok.length > 0 && (
+              <Section title="Points conformes" count={summary.ok.length}>
                 <div className="flex flex-wrap gap-2">
-                  {ok.map((f) => (
+                  {summary.ok.map((f) => (
                     <span key={f.id} className="flex items-center gap-1.5 rounded-full border border-ok/30 px-3 py-1 text-xs">
                       <CheckCircle2 size={12} className="text-ok" /> {f.title}
                     </span>
@@ -225,17 +210,17 @@ function Security({ serverId }: { serverId: string }) {
                 title="Constats ignorés"
                 count={ignored.length}
                 actions={
-                  <Button size="sm" variant="ghost" onClick={() => setShowIgnored((v) => !v)}>
+                  <Button size="sm" variant="ghost" aria-expanded={showIgnored} onClick={() => setShowIgnored((v) => !v)}>
                     {showIgnored ? "Masquer" : "Afficher"}
                   </Button>
                 }
               >
                 {showIgnored && (
-                  <div className="flex flex-col gap-2">
+                  <Card padded={false} className="divide-y divide-border">
                     {ignored.map((f) => {
                       const current = report.findings.find((x) => x.id === f.findingId);
                       return (
-                        <div key={f.findingId} className="flex items-start gap-3 rounded-lg border border-border bg-panel/60 px-4 py-2.5 text-sm">
+                        <div key={f.findingId} className="flex items-start gap-3 px-4 py-2.5 text-[13px]">
                           <Archive size={15} className="mt-0.5 shrink-0 text-muted" />
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
@@ -251,20 +236,20 @@ function Security({ serverId }: { serverId: string }) {
                         </div>
                       );
                     })}
-                  </div>
+                  </Card>
                 )}
               </Section>
             )}
           </>
         )}
       </div>
-      <div className={tab === "firewall" ? "px-7 py-5" : "hidden"}>
+      <div className={sub === "firewall" ? "contents" : "hidden"}>
         <Firewall serverId={serverId} onCount={onCount.firewall} onAudit={toAudit} />
       </div>
-      <div className={tab === "fail2ban" ? "px-7 py-5" : "hidden"}>
+      <div className={sub === "fail2ban" ? "contents" : "hidden"}>
         <Fail2ban serverId={serverId} onCount={onCount.fail2ban} onAudit={toAudit} />
       </div>
-      <div className={tab === "access" ? "px-7 py-5" : "hidden"}>
+      <div className={sub === "access" ? "contents" : "hidden"}>
         <Access serverId={serverId} onCount={onCount.access} />
       </div>
       {fixing && (
@@ -275,21 +260,21 @@ function Security({ serverId }: { serverId: string }) {
           onClose={() => setFixing(null)}
           onDone={() => {
             setFixing(null);
-            void load();
+            reload();
           }}
         />
       )}
-    </PageLayout>
+    </>
   );
 }
 
 /** Jauge en demi-cercle : 100 = rien à signaler, chaque constat retire des points selon sa gravité. */
-function ScoreGauge({ score }: { score: number }) {
+export function ScoreGauge({ score, small }: { score: number; small?: boolean }) {
   const r = 44;
   const len = Math.PI * r;
   const color = score >= 90 ? "var(--color-ok)" : score >= 70 ? "var(--color-accent)" : score >= 40 ? "var(--color-warn)" : "var(--color-danger)";
   return (
-    <div className="relative h-[70px] w-[120px] shrink-0" role="meter" aria-valuenow={score} aria-valuemin={0} aria-valuemax={100} aria-label="Score de sécurité">
+    <div className={`relative shrink-0 ${small ? "h-[42px] w-[72px]" : "h-[70px] w-[120px]"}`} role="meter" aria-valuenow={score} aria-valuemin={0} aria-valuemax={100} aria-label="Score de sécurité">
       <svg viewBox="0 0 120 70" className="h-full w-full">
         <path d={`M 16 62 A ${r} ${r} 0 0 1 104 62`} fill="none" stroke="var(--color-raised)" strokeWidth="10" strokeLinecap="round" />
         <path
@@ -303,8 +288,8 @@ function ScoreGauge({ score }: { score: number }) {
         />
       </svg>
       <div className="absolute inset-x-0 bottom-0 text-center">
-        <span className="text-[22px] leading-none font-semibold tabular-nums">{score}</span>
-        <span className="text-xs text-muted">/100</span>
+        <span className={`${small ? "text-[15px]" : "text-[22px]"} leading-none font-semibold tabular-nums`}>{score}</span>
+        {!small && <span className="text-xs text-muted">/100</span>}
       </div>
     </div>
   );

@@ -15,7 +15,6 @@ import {
   ScrollText,
   Server,
   Settings,
-  ShieldCheck,
   SquareTerminal,
   type LucideIcon,
 } from "lucide-react";
@@ -35,7 +34,6 @@ export type SectionId =
   | "mesh"
   | "github"
   | "backups"
-  | "security"
   | "system"
   | "help"
   | "settings";
@@ -77,8 +75,7 @@ export const SECTIONS: Section[] = [
   { id: "sites", group: "serveur", label: "Sites", icon: Globe, perServer: true, description: "Sous-domaines nginx, certificats SSL, sauvegardes de configuration." },
   { id: "logs", group: "serveur", label: "Journaux", icon: ScrollText, perServer: true, description: "Logs Docker, systemd et nginx en direct, fusionnés et filtrables." },
   { id: "backups", group: "serveur", label: "Sauvegardes", icon: DatabaseBackup, perServer: true, description: "Sauvegardes planifiées et chiffrées (restic), restauration." },
-  { id: "security", group: "serveur", label: "Sécurité", icon: ShieldCheck, perServer: true, description: "Audit du serveur et corrections guidées." },
-  { id: "system", group: "serveur", label: "Système", icon: Power, perServer: true, description: "Redémarrage, extinction, nom d'hôte, fuseau, mises à jour, et alimentation via l'API de l'hébergeur." },
+  { id: "system", group: "serveur", label: "Système", icon: Power, perServer: true, description: "Redémarrage, extinction, audit de sécurité, pare-feu, fail2ban, mises à jour, inventaire et alimentation via l'API de l'hébergeur." },
   { id: "help", group: "pied", label: "Aide", icon: CircleHelp, description: "Comment marche chaque fonctionnalité et ce qu'elle demande sur le serveur." },
   { id: "settings", group: "pied", label: "Réglages", icon: Settings, description: "Préférences, raccourcis, assistant IA, synchronisation et journal d'actions." },
 ];
