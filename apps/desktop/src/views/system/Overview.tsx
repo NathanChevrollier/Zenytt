@@ -1,8 +1,8 @@
 // Vue d'ensemble : fiche du serveur (nom d'hôte et fuseau modifiables sur place), états à traiter
 // et zone d'alimentation (redémarrer, programmer, éteindre), avec l'attente du retour après un redémarrage.
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { CalendarClock, Check, Clock, Cpu, Globe, Loader2, MemoryStick, Pencil, PowerOff, RotateCw, Server, ShieldCheck, X } from "lucide-react";
-import { api, errorMessage, formatBytes, formatDuration, type SystemInfo, type SystemUpdate } from "../../lib/api";
+import { CalendarClock, Check, Clock, Cpu, Globe, HardDrive, Loader2, MemoryStick, Pencil, PowerOff, RotateCw, Server, ShieldCheck, X } from "lucide-react";
+import { api, diskCounts, errorMessage, formatBytes, formatDuration, type Disk, type SystemInfo, type SystemUpdate } from "../../lib/api";
 import { formatAt, scoreVerdict, updateGroup, validHostname } from "../../lib/system";
 import { ScoreGauge, type SecTab } from "./Security";
 import { useApp } from "../../lib/store";
@@ -151,6 +151,8 @@ export default function Overview({
           </Fact>
         </dl>
       </Card>
+
+      <Storage serverId={serverId} />
 
       {(info.scheduled || info.rebootRequired || updates) && (
         <div className="flex flex-col gap-2">
@@ -469,5 +471,51 @@ function PowerModal({ mode, name, onClose, onConfirm }: { mode: PowerKind | "sch
         )}
       </form>
     </Modal>
+  );
+}
+
+/** Espace disque des volumes suivis (mêmes règles que la supervision : lecture seule et volumes écartés masqués). */
+function Storage({ serverId }: { serverId: string }) {
+  const [disks, setDisks] = useState<Disk[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setDisks(null);
+    setError(null);
+    api.metrics(serverId).then(
+      (m) => setDisks(m.disks.filter(diskCounts).sort((a, b) => a.mount.localeCompare(b.mount))),
+      (e) => setError(errorMessage(e)),
+    );
+  }, [serverId]);
+
+  return (
+    <Card padded={false}>
+      <div className="flex items-center gap-2 border-b border-border px-5 py-3 text-sm font-medium">
+        <HardDrive size={14} className="text-muted" /> Stockage
+      </div>
+      <div className="flex flex-col gap-3 px-5 py-4">
+        {error ? (
+          <p className="text-[13px] text-muted">Espace disque indisponible : {error}</p>
+        ) : !disks ? (
+          <Loading />
+        ) : disks.length === 0 ? (
+          <p className="text-[13px] text-muted">Aucun volume à suivre.</p>
+        ) : (
+          disks.map((d) => {
+            const p = d.total ? (d.used / d.total) * 100 : 0;
+            return (
+              <div key={d.mount} className="grid grid-cols-[minmax(0,160px)_minmax(0,1fr)_auto] items-center gap-3 text-[13px]">
+                <span className="truncate font-mono text-xs" title={`${d.mount} (${d.device})`}>
+                  {d.mount}
+                </span>
+                <Meter value={p} height={6} />
+                <span className="text-right text-xs text-muted tabular-nums">
+                  {formatBytes(d.total - d.used)} libres sur {formatBytes(d.total)} · {Math.round(p)} %
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </Card>
   );
 }
