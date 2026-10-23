@@ -3,7 +3,8 @@ name: Mobile
 # Zenytt Compagnon (apps/mobile) : APK Android et app iOS. Lancé à la main ou par un tag vX.Y.Z, à côté
 # de release.yml. Les dossiers `gen/` (projets Gradle et Xcode) ne sont pas dans le dépôt : ils sont
 # générés ici par `tauri android init` / `tauri ios init`. Aucune signature de publication : l'APK est
-# signé avec la clé de débogage (installable à la main), l'app iOS est compilée pour le simulateur.
+# signé avec la clé de débogage (installable à la main), l'IPA iOS n'est pas signée (AltStore / SideStore
+# la signent avec l'identifiant Apple gratuit de l'utilisateur). Sur un tag, les deux sont joints à la release.
 on:
   workflow_dispatch:
   push:
@@ -81,8 +82,6 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 60
-    # Le chemin iOS n'a jamais tourné sur un Mac : en attendant le premier essai, son échec ne bloque rien.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -112,7 +111,57 @@ jobs:
       # `tauri ios build` compile le Rust (hook Xcode) puis archive ; l'export (qui exige un certificat)
       # échoue, ce qui est attendu : seule l'archive nous intéresse.
       - name: Archive iOS (arm64, release)
-        run: pnpm --filter zenytt-mobile tauri ios build --target aarch64 -v || echo "export échoué (attendu)"
+        run: |
+          pnpm --filter zenytt-mobile tauri ios build --target aarch64 -v || echo "export échoué (attendu)"
+          test -d apps/mobile/src-tauri/gen/apple/build/zenytt-mobile_iOS.xcarchive
       - name: Empaqueter l'IPA
         run: |
-          find apps/mobile/src-tauri/gen/apple -maxdepth 6 \( -name '*.xcarchive' -o -name '*.app' -o -name '*.ipa' \)
+          version=$(node -p "require('./apps/mobile/src-tauri/tauri.conf.json').version")
+          app="apps/mobile/src-tauri/gen/apple/build/zenytt-mobile_iOS.xcarchive/Products/Applications/Zenytt Compagnon.app"
+          # Contrôles : identifiant du bundle et binaire arm64 (le Rust est lié statiquement dans l'exécutable).
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")" = dev.zenytt.companion
+          exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
+          lipo -archs "$app/$exe" | grep -qw arm64
+          size=$(stat -f %z "$app/$exe")
+          echo "exécutable : $exe ($size octets)"
+          test "$size" -gt 5000000
+          mkdir -p out/Payload
+          cp -R "$app" out/Payload/
+          (cd out && zip -qry "Zenytt-Compagnon-$version.ipa" Payload)
+          unzip -l "out/Zenytt-Compagnon-$version.ipa" | head -30
+          ls -l out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zenytt-compagnon-ios
+          path: out/*.ipa
+          if-no-files-found: error
+
+  # Sur un tag : joint l'APK et l'IPA à la release créée par release.yml (brouillon, puis publiée).
+  attach:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [android, ios]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dl
+      - name: Joindre à la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          apk=$(find dl/zenytt-compagnon-android -name '*.apk' | head -1)
+          test -n "$apk"
+          cp "$apk" "Zenytt-Compagnon-$version.apk"
+          cp dl/zenytt-compagnon-ios/*.ipa .
+          # release.yml crée la release en brouillon dès son premier job : on attend qu'elle existe.
+          for _ in $(seq 40); do
+            gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break
+            sleep 30
+          done
+          gh release view "$GITHUB_REF_NAME" >/dev/null
+          gh release upload "$GITHUB_REF_NAME" "Zenytt-Compagnon-$version.apk" "Zenytt-Compagnon-$version.ipa" --clobber
