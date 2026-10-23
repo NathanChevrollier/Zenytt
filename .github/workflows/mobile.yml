@@ -99,10 +99,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter zenytt-mobile tauri icon ../desktop/app-icon.svg
       - run: pnpm --filter zenytt-mobile tauri ios init --ci
-      # Simulateur : pas de compte Apple Developer ni de certificat nécessaires.
-      - run: pnpm --filter zenytt-mobile tauri ios build --debug --target aarch64-sim
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: zenytt-compagnon-ios-simulateur
-          path: apps/mobile/src-tauri/gen/apple/build
-          if-no-files-found: warn
+      # IPA non signée pour iPhone réel (arm64, release) : AltStore / SideStore la signent ensuite avec
+      # l'identifiant Apple gratuit de l'utilisateur. Aucun compte Apple Developer ni certificat ici.
+      - name: Désactiver la signature du projet Xcode
+        working-directory: apps/mobile/src-tauri/gen/apple
+        run: |
+          cat project.yml
+          ls
