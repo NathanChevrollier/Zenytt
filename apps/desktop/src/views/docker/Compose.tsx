@@ -9,7 +9,7 @@ import ConditionBadge from "./ConditionBadge";
 import PortChips, { isExposed } from "./PortChips";
 import { stateTone, useContainerActions, useContainerStats } from "./shared";
 import { containerKey, projectCounts, projectDir, projectNameFromPath } from "../../lib/compose";
-import { confirmDestructive, groupByClient, lockKey, useItemFolders, useLocks } from "../../lib/folders";
+import { composeLockKey, confirmDestructive, groupByClient, useItemFolders, useLocks } from "../../lib/folders";
 import { ClientFilter, clientMenuItems } from "../../components/ClientTools";
 
 const FileEditor = lazy(() => import("../../components/FileEditor"));
@@ -23,7 +23,7 @@ const SERVICE_GRID ="grid grid-cols-[minmax(140px,1.1fr)_minmax(0,1fr)_minmax(0,
 export default function Compose({ serverId, data, docker, reload, onNew, onCatalog }: { serverId: string; data: DockerOverview; docker: string; reload: () => Promise<void>; onNew: () => void; onCatalog: () => void }) {
   const { ask, notify, openTab } = useAppPick("ask", "notify", "openTab");
   const stats = useContainerStats(serverId);
-  const containerActions = useContainerActions(serverId, docker, reload);
+  const containerActions = useContainerActions(serverId, docker, reload, data.projects);
   const [busy, setBusy] = useState<string | null>(null);
   const [output, setOutput] = useState<{ title: string; text: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -36,7 +36,7 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   const clients = useItemFolders("compose", serverId);
   const locks = useLocks(serverId);
   const [clientFilter, setClientFilter] = useState("");
-  const lockOf = (p: ComposeProject) => lockKey("compose", projectDir(p));
+  const lockOf = (p: ComposeProject) => composeLockKey(p);
   if (data.projects.length === 0) {
     return (
       <EmptyState
@@ -60,8 +60,8 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
 
   const act = async (p: ComposeProject, action: string, label: string, danger?: string) => {
     const locked = locks.isLocked(lockOf(p));
-    // Un projet verrouillé demande une confirmation (nom à retaper) même pour un simple redémarrage.
-    if (danger || (locked && action === "restart")) {
+    // Un projet verrouillé demande une confirmation (nom à retaper) pour toute action qui interrompt le service.
+    if (danger || (locked && ["stop", "down", "rebuild", "restart", "remove"].includes(action))) {
       const ok = await confirmDestructive({ title: `${label} « ${p.name} » ?`, body: danger ?? "Le service sera brièvement interrompu.", confirmLabel: label, name: p.name, locked });
       if (!ok) return;
     }
@@ -148,14 +148,6 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
         void act(p, "down", "Arrêter et supprimer (down)", "Les conteneurs du projet seront arrêtés et supprimés (les volumes nommés sont conservés). Le site sera indisponible."),
     },
   ];
-
-  /** Action sur un service seul : verrouillé, le projet demande de retaper son nom. */
-  const serviceAct = async (c: Container, action: string) => {
-    const p = projectOf(c);
-    const locked = !!p && locks.isLocked(lockOf(p));
-    if (locked && !(await confirmDestructive({ title: `${action === "remove" ? "Supprimer" : action === "stop" ? "Arrêter" : "Redémarrer"} ${c.name} ?`, body: `Le projet « ${p.name} » est verrouillé.`, confirmLabel: "Confirmer", name: p.name, locked }))) return false;
-    return containerActions.act(c, action);
-  };
 
   const groups = groupByClient(data.projects, (p) => clients.folderOf(projectDir(p)), clientFilter);
 
@@ -350,10 +342,10 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
                                 <IconButton size="sm" title="Shell dans le conteneur" onClick={() => containerActions.shell(c)}>
                                   <SquareTerminal size={14} />
                                 </IconButton>
-                                <IconButton size="sm" title="Redémarrer ce service" disabled={!!containerActions.busy} onClick={() => void serviceAct(c, "restart")}>
+                                <IconButton size="sm" title="Redémarrer ce service" disabled={!!containerActions.busy} onClick={() => void containerActions.act(c, "restart")}>
                                   <RotateCw size={14} className={containerActions.busy === c.id ? "animate-spin" : ""} />
                                 </IconButton>
-                                <IconButton size="sm" title="Arrêter ce service" disabled={!!containerActions.busy} onClick={() => void serviceAct(c, "stop")}>
+                                <IconButton size="sm" title="Arrêter ce service" disabled={!!containerActions.busy} onClick={() => void containerActions.act(c, "stop")}>
                                   <Square size={13} />
                                 </IconButton>
                               </>
@@ -397,7 +389,7 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
           stats={stats[selected.id]}
           project={projectOf(selected)}
           onClose={() => setSelectedId(null)}
-          onAction={(a) => void serviceAct(selected, a).then((ok) => ok && a === "remove" && setSelectedId(null))}
+          onAction={(a) => void containerActions.act(selected, a).then((ok) => ok && a === "remove" && setSelectedId(null))}
           onShell={() => containerActions.shell(selected)}
           onLogs={() => containerActions.logs(selected)}
           onTunnel={(port) => void tunnelTo(serverId, selected, port)}

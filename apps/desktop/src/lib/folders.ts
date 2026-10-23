@@ -1,5 +1,6 @@
 // Dossiers de classement propres à ce PC, par serveur : conteneurs Docker et machines virtuelles.
 // Rien ne change sur le serveur ; l'état est gardé avec l'espace de travail (zenytt.json).
+import { projectDir } from "./compose";
 import { useApp, type Folders } from "./store";
 
 /** Où vivent les dossiers de chaque sorte d'élément dans l'état sauvegardé. */
@@ -54,6 +55,9 @@ export function useItemFolders(kind: FolderKind, serverId: string) {
 
 /** Clé de verrou d'un site (par domaine) ou d'un projet compose (par dossier). */
 export const lockKey = (kind: "site" | "compose", id: string) => `${kind}:${id}`;
+
+/** Clé de verrou d'un projet compose : son dossier, ou son nom quand aucun fichier n'est connu (sinon tous partageraient `compose:/`). */
+export const composeLockKey = (p: { name: string; configFiles: string }) => (p.configFiles.trim() ? lockKey("compose", projectDir(p)) : `compose:name:${p.name}`);
 
 const NO_LOCKS: string[] = [];
 

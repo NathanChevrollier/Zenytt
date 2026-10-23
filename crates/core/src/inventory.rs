@@ -67,6 +67,9 @@ fn script() -> String {
     for (id, _, cmd, _) in COMPONENTS {
         s += &format!("o=$({cmd}) && [ -n \"$o\" ] && {{ echo @@{id}; printf '%s\\n' \"$o\" | head -n 1; }}\n");
     }
+    // Sans `zenyttd`, la dernière commande échouerait (127) : on force un statut de succès.
+    s += "true
+";
     s
 }
 
@@ -251,6 +254,14 @@ pub async fn images(conn: &Connection, access: Access, sudo: Option<&str>, check
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn le_script_finit_par_un_succes_garanti() {
+        assert!(script().trim_end().ends_with(
+            "
+true"
+        ));
+    }
 
     #[test]
     fn versions() {

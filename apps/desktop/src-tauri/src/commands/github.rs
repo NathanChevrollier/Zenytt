@@ -153,7 +153,7 @@ pub async fn github_clone(
         let conn = shell_conn(&store, &sessions, &server_id).await?;
         let with_token = secrets::has(OWNER, "token");
         let (cmd, target) = github::clone_command(&owner, &repo, &folder, with_token).map_err(err)?;
-        run_git(&conn, Ok(cmd), with_token).await?;
+        zenytt_core::ssh::long(run_git(&conn, Ok(cmd), with_token)).await?;
         Ok(target)
     }
     .await;
@@ -177,7 +177,7 @@ pub async fn github_pull(
         let conn = shell_conn(&store, &sessions, &server_id).await?;
         verify_origin(&conn, &owner, &repo, &path).await?;
         let with_token = secrets::has(OWNER, "token");
-        run_git(&conn, github::pull_command(&path, with_token), with_token).await
+        zenytt_core::ssh::long(run_git(&conn, github::pull_command(&path, with_token), with_token)).await
     }
     .await;
     track(&audit, &store, &server_id, "github.pull", &detail, r)

@@ -17,7 +17,7 @@ type StateFilter = "all" | "running" | "stopped";
 
 export default function Containers({ serverId, data, docker, reload }: { serverId: string; data: DockerOverview; docker: string; reload: () => Promise<void> }) {
   const stats = useContainerStats(serverId);
-  const { busy, act: runAction, shell, logs } = useContainerActions(serverId, docker, reload);
+  const { busy, act: runAction, shell, logs } = useContainerActions(serverId, docker, reload, data.projects);
   const occasional = new Set(data.occasional);
   const onPurpose = new Set(data.onPurpose ?? []);
   const setOnPurpose = async (c: Container, value: boolean) => {

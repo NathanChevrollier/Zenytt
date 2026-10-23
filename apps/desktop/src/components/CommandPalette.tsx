@@ -8,6 +8,7 @@ import { openDesktop } from "./RemoteDesktops";
 import { needsShell, SECTIONS } from "../sections";
 import { GUIDES } from "../lib/guides";
 import { ensureConnected, useApp, useAppPick } from "../lib/store";
+import { composeLockKey, confirmDestructive } from "../lib/folders";
 import { useShell } from "../lib/shell";
 import { peekCached } from "../lib/cache";
 import { display, shortcutOf } from "../lib/shortcuts";
@@ -175,7 +176,9 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
           hint: server.name,
           icon: <RotateCw size={15} />,
           run: async () => {
-            if (!(await ask({ title: `Redémarrer ${c.name} ?`, confirmLabel: "Redémarrer" }))) return;
+            const p = docker?.projects.find((x) => x.name === c.composeProject);
+            const locked = !!p && !!useApp.getState().folders.locks?.[sid]?.includes(composeLockKey(p));
+            if (!(await confirmDestructive({ title: `Redémarrer ${c.name} ?`, body: locked ? `Le projet « ${p.name} » est verrouillé.` : "", confirmLabel: "Redémarrer", name: p?.name ?? c.name, locked, danger: false }))) return;
             try {
               await api.dockerAction(sid, c.id, "restart");
               notify(`${c.name} redémarré`, "success");
@@ -192,7 +195,8 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
           hint: "pull, redémarrage, vérification, retour arrière si échec",
           icon: <Layers size={15} />,
           run: async () => {
-            if (!(await ask({ title: `Déployer ${p.name} ?`, body: "Télécharge les nouvelles images, redémarre le projet et revient à la version précédente si la vérification échoue.", confirmLabel: "Déployer" }))) return;
+            const locked = !!useApp.getState().folders.locks?.[sid]?.includes(composeLockKey(p));
+            if (!(await confirmDestructive({ title: `Déployer ${p.name} ?`, body: "Télécharge les nouvelles images, redémarre le projet et revient à la version précédente si la vérification échoue.", confirmLabel: "Déployer", name: p.name, locked, danger: false }))) return;
             try {
               const host = await api.deploySuggestHost(sid, p.name).catch(() => null);
               const cmd = await api.deployPrepare(sid, p, host);

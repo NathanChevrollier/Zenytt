@@ -198,11 +198,13 @@ pub fn same_repo(url: &str, owner: &str, repo: &str) -> bool {
 /// Préfixe des commandes qui parlent à GitHub. Avec un jeton : il est lu sur l'entrée standard (jamais
 /// dans la ligne de commande) et donné à git par un assistant limité à `https://github.com`, non
 /// enregistré dans `.git/config`. Sans jeton : pas de saisie interactive.
+/// Dans les deux cas git est enveloppé avec un durcissement : la config du dépôt (souvent d'un tiers) ne
+/// doit ni rediriger le jeton (`http.proxy`, `sslVerify`) ni lancer de code (`fsmonitor`, hooks).
 fn auth_prefix(with_token: bool) -> &'static str {
     if with_token {
-        "IFS= read -r ZT; export ZT; GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT; git() { command git -c credential.helper= -c 'credential.https://github.com.helper=!f() { echo username=x-access-token; echo \"password=$ZT\"; }; f' \"$@\"; }; "
+        "IFS= read -r ZT; export ZT; GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT; git() { command git -c http.sslVerify=true -c http.proxy= -c core.fsmonitor=false -c core.hooksPath=/dev/null -c credential.helper= -c 'credential.https://github.com.helper=!f() { echo username=x-access-token; echo \"password=$ZT\"; }; f' \"$@\"; }; "
     } else {
-        "GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT; "
+        "GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT; git() { command git -c http.sslVerify=true -c http.proxy= -c core.fsmonitor=false -c core.hooksPath=/dev/null \"$@\"; }; "
     }
 }
 
@@ -256,9 +258,11 @@ pub fn details_command(dirs: &[String]) -> Result<String> {
     }
     let list: Vec<String> = dirs.iter().map(|d| shell_quote(d)).collect();
     Ok(sh(&format!(
-        "g() {{ git -c safe.directory='*' -C \"$d\" \"$@\"; }}; for d in {}; do \
-b=$(g symbolic-ref --short -q HEAD || echo HEAD); n=$(g status --porcelain 2>/dev/null | wc -l | tr -d ' '); \
-c=$(g rev-list --left-right --count 'HEAD...@{{u}}' 2>/dev/null | tr '\\t' ' '); l=$(g log -1 --format='%h%x09%cI%x09%s' 2>/dev/null); \
+        "g() {{ git -c safe.directory='*' -C \"$d\" \"$@\"; }}; \
+s() {{ git -c core.fsmonitor=false -c log.showSignature=false -c gpg.program=false -c core.hooksPath=/dev/null -C \"$d\" \"$@\"; }}; for d in {}; do \
+b=$(g symbolic-ref --short -q HEAD || echo HEAD); c=$(g rev-list --left-right --count 'HEAD...@{{u}}' 2>/dev/null | tr '\\t' ' '); \
+if [ -O \"$d\" ] && [ -O \"$d/.git\" ]; then n=$(s status --porcelain --ignore-submodules 2>/dev/null | wc -l | tr -d ' '); l=$(s log -1 --format='%h%x09%cI%x09%s' 2>/dev/null); \
+else n=0; l=$(printf '%s\\t%s\\t%s' - - 'propriétaire différent'); fi; \
 printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"$d\" \"$b\" \"$n\" \"${{c:--}}\" \"$l\"; done",
         list.join(" ")
     )))
@@ -398,6 +402,31 @@ mod tests {
         assert!(pull_command("../x", false).is_err() && fetch_command("rel", false).is_err());
         assert!(details_command(&["/srv/a".into(), "/srv/b".into()]).unwrap().contains("'/srv/b'"));
         assert!(details_command(&[]).is_err());
+    }
+
+    #[test]
+    fn status_et_log_exigent_le_meme_proprietaire() {
+        let c = details_command(&["/srv/a".into()]).unwrap();
+        // `status` et `log` passent par `s()` : jamais de safe.directory, durcis, derrière le test de propriétaire.
+        assert!(c.contains("[ -O") && c.contains("propriétaire différent"));
+        assert!(c.contains("s status --porcelain --ignore-submodules") && c.contains("s log -1"));
+        assert!(!c.contains("g status") && !c.contains("g log"));
+        let s_def = &c[c.find("s() {").unwrap()..];
+        let s_def = &s_def[..s_def.find("; };").unwrap()];
+        assert!(!s_def.contains("safe.directory"));
+        for h in ["core.fsmonitor=false", "log.showSignature=false", "gpg.program=false", "core.hooksPath=/dev/null"] {
+            assert!(s_def.contains(h), "{h}");
+        }
+    }
+
+    #[test]
+    fn git_authentifie_est_durci() {
+        for t in [true, false] {
+            let c = pull_command("/srv/a", t).unwrap();
+            for h in ["http.sslVerify=true", "http.proxy=", "core.fsmonitor=false", "core.hooksPath=/dev/null"] {
+                assert!(c.contains(h), "{t} {h}");
+            }
+        }
     }
 
     #[test]

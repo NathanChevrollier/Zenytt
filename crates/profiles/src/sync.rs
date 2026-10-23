@@ -343,7 +343,8 @@ fn apply(store: &Store, p: &Payload, include_secrets: bool) -> Result<(Vec<Strin
         let ri = gone(d.identities.iter().map(|i| i.id.clone()).collect(), &|id| p.identities.iter().any(|i| i.id == id));
         let rt = gone(d.tunnels.iter().map(|t| t.id.clone()).collect(), &|id| p.tunnels.iter().any(|t| t.id == id));
         let rd = gone(d.desktops.iter().map(|r| r.id.clone()).collect(), &|id| p.desktops.iter().any(|r| r.id == id));
-        d.servers = p.servers.clone();
+        // Jamais de serveur à identifiant réservé (il viserait le jeton GitHub, la clé IA…).
+        d.servers = p.servers.iter().filter(|s| !export::is_reserved_owner(&s.id)).cloned().collect();
         d.snippets = p.snippets.clone();
         d.tunnels = p.tunnels.clone();
         d.identities = p.identities.clone();
@@ -368,7 +369,7 @@ fn apply(store: &Store, p: &Payload, include_secrets: bool) -> Result<(Vec<Strin
     for id in &removed_desktops {
         secrets::delete_all(&RemoteDesktop::secret_owner(id));
     }
-    for id in &removed_servers {
+    for id in removed_servers.iter().filter(|id| !export::is_reserved_owner(id)) {
         secrets::delete_all(id);
         secrets::delete_all(&ServerProfile::provider_owner(id));
     }
@@ -619,6 +620,16 @@ mod tests {
         assert!(b.read(|d| d.servers.is_empty()));
 
         assert!(run(&b, &t, "mauvaise").unwrap_err().contains("incorrecte"));
+    }
+
+    #[test]
+    fn apply_ignore_les_serveurs_a_id_reserve() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = store(dir.path());
+        s.write(|d| d.servers.push(server("github"))).unwrap();
+        let p = Payload { servers: vec![server("github"), server("vps")], ..Default::default() };
+        apply(&s, &p, false).unwrap();
+        assert_eq!(s.read(|d| d.servers.iter().map(|x| x.id.clone()).collect::<Vec<_>>()), vec!["vps".to_string()]);
     }
 
     #[test]
