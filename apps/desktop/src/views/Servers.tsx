@@ -358,15 +358,15 @@ function ServerDetail({ server, onEdit, moveItems }: { server: ServerView; onEdi
   const mem = m && m.memTotal ? (m.memUsed / m.memTotal) * 100 : null;
   const root = mainDisk(m?.disks);
   const disk = root && root.total ? (root.used / root.total) * 100 : null;
-  const go = (section: SectionId) => navigate(section, undefined, server.id);
+  const go = (section: SectionId, tab?: string) => navigate(section, tab, server.id);
 
-  const allJumps: { section: SectionId; label: string; icon: React.ReactNode; hint: string }[] = [
+  const allJumps: { section: SectionId; tab?: string; label: string; icon: React.ReactNode; hint: string }[] = [
     { section: "monitoring", label: "Supervision", icon: <Activity size={15} />, hint: summary?.connected ? (summary.alerts.length ? `${summary.alerts.length} alerte(s)` : "aucune alerte") : "métriques, processus" },
     { section: "files", label: "Fichiers", icon: <FolderTree size={15} />, hint: "explorateur SFTP" },
     { section: "docker", label: "Docker", icon: <Container size={15} />, hint: summary?.connected && summary.docker ? `${summary.containersRunning} conteneur(s)` : "conteneurs, compose" },
     { section: "databases", label: "Bases", icon: <Database size={15} />, hint: "SQL et Redis" },
     { section: "sites", label: "Sites", icon: <Globe size={15} />, hint: summary?.connected ? `${summary.certificates.length} certificat(s)` : "nginx, certificats" },
-    { section: "security", label: "Sécurité", icon: <ShieldCheck size={15} />, hint: "audit, pare-feu" },
+    { section: "system", tab: "security", label: "Sécurité", icon: <ShieldCheck size={15} />, hint: "audit, pare-feu" },
   ];
   const jumps = hasShell(server) ? allJumps : allJumps.filter((j) => j.section === "files");
 
@@ -473,7 +473,7 @@ function ServerDetail({ server, onEdit, moveItems }: { server: ServerView; onEdi
               <button
                 key={j.section}
                 type="button"
-                onClick={() => go(j.section)}
+                onClick={() => go(j.section, j.tab)}
                 className={`flex min-w-0 flex-col items-start gap-1 rounded-lg border border-border bg-subtle px-2.5 py-2 text-left transition-colors hover:border-border-strong ${FOCUS_RING}`}
               >
                 <span className="flex items-center gap-1.5 text-[13px] font-medium">

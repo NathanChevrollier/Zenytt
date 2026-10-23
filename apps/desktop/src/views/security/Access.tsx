@@ -45,7 +45,7 @@ export default function Access({ serverId, onCount }: { serverId: string; onCoun
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2 text-sm text-muted">
+      <div className="flex items-center gap-2 text-[13px] text-muted">
         Comptes pouvant se connecter (root et utilisateurs avec un shell) et clés SSH autorisées.
         <IconButton title="Actualiser" className="ml-auto" onClick={() => void load()}>
           <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
@@ -69,11 +69,11 @@ export default function Access({ serverId, onCount }: { serverId: string; onCoun
             </Button>
           </header>
           {u.keys.length === 0 ? (
-            <p className="px-4 py-2.5 text-sm text-muted">Aucune clé SSH : connexion par mot de passe uniquement (si autorisée).</p>
+            <p className="px-4 py-2.5 text-[13px] text-muted">Aucune clé SSH : connexion par mot de passe uniquement (si autorisée).</p>
           ) : (
             <ul className="divide-y divide-border/50">
               {u.keys.map((k) => (
-                <li key={k.line} className="flex items-center gap-3 px-4 py-2 text-sm">
+                <li key={k.line} className="flex items-center gap-3 px-4 py-2 text-[13px]">
                   <KeyRound size={14} className={k.current ? "text-accent" : "text-muted"} />
                   <span className="w-28 font-mono text-xs">{k.algorithm}</span>
                   <span className="min-w-0 flex-1">

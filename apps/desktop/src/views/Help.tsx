@@ -5,6 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowRight, Heart, MessagesSquare, Search, X } from "lucide-react";
 import { GUIDES, TOPICS, type Guide } from "../lib/guides";
 import { useAppPick } from "../lib/store";
+import { navigate } from "../lib/shell";
 import { SECTIONS } from "../sections";
 import PageLayout from "../components/PageLayout";
 import GuideContent from "../components/GuideContent";
@@ -27,7 +28,7 @@ const texteDe = (g: Guide) =>
     .toLowerCase();
 
 export default function HelpView() {
-  const { guide, guideInPage, openHelpPage, setSection } = useAppPick("guide", "guideInPage", "openHelpPage", "setSection");
+  const { guide, guideInPage, openHelpPage } = useAppPick("guide", "guideInPage", "openHelpPage");
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const article = useRef<HTMLDivElement>(null);
@@ -123,8 +124,8 @@ export default function HelpView() {
               <p className="text-[14px] leading-relaxed text-muted">{selected.summary}</p>
               {section && (
                 <div>
-                  <Button size="sm" icon={<ArrowRight size={13} />} onClick={() => setSection(section.id)}>
-                    Ouvrir {section.label}
+                  <Button size="sm" icon={<ArrowRight size={13} />} onClick={() => navigate(section.id, selected.tab)}>
+                    Ouvrir {selected.tab === "security" ? "Système › Sécurité" : section.label}
                   </Button>
                 </div>
               )}

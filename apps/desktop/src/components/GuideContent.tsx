@@ -5,6 +5,7 @@ import type { Guide } from "../lib/guides";
 import { api } from "../lib/api";
 import { usePanes } from "../lib/panes";
 import { useApp } from "../lib/store";
+import { navigate } from "../lib/shell";
 import { writeClipboard } from "../lib/clipboard";
 import { SECTIONS } from "../sections";
 import { Button, FOCUS_RING } from "./ui";
@@ -65,7 +66,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export default function GuideContent({ guide, showOpen = true }: { guide: Guide; showOpen?: boolean }) {
-  const setSection = useApp((s) => s.setSection);
   const section = guide.section ? SECTIONS.find((s) => s.id === guide.section) : undefined;
 
   return (
@@ -133,8 +133,8 @@ export default function GuideContent({ guide, showOpen = true }: { guide: Guide;
 
       {showOpen && section && (
         <div>
-          <Button size="sm" icon={<ArrowUpRight size={13} />} onClick={() => setSection(section.id)}>
-            Ouvrir {section.label}
+          <Button size="sm" icon={<ArrowUpRight size={13} />} onClick={() => navigate(section.id, guide.tab)}>
+            Ouvrir {guide.tab === "security" ? "Système › Sécurité" : section.label}
           </Button>
         </div>
       )}

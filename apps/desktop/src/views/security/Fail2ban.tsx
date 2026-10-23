@@ -154,7 +154,7 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex items-center gap-2 text-sm text-muted">
+      <div className="flex items-center gap-2 text-[13px] text-muted">
         fail2ban {state.version} · {jails.length} jail(s) actif(s)
         <Button size="sm" className="ml-auto" icon={<Settings2 size={13} />} onClick={() => setSettingsOpen(true)}>
           Réglages…
@@ -171,14 +171,14 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
 
       {recid.length > 0 && (
         <section className="flex flex-col gap-2 rounded-lg border border-warn/40 bg-warn/8 px-4 py-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-warn">
+          <div className="flex items-center gap-2 text-[13px] font-medium text-warn">
             <TriangleAlert size={16} />
             {recid.length === 1 ? "Une adresse déjà bannie recommence" : `${recid.length} adresses déjà bannies recommencent`}
           </div>
           <p className="text-xs text-muted">Débloquées au bout de la durée du jail, elles reviennent aussitôt. Un bannissement long ou définitif les écarte pour de bon.</p>
           <ul className="flex flex-col gap-1">
             {recid.slice(0, 6).map((r) => (
-              <li key={r.ip} className="flex flex-wrap items-center gap-2.5 text-sm">
+              <li key={r.ip} className="flex flex-wrap items-center gap-2.5 text-[13px]">
                 <button type="button" className="shrink-0 font-mono hover:text-accent" onClick={() => setDetail(r.ip)}>
                   {r.ip}
                 </button>
@@ -198,7 +198,7 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
       )}
 
       {myIp && !myIpIgnored && (
-        <div className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-sm ${myIpBanned ? "border-danger/40 bg-danger/10" : "border-warn/40 bg-warn/10"}`}>
+        <div className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-[13px] ${myIpBanned ? "border-danger/40 bg-danger/10" : "border-warn/40 bg-warn/10"}`}>
           <UserCheck size={16} className="shrink-0" />
           <span className="flex-1">
             Ton IP actuelle <span className="font-mono">{myIp}</span>
@@ -223,11 +223,11 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
             </span>
           </header>
           {j.banned.length === 0 ? (
-            <p className="px-4 py-3 text-sm text-muted">Aucune adresse bannie.</p>
+            <p className="px-4 py-3 text-[13px] text-muted">Aucune adresse bannie.</p>
           ) : (
             <ul className="divide-y divide-border/50">
               {j.banned.map((ip) => (
-                <li key={ip} className="flex items-center gap-3 px-4 py-2 text-sm">
+                <li key={ip} className="flex items-center gap-3 px-4 py-2 text-[13px]">
                   <button type="button" className="shrink-0 font-mono hover:text-accent" title="Détails et tentatives" onClick={() => setDetail(ip)}>
                     {ip}
                   </button>
@@ -253,7 +253,7 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
           <p className="text-xs text-muted">Tentatives repérées par fail2ban dans son journal récent.</p>
           <ul className="flex flex-col gap-1">
             {topAttackers.map(([ip, n]) => (
-              <li key={ip} className="flex items-center gap-3 text-sm">
+              <li key={ip} className="flex items-center gap-3 text-[13px]">
                 <span className="w-12 shrink-0 text-right font-semibold tabular-nums">{n}</span>
                 <button type="button" className="shrink-0 font-mono hover:text-accent" onClick={() => setDetail(ip)}>
                   {ip}
@@ -284,7 +284,7 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
         {events === null ? (
           <Loading rows={3} />
         ) : shownEvents.length === 0 ? (
-          <p className="text-sm text-muted">Rien dans le journal récent de fail2ban.</p>
+          <p className="text-[13px] text-muted">Rien dans le journal récent de fail2ban.</p>
         ) : (
           <div className="max-h-[28rem] overflow-auto rounded-lg border border-border">
             {groupByDay([...shownEvents].reverse().slice(0, 300)).map((g) => (
@@ -321,7 +321,7 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
       <section className="flex flex-col gap-3 rounded-lg border border-border bg-panel p-4">
         <div>
           <h2 className="font-medium">Adresses jamais bannies</h2>
-          <p className="text-sm text-muted">
+          <p className="text-[13px] text-muted">
             Appliquées à tous les jails. Zenytt les écrit dans son propre fichier ({"/etc/fail2ban/jail.d/zz-zenytt-ignore.local"}), teste la configuration puis recharge fail2ban ; tes fichiers ne sont pas modifiés.
           </p>
         </div>

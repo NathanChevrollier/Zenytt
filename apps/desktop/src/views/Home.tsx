@@ -251,7 +251,7 @@ export default function HomeView({ visible }: { visible: boolean }) {
     { label: "Docker", onClick: () => go(s, "docker") },
     { label: "Sites", onClick: () => go(s, "sites") },
     { label: "Fichiers", onClick: () => go(s, "files") },
-    { label: "Sécurité", onClick: () => go(s, "security") },
+    { label: "Sécurité", onClick: () => go(s, "system", "security") },
     "separator",
     { label: "Actualiser", icon: <RotateCw size={14} />, onClick: () => void fetchHealth(s.id, 0) },
     { label: "Diagnostiquer la connexion", onClick: () => useDoctor.getState().open(s.id) },
