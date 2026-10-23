@@ -7,6 +7,10 @@ map $http_upgrade $connection_upgrade {
     ""      close;
 }
 
+# Limites par IP (anti-abus) : à déclarer dans le bloc http (conf.d/*.conf convient).
+limit_req_zone $binary_remote_addr zone=zenytt_sync_req:10m rate=10r/s;
+limit_conn_zone $binary_remote_addr zone=zenytt_sync_conn:10m;
+
 # Certificat : sudo certbot certonly --nginx -d sync.exemple.fr
 # (ou « Sites » → nouveau site dans Zenytt, qui s'occupe du vhost et du certificat).
 server {
@@ -24,7 +28,12 @@ server {
     ssl_certificate /etc/letsencrypt/live/sync.exemple.fr/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/sync.exemple.fr/privkey.pem;
 
-    client_max_body_size 8m;
+    client_max_body_size 1m;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    limit_req zone=zenytt_sync_req burst=20 nodelay;
+    limit_conn zenytt_sync_conn 20;
 
     location / {
         proxy_pass http://127.0.0.1:8091;

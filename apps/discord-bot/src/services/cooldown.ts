@@ -23,7 +23,12 @@ export class Cooldown {
     return Math.max(0, Math.ceil(Math.max(gap, hourly) / 1000));
   }
 
-  /** Enregistre un envoi réussi. */
+  /** Annule le dernier enregistrement de `userId` (envoi réservé puis échoué). */
+  forget(userId: string): void {
+    this.history.get(userId)?.pop();
+  }
+
+  /** Enregistre un envoi (réservé avant le traitement, annulé par `forget` s'il échoue). */
   record(userId: string): void {
     const list = this.history.get(userId) ?? [];
     list.push(this.now());

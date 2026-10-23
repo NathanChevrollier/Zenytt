@@ -12,7 +12,11 @@ const github = new GitHubService(
   env.GITHUB_TOKEN,
   { bug: env.GITHUB_BUG_LABEL, suggestion: env.GITHUB_SUGGESTION_LABEL },
   env.GITHUB_PROJECT_TOKEN,
+  env.GITHUB_ATTACHMENTS_REPO && env.GITHUB_ATTACHMENTS_TOKEN ? { repo: env.GITHUB_ATTACHMENTS_REPO, token: env.GITHUB_ATTACHMENTS_TOKEN } : undefined,
 );
+if (env.GITHUB_ATTACHMENTS_BRANCH && !(env.GITHUB_ATTACHMENTS_REPO && env.GITHUB_ATTACHMENTS_TOKEN)) {
+  console.warn("[config] captures archivées dans le dépôt Zenytt avec son jeton (Contents: write) : définis GITHUB_ATTACHMENTS_REPO et GITHUB_ATTACHMENTS_TOKEN pour un dépôt séparé.");
+}
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const roadmap = new RoadmapService(client, env, github);
 

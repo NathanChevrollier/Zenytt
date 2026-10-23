@@ -1,0 +1,10 @@
+# Ignorés par BuildKit pour ce Dockerfile (le contexte est la racine du dépôt : un .dockerignore
+# placé ici serait sans effet). Chemins relatifs à la racine.
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.claude
+target

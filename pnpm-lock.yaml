@@ -317,9 +317,6 @@ importers:
       '@tauri-apps/api':
         specifier: ^2
         version: 2.11.1
-      '@tauri-apps/plugin-clipboard-manager':
-        specifier: ^2.3.3
-        version: 2.3.3
       '@tauri-apps/plugin-log':
         specifier: ^2.9.2
         version: 2.9.2

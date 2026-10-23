@@ -193,6 +193,7 @@ jobs:
           tool: cargo-audit
       # Avis ignorés et justifiés dans .cargo/audit.toml ; les crates non maintenues restent des avertissements.
       - run: cargo audit
+      - run: cargo audit --file sync-server/Cargo.lock
       # Lit seulement le lockfile : pas besoin d'installer les dépendances.
       - run: pnpm audit --prod --audit-level high
 

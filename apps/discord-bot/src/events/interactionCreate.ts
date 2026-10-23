@@ -12,6 +12,7 @@ import {
   PermissionFlagsBits,
   TextInputBuilder,
   TextInputStyle,
+  type Attachment,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Interaction,
@@ -185,7 +186,24 @@ async function handleFeedbackModal(kind: FeedbackKind, interaction: ModalSubmitI
     await interaction.reply({ content: `Merci ! Pour éviter les doublons, attends encore ${delay} avant d'envoyer un autre retour.`, ephemeral: true });
     return;
   }
+  // Réservé avant le premier await : deux envois simultanés ne passent pas tous les deux le délai.
+  feedbackCooldown.record(interaction.user.id);
+  try {
+    await submitFeedback(kind, interaction, github, env, { title, description, context }, uploaded);
+  } catch (error) {
+    feedbackCooldown.forget(interaction.user.id);
+    throw error;
+  }
+}
 
+async function submitFeedback(
+  kind: FeedbackKind,
+  interaction: ModalSubmitInteraction,
+  github: GitHubService,
+  env: Env,
+  { title, description, context }: { title: string; description: string; context: string },
+  uploaded: Attachment[],
+): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
 
   // Captures : téléchargées, vérifiées, nettoyées de leurs métadonnées puis archivées dans le dépôt.
@@ -221,7 +239,6 @@ async function handleFeedbackModal(kind: FeedbackKind, interaction: ModalSubmitI
     }),
     kind,
   );
-  feedbackCooldown.record(interaction.user.id);
   const notes = [
     urls.length ? `${urls.length} capture(s) jointe(s), sans leurs métadonnées (position GPS, appareil…).` : "",
     ...rejected.map((r) => `Image « ${r.name} » non jointe : ${r.reason}.`),

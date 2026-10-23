@@ -7,7 +7,7 @@
  *   est réécrite seule, pour qu'une photo prise en portrait ne s'affiche pas couchée.
  * - PNG : blocs de texte (tEXt, zTXt, iTXt), eXIf et tIME retirés.
  * - WebP : blocs EXIF et XMP retirés (et leurs indicateurs dans l'en-tête VP8X).
- * - GIF : extensions de commentaire retirées.
+ * - GIF : extensions de commentaire retirées, et extensions d'application (XMP…) sauf celles de l'animation.
  */
 
 export type ImageType = "png" | "jpeg" | "gif" | "webp";
@@ -98,9 +98,18 @@ function stripJpeg(data: Uint8Array): Uint8Array {
   while (at + 4 <= data.length) {
     if (byte(data, at) !== 0xff) throw new Error("JPEG invalide");
     const marker = byte(data, at + 1);
-    // Début des données compressées : tout le reste est l'image elle-même.
+    // Début des données compressées, jusqu'au premier EOI (FF D9) : dans ces données, FF est
+    // toujours suivi de 00 (octet échappé) ou d'un RSTn, jamais de D9. Ce qui suit l'EOI
+    // (JPEG secondaire MPF avec son propre EXIF/GPS, données ajoutées) est abandonné.
     if (marker === 0xda) {
-      kept.push(data.subarray(at));
+      let end = data.length;
+      for (let i = at + 2; i + 1 < data.length; i++) {
+        if (data[i] === 0xff && data[i + 1] === 0xd9) {
+          end = i + 2;
+          break;
+        }
+      }
+      kept.push(data.subarray(at, end));
       break;
     }
     // Marqueurs sans longueur (remplissage, RSTn).
@@ -191,7 +200,9 @@ function stripGif(data: Uint8Array): Uint8Array {
     if (kind === 0x21) {
       const label = byte(data, at + 1);
       at = skipBlocks(at + 2);
-      if (label !== 0xfe) kept.push(data.subarray(start, at)); // 0xFE : commentaire
+      // 0xFE : commentaire ; 0xFF : application (seules celles de l'animation sont utiles).
+      const animation = label === 0xff && ["NETSCAPE2.0", "ANIMEXTS1.0"].includes(String.fromCharCode(...data.subarray(start + 3, start + 14)));
+      if (label !== 0xfe && (label !== 0xff || animation)) kept.push(data.subarray(start, at));
     } else if (kind === 0x2c) {
       const local = byte(data, at + 9);
       at += 10 + (local & 0x80 ? 3 * 2 ** ((local & 0x07) + 1) : 0);

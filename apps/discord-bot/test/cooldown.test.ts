@@ -20,4 +20,13 @@ describe("Cooldown", () => {
     t = 3_600_001;
     expect(c.waitSeconds("a")).toBe(0);
   });
+
+  it("libère la réservation d'un envoi échoué", () => {
+    const c = new Cooldown(60_000, 3, () => 0);
+    c.record("a");
+    expect(c.waitSeconds("a")).toBe(60);
+    c.forget("a");
+    expect(c.waitSeconds("a")).toBe(0);
+    c.forget("inconnu"); // sans effet
+  });
 });

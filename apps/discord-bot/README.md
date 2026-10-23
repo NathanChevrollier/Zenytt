@@ -19,7 +19,8 @@ Bot Discord autonome pour centraliser les suggestions et signalements de bugs de
 - Un bot créé dans le [Discord Developer Portal](https://discord.com/developers/applications).
 - Les intents privilégiés ne sont pas nécessaires: le bot utilise seulement `Guilds`.
 - Le bot doit avoir les permissions `View Channels`, `Send Messages`, `Embed Links` et `Use Application Commands` dans les deux salons.
-- Le token GitHub doit être un fine-grained token limité au dépôt Zenytt avec `Issues: Read and write`, `Contents: Read and write` (archivage des captures dans leur branche ; inutile si `GITHUB_ATTACHMENTS_BRANCH` est vide) et `Projects: Read` si le mode Project v2 est utilisé.
+- Le token GitHub doit être un fine-grained token limité au dépôt Zenytt avec **uniquement** `Issues: Read and write` (et `Projects: Read` si le mode Project v2 est utilisé). Ne lui donne jamais `Contents: Write` sur le dépôt Zenytt : un jeton fuité pourrait y pousser un tag et déclencher une release signée.
+- Les captures vont dans un **dépôt séparé** (`GITHUB_ATTACHMENTS_REPO`, même propriétaire) avec son propre jeton fine-grained (`GITHUB_ATTACHMENTS_TOKEN`, `Contents: Read and write` sur ce seul dépôt). Un jeton fine-grained a les mêmes droits sur tous les dépôts qu'il couvre : c'est pourquoi il en faut deux. Sans ces deux variables, le bot retombe sur le dépôt Zenytt et `GITHUB_TOKEN` (avertissement au démarrage) ; mets `GITHUB_ATTACHMENTS_BRANCH` vide pour désactiver les captures.
 - Les fichiers dans les formulaires (composant « File Upload ») demandent un client Discord à jour ; discord.js 14.22 ou plus côté bot.
 
 ## Configuration locale
@@ -52,7 +53,7 @@ personnel. Le bot retrouve seul le projet dont le titre contient le nom du dép�
 | `DISCORD_TOKEN`                 | Token privé du bot Discord; ne jamais le publier.      |
 | `CLIENT_ID`                     | Application ID du bot Discord.                         |
 | `GUILD_ID`                      | ID du serveur où enregistrer les commandes.            |
-| `GITHUB_TOKEN`                  | Fine-grained token GitHub limité au dépôt (issues, contenu pour les captures). |
+| `GITHUB_TOKEN`                  | Fine-grained token GitHub limité au dépôt Zenytt, `Issues: Read and write` seulement. |
 | `GITHUB_OWNER`                  | Propriétaire du dépôt, par défaut `NathanChevrollier`. |
 | `GITHUB_REPO`                   | Nom du dépôt, par défaut `Zenytt`.                       |
 | `GITHUB_PROJECT_TOKEN`          | Jeton classic `read:project` pour lire le Project v2.  |
@@ -63,6 +64,8 @@ personnel. Le bot retrouve seul le projet dont le titre contient le nom du dép�
 | `ROADMAP_MESSAGE_ID`            | ID facultatif du message à éditer directement.         |
 | `ROADMAP_SYNC_INTERVAL_MINUTES` | Intervalle de synchronisation, 15 minutes par défaut.  |
 | `GITHUB_ATTACHMENTS_BRANCH`     | Branche des captures, `feedback-attachments` par défaut ; vide pour désactiver les captures. |
+| `GITHUB_ATTACHMENTS_REPO`       | Dépôt séparé des captures (même propriétaire) ; vide : dépôt Zenytt (déconseillé). |
+| `GITHUB_ATTACHMENTS_TOKEN`      | Jeton fine-grained `Contents: Read and write` limité à ce dépôt de captures. |
 | `GITHUB_BUG_LABEL`              | Label appliqué aux bugs.                               |
 | `GITHUB_SUGGESTION_LABEL`       | Label appliqué aux suggestions.                        |
 | `GITHUB_BRAINSTORMING_LABEL`    | Label des idées, `brainstorming` par défaut.           |

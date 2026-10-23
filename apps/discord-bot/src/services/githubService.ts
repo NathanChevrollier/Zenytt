@@ -14,6 +14,7 @@ export class GitHubService {
   private readonly client: Octokit;
   /** Lecture du projet : jeton dédié si fourni (un jeton « fine-grained » ne lit pas les projets d'un compte personnel). */
   private readonly projectClient: Octokit;
+  private readonly attachments: { repo: string; client: Octokit } | undefined;
   private projectNumber: number | undefined;
   /** Titre du projet lu, pour dire dans le panneau d'où vient la roadmap. */
   private projectTitle: string | undefined;
@@ -24,8 +25,11 @@ export class GitHubService {
     token: string,
     private readonly labels: Record<FeedbackKind, string>,
     projectToken?: string,
+    /** Dépôt et jeton dédiés aux captures ; sans eux, le dépôt et le jeton principaux servent. */
+    attachments?: { repo: string; token: string },
   ) {
     this.client = new Octokit({ auth: token, userAgent: "zenytt-discord-bot" });
+    this.attachments = attachments && { repo: attachments.repo, client: new Octokit({ auth: attachments.token, userAgent: "zenytt-discord-bot" }) };
     this.projectClient = projectToken ? new Octokit({ auth: projectToken, userAgent: "zenytt-discord-bot" }) : this.client;
   }
 
@@ -53,8 +57,9 @@ export class GitHubService {
    * bout de quelques heures : une issue doit garder ses captures.
    */
   public async storeAttachments(branch: string, files: { path: string; content: Uint8Array }[], label: string): Promise<string[]> {
-    const git = this.client.rest.git;
-    const repo = { owner: this.owner, repo: this.repo };
+    const git = (this.attachments?.client ?? this.client).rest.git;
+    const repoName = this.attachments?.repo ?? this.repo;
+    const repo = { owner: this.owner, repo: repoName };
     // Deux envois simultanés : le second échoue à avancer la branche (non fast-forward) et réessaie.
     for (let attempt = 0; ; attempt++) {
       try {
@@ -75,7 +80,7 @@ export class GitHubService {
         const commit = await git.createCommit({ ...repo, message: `chore(feedback): ${files.length} capture(s) — ${label}`, tree: tree.data.sha, parents: parent ? [parent] : [] });
         if (parent) await git.updateRef({ ...repo, ref: `heads/${branch}`, sha: commit.data.sha, force: false });
         else await git.createRef({ ...repo, ref: `refs/heads/${branch}`, sha: commit.data.sha });
-        return files.map((f) => `https://raw.githubusercontent.com/${this.owner}/${this.repo}/${encodeURIComponent(branch)}/${f.path}`);
+        return files.map((f) => `https://raw.githubusercontent.com/${this.owner}/${repoName}/${encodeURIComponent(branch)}/${f.path}`);
       } catch (error) {
         if (attempt < 2 && getStatus(error) === 422) continue;
         throw new Error(`GitHub n'a pas pu archiver les captures: ${describeGitHubError(error)}`);

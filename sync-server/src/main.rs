@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -29,7 +30,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 
 /// Taille maximale d'un envoi (les réglages chiffrés pèsent quelques dizaines de Ko).
-const MAX_BODY: usize = 8 * 1024 * 1024;
+const MAX_BODY: usize = 1024 * 1024;
 const MIN_TOKEN_LEN: usize = 24;
 
 /// Compteur par clé sur une fenêtre fixe : au plus `max` évènements par `window`.
@@ -163,11 +164,22 @@ async fn get_state(State(app): State<Arc<App>>, headers: HeaderMap) -> Response 
     }
 }
 
-async fn put_state(State(app): State<Arc<App>>, headers: HeaderMap, Json(push): Json<Push>) -> Response {
+async fn put_state(State(app): State<Arc<App>>, headers: HeaderMap, body: Body) -> Response {
     let Some(path) = app.space(&headers) else { return unauthorized().await };
     if !app.writes.allow(&space_key(&path)) {
         return error(StatusCode::TOO_MANY_REQUESTS, "trop d'envois : réessaie dans une minute");
     }
+    // Le corps n'est lu qu'une fois le jeton vérifié : un anonyme ne fait rien allouer au serveur.
+    let announced = headers.get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<usize>().ok());
+    if announced.is_some_and(|n| n > MAX_BODY) {
+        return error(StatusCode::PAYLOAD_TOO_LARGE, "envoi trop volumineux");
+    }
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_BODY).await else {
+        return error(StatusCode::PAYLOAD_TOO_LARGE, "envoi trop volumineux");
+    };
+    let Ok(push) = serde_json::from_slice::<Push>(&bytes) else {
+        return error(StatusCode::UNPROCESSABLE_ENTITY, "corps JSON invalide");
+    };
     if !is_encrypted_envelope(&push.data) {
         return error(StatusCode::UNPROCESSABLE_ENTITY, "contenu refusé : seules les données chiffrées par Zenytt sont acceptées");
     }
@@ -348,8 +360,12 @@ mod tests {
         guest.send(Ws::Text("frappe-chiffrée".into())).await.unwrap();
         assert_eq!(host.next().await.unwrap().unwrap().into_text().unwrap().as_str(), "frappe-chiffrée");
 
+        // Une session expirée coupe aussi les connexions déjà ouvertes (TTL réduit en test).
+        let mut guest2 = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/relay/{session}?role=guest")).await.unwrap().0;
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(5), async { while let Some(Ok(_)) = guest2.next().await {} }).await;
+        assert!(ended.is_ok(), "le TTL aurait dû couper la connexion de l'invité");
         // L'hôte parti, la session disparaît : plus personne ne peut la rejoindre.
-        host.close(None).await.unwrap();
+        let _ = host.close(None).await;
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             if tokio_tungstenite::connect_async(format!("ws://{addr}/v1/relay/{session}?role=guest")).await.is_err() {
@@ -357,6 +373,34 @@ mod tests {
             }
         }
         panic!("la session aurait dû être fermée avec le départ de l'hôte");
+    }
+
+    #[tokio::test]
+    async fn body_is_not_read_without_token_and_is_capped() {
+        let (addr, _dir) = serve().await;
+        // Taille annoncée trop grande, sans corps envoyé : refus avant toute lecture.
+        let raw = |token: &str| {
+            format!(
+                "PUT /v1/state HTTP/1.1
+Host: x
+Authorization: Bearer {token}
+Content-Length: {}
+Connection: close
+
+",
+                MAX_BODY + 1
+            )
+        };
+        for (token, expected) in [("mauvais-jeton-mauvais-jeton-xx", "401"), (TOKEN, "413")] {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut s = tokio::net::TcpStream::connect(&addr).await.unwrap();
+            s.write_all(raw(token).as_bytes()).await.unwrap();
+            // Une seule lecture : le serveur attend le corps annoncé avant de fermer.
+            let mut buf = [0u8; 64];
+            let n = tokio::time::timeout(std::time::Duration::from_secs(3), s.read(&mut buf)).await.expect("pas de réponse").unwrap();
+            assert_eq!(&String::from_utf8_lossy(&buf[..n])[9..12], expected);
+        }
+        assert_eq!(request(&addr, "PUT", TOKEN, Some("pas du json")).await.0, 422);
     }
 
     #[test]
