@@ -6,6 +6,9 @@ import { useApp, type Folders } from "./store";
 const KEYS = {
   containers: { items: "containers", created: "containerFolders" },
   vms: { items: "vms", created: "vmFolders" },
+  // Les « dossiers » des sites et des projets compose sont des clients.
+  sites: { items: "sites", created: "siteFolders" },
+  compose: { items: "compose", created: "composeFolders" },
 } as const satisfies Record<string, { items: keyof Folders; created: keyof Folders }>;
 
 export type FolderKind = keyof typeof KEYS;
@@ -47,4 +50,58 @@ export function useItemFolders(kind: FolderKind, serverId: string) {
   const remove = (name: string) => update((map, list) => [Object.fromEntries(Object.entries(map).filter(([, v]) => v !== name)), list.filter((x) => x !== name)]);
 
   return { names, folderOf: (key: string) => assigned[key] ?? "", move, create, rename, remove };
+}
+
+/** Clé de verrou d'un site (par domaine) ou d'un projet compose (par dossier). */
+export const lockKey = (kind: "site" | "compose", id: string) => `${kind}:${id}`;
+
+const NO_LOCKS: string[] = [];
+
+/** Verrous d'un serveur : un élément verrouillé échappe aux actions groupées et demande de retaper son nom pour les actions destructrices. */
+export function useLocks(serverId: string) {
+  const locked = useApp((s) => s.folders.locks?.[serverId]) ?? NO_LOCKS;
+  const setFolders = useApp((s) => s.setFolders);
+  const toggle = (key: string) =>
+    setFolders((f) => {
+      const all = f.locks ?? {};
+      const cur = all[serverId] ?? [];
+      return { ...f, locks: { ...all, [serverId]: cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key] } };
+    });
+  return { isLocked: (key: string) => locked.includes(key), toggle };
+}
+
+/**
+ * Confirmation d'une action destructrice : sur un élément verrouillé, il faut retaper son nom.
+ * Renvoie `true` si l'action peut continuer.
+ */
+export async function confirmDestructive(opts: { title: string; body: string; confirmLabel: string; name: string; locked: boolean; danger?: boolean }): Promise<boolean> {
+  const ask = useApp.getState().ask;
+  if (!opts.locked) return (await ask({ title: opts.title, body: opts.body, confirmLabel: opts.confirmLabel, danger: opts.danger ?? true })) === true;
+  const v = await ask({
+    title: opts.title,
+    body: `${opts.body}
+
+Cet élément est verrouillé.`,
+    input: { label: `Retape « ${opts.name} » pour confirmer`, initial: "" },
+    confirmLabel: opts.confirmLabel,
+    danger: true,
+  });
+  return typeof v === "string" && v.trim() === opts.name;
+}
+
+/** Valeur du filtre « Sans client » (la valeur vide désigne « Tous »). */
+export const NO_CLIENT = "__none";
+
+/**
+ * Éléments filtrés par client puis regroupés : les clients par ordre alphabétique, « Sans client »
+ * (clé vide) en dernier. L'ordre des éléments dans un groupe est conservé.
+ */
+export function groupByClient<T>(items: T[], clientOf: (item: T) => string, filter: string): [string, T[]][] {
+  const groups = new Map<string, T[]>();
+  for (const it of items) {
+    const c = clientOf(it);
+    if (filter === NO_CLIENT ? c : filter && c !== filter) continue;
+    groups.set(c, [...(groups.get(c) ?? []), it]);
+  }
+  return [...groups].sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b, "fr")));
 }

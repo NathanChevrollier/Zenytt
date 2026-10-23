@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  ArrowRight, CircleCheck, CircleX, ExternalLink, FileCode2, Globe, History, Loader2, Lock, LockOpen, Plus, Power, PowerOff, RefreshCw, ShieldCheck, Trash2, Zap,
+  ArrowRight, Tag, CircleCheck, CircleX, ExternalLink, FileCode2, Globe, History, Loader2, Lock, LockOpen, Plus, Power, PowerOff, RefreshCw, ShieldCheck, Trash2, Zap,
 } from "lucide-react";
 import {
   api, ENGINE_LABELS, errorMessage, type Certificate, type Container, type NginxState, type DomainInfo, type ServerBlock, type SiteFile,
@@ -14,6 +14,8 @@ import PageLayout from "../components/PageLayout";
 import ServerGate, { ServerContext } from "../components/ServerGate";
 import { useCachedState } from "../lib/cache";
 import { useAutoRefresh } from "../lib/refresh";
+import { confirmDestructive, groupByClient, lockKey, useItemFolders, useLocks } from "../lib/folders";
+import { ClientFilter, clientMenuItems } from "../components/ClientTools";
 
 const NginxEditor = lazy(() => import("../components/NginxEditor"));
 const NewSiteWizard = lazy(() => import("../components/NewSiteWizard"));
@@ -89,6 +91,10 @@ function Sites({ serverId }: { serverId: string }) {
   const [output, setOutput] = useState<{ title: string; text: string; ok: boolean } | null>(null);
   const [checks, setChecks] = useState<Record<string, string>>({});
   const [dns, setDns] = useCachedState<Record<string, DomainInfo>>(`sitesDns:${serverId}`, {});
+  const clients = useItemFolders("sites", serverId);
+  const locks = useLocks(serverId);
+  const [clientFilter, setClientFilter] = useState("");
+  const siteLock = (domain: string) => lockKey("site", domain);
 
   const load = useCallback(async () => {
     try {
@@ -311,7 +317,18 @@ function Sites({ serverId }: { serverId: string }) {
             </EmptyState>
           ) : (
             <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,460px),1fr))] gap-3.5">
-              {sites.map((site) => {
+              {clients.names.length > 0 && (
+                <div className="col-span-full flex items-center gap-2">
+                  <ClientFilter names={clients.names} value={clientFilter} onChange={setClientFilter} />
+                </div>
+              )}
+              {groupByClient(sites, (x) => clients.folderOf(x.domain), clientFilter).flatMap(([client, list]) => [
+                clients.names.length > 0 ? (
+                  <h3 key={`client:${client}`} className="col-span-full flex items-center gap-1.5 text-xs font-medium text-muted">
+                    <Tag size={12} /> {client || "Sans client"}
+                  </h3>
+                ) : null,
+                ...list.map((site) => {
                 const httpsBlock = site.blocks.find((b) => b.ssl);
                 const cert = httpsBlock ? certFor(httpsBlock) : undefined;
                 const ports = [...new Set(site.blocks.flatMap((b) => b.upstreamPorts))];
@@ -329,7 +346,15 @@ function Sites({ serverId }: { serverId: string }) {
                     <div className="flex items-start gap-2.5">
                       {httpsBlock ? <Lock size={17} className="mt-0.5 shrink-0 text-ok" /> : <LockOpen size={17} className="mt-0.5 shrink-0 text-warn" />}
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold">{site.domain}</div>
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-sm font-semibold">{site.domain}</span>
+                          {locks.isLocked(siteLock(site.domain)) && (
+                            <Badge tone="warn" title="Verrouillé : désactivation et suppression à confirmer en retapant le nom">
+                              <Lock size={10} /> verrouillé
+                            </Badge>
+                          )}
+                          {clients.folderOf(site.domain) && <Badge title="Client">{clients.folderOf(site.domain)}</Badge>}
+                        </div>
                         {site.aliases.length > 0 && <div className="truncate text-xs text-muted">+ {site.aliases.join(", ")}</div>}
                         <div className="truncate font-mono text-[11px] text-faint">{site.file.realPath}</div>
                       </div>
@@ -400,6 +425,8 @@ function Sites({ serverId }: { serverId: string }) {
                         <MenuButton
                           size="sm"
                           items={[
+                            ...clientMenuItems(clients, site.domain, locks.isLocked(siteLock(site.domain)), () => locks.toggle(siteLock(site.domain))),
+                            "separator" as const,
                             ...(state.certbot && !isDefault ? [{ label: httpsBlock ? "Relancer certbot pour ce domaine…" : "Activer HTTPS (certbot)…", icon: <Lock size={14} />, onClick: () => void runCertbot(site.domain) }] : []),
                             { label: "Historique des configurations…", icon: <History size={14} />, onClick: () => setHistory(true) },
                             ...(link
@@ -410,11 +437,12 @@ function Sites({ serverId }: { serverId: string }) {
                                     icon: <PowerOff size={14} />,
                                     danger: true,
                                     onClick: async () => {
-                                      const ok = await ask({
+                                      const ok = await confirmDestructive({
                                         title: `Désactiver ${site.domain} ?`,
                                         body: `Le site ne sera plus servi par ${web}. Sa configuration est conservée dans sites-available et peut être réactivée (onglet Désactivés).`,
                                         confirmLabel: "Désactiver",
-                                        danger: true,
+                                        name: site.domain,
+                                        locked: locks.isLocked(siteLock(site.domain)),
                                       });
                                       if (ok) await runApply(`Désactivation de ${site.domain}`, () => api.sitesSetEnabled(serverId, site.file.realPath, link, false, engine));
                                     },
@@ -427,7 +455,8 @@ function Sites({ serverId }: { serverId: string }) {
                     </div>
                   </Card>
                 );
-              })}
+                }),
+              ])}
             </div>
           ))}
 
@@ -459,11 +488,12 @@ function Sites({ serverId }: { serverId: string }) {
                       size="sm"
                       title="Supprimer définitivement"
                       onClick={async () => {
-                        const ok = await ask({
+                        const ok = await confirmDestructive({
                           title: `Supprimer la configuration de ${site.domain} ?`,
                           body: `Le fichier est supprimé de sites-available (une sauvegarde de ${state.confRoot} est faite avant). Les conteneurs et certificats ne sont pas touchés.`,
                           confirmLabel: "Supprimer",
-                          danger: true,
+                          name: site.domain,
+                          locked: locks.isLocked(siteLock(site.domain)),
                         });
                         if (ok) await runApply(`Suppression de ${site.domain}`, () => api.sitesDelete(serverId, site.file.realPath, linkFor(site.file) ?? "", engine));
                       }}
