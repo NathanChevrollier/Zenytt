@@ -14,7 +14,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).build())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // Données et secrets dans le dossier privé de l'app (protégé par le système).
             let dir = app.path().app_data_dir()?;

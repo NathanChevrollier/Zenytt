@@ -13,4 +13,9 @@ ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+    # glib 0.18 (RUSTSEC-2024-0429, GHSA-wrw7-89jp-8q8g) : itérateur VariantStrIter non sain.
+    # Dépendance transitive de GTK3 (gtk-rs 0.18) tirée par Tauri/wry/tao sous Linux ; Zenytt
+    # n'itère jamais sur des chaînes de glib::Variant. Correctif (glib >= 0.20) bloqué tant que
+    # Tauri n'a pas migré vers gtk-rs 0.20+ (GTK4).
+    "RUSTSEC-2024-0429",
 ]
