@@ -60,8 +60,7 @@ const REQUEST_BUDGET: Duration = Duration::from_secs(10);
 fn read_request(stream: &UnixStream) -> Option<String> {
     let end = Instant::now() + REQUEST_BUDGET;
     let (mut buf, mut chunk, mut r) = (Vec::new(), [0u8; 1024], stream);
-    while !buf.contains(&b'
-') {
+    while !buf.contains(&b'\n') {
         let left = end.checked_duration_since(Instant::now()).filter(|d| !d.is_zero())?;
         stream.set_read_timeout(Some(left)).ok()?;
         let n = r.read(&mut chunk).ok()?;

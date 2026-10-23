@@ -13,6 +13,7 @@ keyring = { version = "4.2.0", optional = true }
 dirs = "6"
 ring = "0.17"
 base64 = "0.23"
+ureq = { version = "3.4", features = ["json"] }
 
 [features]
 # Coffre de l'OS. L'app mobile le désactive (pas de keyring sur Android) et appelle `secrets::use_file`.
