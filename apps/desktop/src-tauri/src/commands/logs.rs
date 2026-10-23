@@ -13,7 +13,7 @@ use zenytt_core::russh::client::Msg;
 use zenytt_core::russh::{ChannelMsg, ChannelWriteHalf};
 use zenytt_core::ssh::shell_quote;
 
-use crate::commands::admin;
+use crate::commands::{admin, err};
 use crate::sessions::Sessions;
 use crate::store::Store;
 
@@ -56,10 +56,6 @@ pub struct Sources {
     containers: Vec<String>,
     units: Vec<String>,
     files: Vec<String>,
-}
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
 }
 
 fn safe_name(s: &str) -> bool {

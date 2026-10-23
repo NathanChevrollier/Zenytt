@@ -7,13 +7,9 @@ use zenytt_core::db_admin::{self, BackupFile};
 use zenytt_core::db_schema::{self, SchemaOp};
 use zenytt_core::docker::{self, Access};
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::{secrets, AuditLog, Store};
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 /// Nom du secret (keyring) qui garde le compte d'une instance.
 fn login_key(instance_id: &str) -> String {
@@ -384,12 +380,6 @@ pub fn db_column_types(engine: Engine) -> Vec<&'static str> {
     db_schema::column_types(engine).to_vec()
 }
 
-/// Requête d'aperçu du contenu d'une table (identifiant vérifié côté Rust).
-#[tauri::command]
-pub fn db_preview_query(engine: Engine, table: String, limit: usize) -> Result<String, String> {
-    db::preview_query(engine, &table, limit.min(5000)).map_err(err)
-}
-
 /// Colonnes d'une table, avec le repérage de la clé primaire. C'est cette information qui autorise
 /// — ou interdit — l'édition d'une cellule dans le tableau de résultats.
 #[tauri::command]
@@ -454,15 +444,6 @@ pub async fn db_sqlite_files(store: State<'_, Store>, sessions: State<'_, Sessio
     let (conn, _) = admin(&store, &sessions, &server_id).await?;
     let out = zenytt_core::ssh::long(conn.exec(db::SQLITE_PROBE, None)).await.map_err(err)?;
     Ok(db::parse_sqlite(&out.stdout))
-}
-
-/// Ouvre un fichier SQLite choisi à la main (par exemple repéré dans l'explorateur de fichiers).
-#[tauri::command]
-pub fn db_sqlite_instance(path: String, container: Option<String>) -> Result<Instance, String> {
-    if !db::safe_file_path(&path) {
-        return Err("chemin invalide : un chemin absolu est attendu".into());
-    }
-    Ok(Instance::sqlite(path, container))
 }
 
 #[cfg(test)]

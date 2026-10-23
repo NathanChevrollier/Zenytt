@@ -75,7 +75,7 @@ static FILE: OnceLock<FileSecrets> = OnceLock::new();
 
 /// Range les secrets dans ce fichier plutôt que dans le coffre de l'OS (app mobile, où le
 /// coffre n'est pas disponible). À appeler une fois, au démarrage.
-// shortcut: secrets in app-private storage (0600), not Android Keystore/iOS Keychain, and iOS backups include them; upgrade to a keystore plugin before store release
+// shortcut: secrets dans le stockage privé de l'app (0600), pas Keystore/Keychain, et les sauvegardes iOS les incluent ; passer à un plugin keystore avant la mise en boutique
 pub fn use_file(path: PathBuf) {
     let _ = FILE.set(FileSecrets::open(path));
 }

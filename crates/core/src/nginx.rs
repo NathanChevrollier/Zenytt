@@ -624,17 +624,6 @@ async fn apply_script(
     Ok(parse_apply(&text))
 }
 
-/// Écrit un fichier de configuration nginx puis teste et recharge nginx (restauration si échec).
-pub async fn write_config(
-    conn: &Connection,
-    sudo: Option<&str>,
-    path: &str,
-    content: &str,
-    enable_link: Option<&str>,
-) -> Result<ApplyResult> {
-    write_config_for(conn, sudo, Engine::Nginx, path, content, enable_link, "").await
-}
-
 /// Écrit un fichier de configuration du serveur web `engine`, après la commande préalable `pre`
 /// (constante choisie par Zenytt, jamais une saisie de l'utilisateur).
 pub async fn write_config_for(
@@ -649,10 +638,6 @@ pub async fn write_config_for(
     apply_script(conn, sudo, engine, path, enable_link.unwrap_or(""), "write", content, pre).await
 }
 
-pub async fn set_enabled(conn: &Connection, sudo: Option<&str>, available: &str, link: &str, enabled: bool) -> Result<ApplyResult> {
-    set_enabled_for(conn, sudo, Engine::Nginx, available, link, enabled).await
-}
-
 pub async fn set_enabled_for(
     conn: &Connection,
     sudo: Option<&str>,
@@ -664,27 +649,15 @@ pub async fn set_enabled_for(
     apply_script(conn, sudo, engine, available, link, if enabled { "enable" } else { "disable" }, "", "").await
 }
 
-pub async fn delete_site(conn: &Connection, sudo: Option<&str>, available: &str, link: &str) -> Result<ApplyResult> {
-    delete_site_for(conn, sudo, Engine::Nginx, available, link).await
-}
-
 pub async fn delete_site_for(conn: &Connection, sudo: Option<&str>, engine: Engine, available: &str, link: &str) -> Result<ApplyResult> {
     apply_script(conn, sudo, engine, available, link, "delete", "", "").await
 }
 
 /// Teste la configuration actuelle et renvoie la sortie du test.
-pub async fn test(conn: &Connection, sudo: Option<&str>) -> Result<(bool, String)> {
-    test_for(conn, sudo, Engine::Nginx).await
-}
-
 pub async fn test_for(conn: &Connection, sudo: Option<&str>, engine: Engine) -> Result<(bool, String)> {
     let cmd = format!("bash -c {}", shell_quote(&full_script(engine, "test_conf 2>&1\n")));
     let out = conn.exec_sudo(&cmd, sudo, None).await?;
     Ok((out.success(), format!("{}{}", out.stdout, out.stderr)))
-}
-
-pub async fn reload(conn: &Connection, sudo: Option<&str>) -> Result<String> {
-    reload_for(conn, sudo, Engine::Nginx).await
 }
 
 pub async fn reload_for(conn: &Connection, sudo: Option<&str>, engine: Engine) -> Result<String> {
@@ -703,10 +676,6 @@ pub fn valid_backup_name(name: &str) -> bool {
 }
 
 /// Sauvegardes disponibles, de la plus récente à la plus ancienne.
-pub async fn backups(conn: &Connection, sudo: Option<&str>) -> Result<Vec<String>> {
-    backups_for(conn, sudo, Engine::Nginx).await
-}
-
 pub async fn backups_for(conn: &Connection, sudo: Option<&str>, engine: Engine) -> Result<Vec<String>> {
     let out = conn.exec_sudo(&format!("ls -1 {} 2>/dev/null || true", engine.backup_root()), sudo, None).await?.into_result()?;
     let mut list: Vec<String> = out.stdout.lines().map(str::trim).filter(|n| valid_backup_name(n)).map(str::to_string).collect();
@@ -715,10 +684,6 @@ pub async fn backups_for(conn: &Connection, sudo: Option<&str>, engine: Engine) 
 }
 
 /// Différences entre une sauvegarde et la configuration actuelle (format diff unifié).
-pub async fn backup_diff(conn: &Connection, sudo: Option<&str>, name: &str) -> Result<String> {
-    backup_diff_for(conn, sudo, Engine::Nginx, name).await
-}
-
 pub async fn backup_diff_for(conn: &Connection, sudo: Option<&str>, engine: Engine, name: &str) -> Result<String> {
     if !valid_backup_name(name) {
         return Err(Error::Other("nom de sauvegarde invalide".into()));
@@ -757,10 +722,6 @@ else
   exit 2
 fi
 "#;
-
-pub async fn restore_backup(conn: &Connection, sudo: Option<&str>, name: &str) -> Result<ApplyResult> {
-    restore_backup_for(conn, sudo, Engine::Nginx, name).await
-}
 
 pub async fn restore_backup_for(conn: &Connection, sudo: Option<&str>, engine: Engine, name: &str) -> Result<ApplyResult> {
     if !valid_backup_name(name) {
@@ -848,11 +809,6 @@ pub async fn used_ports(conn: &Connection) -> Result<Vec<u16>> {
 /// Premier port libre à partir de `start`, en évitant aussi ceux réservés par Docker.
 pub fn first_free(used: &[u16], start: u16) -> u16 {
     (start..u16::MAX).find(|p| !used.contains(p)).unwrap_or(start)
-}
-
-/// Obtient un certificat Let's Encrypt et active HTTPS (avec redirection) via le plugin nginx de certbot.
-pub async fn certbot(conn: &Connection, sudo: Option<&str>, domain: &str, email: &str) -> Result<String> {
-    certbot_for(conn, sudo, Engine::Nginx, domain, email).await
 }
 
 /// Certificat Let's Encrypt avec le plugin certbot du serveur web (`--nginx` ou `--apache`).

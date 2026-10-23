@@ -319,11 +319,12 @@ impl Sessions {
                         if sudo_seen > 4096 {
                             sudo = None;
                         }
+                        let data = b64.encode(&buf);
                         // Terminal partagé : la même sortie part vers les invités.
                         if let Some(mirror) = mirrors.lock().await.get(&id) {
-                            let _ = mirror.send(buf.clone());
+                            let _ = mirror.send(buf);
                         }
-                        if events.send(TermEvent::Data { data: b64.encode(&buf) }).is_err() {
+                        if events.send(TermEvent::Data { data }).is_err() {
                             break;
                         }
                     }

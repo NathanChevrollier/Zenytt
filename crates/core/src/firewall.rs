@@ -56,7 +56,7 @@ pub struct State {
     pub ssh_ports: Vec<u16>,
 }
 
-fn section<'a>(out: &'a str, name: &str) -> &'a str {
+pub(crate) fn section<'a>(out: &'a str, name: &str) -> &'a str {
     let marker = format!("@@{name}\n");
     let Some(start) = out.find(&marker) else { return "" };
     let rest = &out[start + marker.len()..];

@@ -4,13 +4,9 @@ use tauri::State;
 use zenytt_core::tmux::{self, Session};
 use zenytt_profiles::audit::Entry;
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::{AuditLog, Store};
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 #[tauri::command]
 pub fn ui_state_get(store: State<'_, Store>) -> serde_json::Value {

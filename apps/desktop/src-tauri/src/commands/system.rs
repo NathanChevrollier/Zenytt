@@ -8,13 +8,9 @@ use zenytt_core::provider::{self, Credentials, ProviderAction, ProviderKind, Pro
 use zenytt_core::system::{self, PowerAction, SystemInfo, Update};
 use zenytt_profiles::ServerProfile;
 
-use crate::commands::{admin, need_shell, track};
+use crate::commands::{admin, err, need_shell, track};
 use crate::sessions::Sessions;
 use crate::store::{secrets, AuditLog, Store};
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 #[tauri::command]
 pub async fn system_info(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String) -> Result<SystemInfo, String> {

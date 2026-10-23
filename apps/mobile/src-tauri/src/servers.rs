@@ -86,7 +86,6 @@ pub async fn server_save(
     // La clé collée est rangée dans un fichier privé de l'app (le SSH de Zenytt lit une clé par son chemin).
     // Son chemin reste dans les secrets du téléphone : `key_path` et `auth_kind` d'un profil existant
     // sont synchronisés avec le PC et ne doivent jamais recevoir de valeur propre au téléphone.
-    // shortcut: secrets in app-private storage, not Android Keystore/iOS Keychain; upgrade to a keystore plugin before store release
     if let Some(key) = input.private_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
         let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("keys");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

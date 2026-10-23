@@ -153,7 +153,7 @@ pub async fn diagnose(host: &str, port: u16) -> Diagnosis {
         ),
         (Probe::Open, false, _) => (
             "Le port répond mais la connexion est coupée avant la bannière SSH : IP bloquée (fail2ban, TCP wrappers) ou service saturé.".to_string(),
-            unban.clone(),
+            unban,
             true,
         ),
         (Probe::Refused, _, _) => (
@@ -166,7 +166,7 @@ pub async fn diagnose(host: &str, port: u16) -> Diagnosis {
         ),
         (Probe::Timeout | Probe::Error, _, true) => (
             format!("Le serveur est en ligne (ses sites répondent) mais le port SSH {port} ne répond pas depuis ton IP : très probablement un bannissement fail2ban, sinon une règle de pare-feu."),
-            unban.clone(),
+            unban,
             true,
         ),
         (Probe::Timeout | Probe::Error, _, false) => (

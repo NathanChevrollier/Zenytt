@@ -12,14 +12,10 @@ use zenytt_core::ssh::shell_quote;
 use zenytt_core::{archive, ftp, search};
 use zenytt_profiles::Protocol;
 
-use crate::commands::{admin, need_shell, track};
+use crate::commands::{admin, err, need_shell, track};
 use crate::sessions::{Fs, Sessions};
 use crate::store::AuditLog;
 use crate::store::Store;
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 /// Résultat d'une opération FTP ; après un délai dépassé le canal est désynchronisé : on jette le client pour se reconnecter.
 async fn ftp_res<T>(sessions: &Sessions, server_id: &str, r: zenytt_core::Result<T>) -> Result<T, String> {

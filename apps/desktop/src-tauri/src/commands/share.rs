@@ -184,8 +184,6 @@ struct Share {
     task: tauri::async_runtime::JoinHandle<()>,
     /// Messages à envoyer aux invités (déjà en clair, chiffrés par la tâche).
     outbox: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    invite: String,
-    mode: ShareMode,
 }
 
 #[derive(Default)]
@@ -321,7 +319,7 @@ pub async fn term_share_start(
         let _ = on_event.send(ShareEvent::Ended { reason });
     });
 
-    shares.hosted.lock().await.insert(term_id, Share { task, outbox, invite: invite.clone(), mode });
+    shares.hosted.lock().await.insert(term_id, Share { task, outbox });
     log::info!("terminal {term_id} partagé (session {session}, mode {mode:?})");
     Ok(ShareInfo { term_id, invite, mode })
 }
@@ -341,12 +339,6 @@ pub async fn term_share_stop(sessions: State<'_, Sessions>, shares: State<'_, Sh
     }
     sessions.stop_mirror(term_id).await;
     Ok(())
-}
-
-/// Partages en cours (l'interface les retrouve après un changement d'onglet).
-#[tauri::command]
-pub async fn term_shares(shares: State<'_, Shares>) -> Result<Vec<ShareInfo>, String> {
-    Ok(shares.hosted.lock().await.iter().map(|(id, s)| ShareInfo { term_id: *id, invite: s.invite.clone(), mode: s.mode }).collect())
 }
 
 #[derive(Serialize)]

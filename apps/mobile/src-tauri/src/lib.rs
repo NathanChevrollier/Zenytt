@@ -19,7 +19,6 @@ pub fn run() {
             // Données et secrets dans le dossier privé de l'app (protégé par le système).
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            // shortcut: secrets in app-private storage, not Android Keystore/iOS Keychain; upgrade to a keystore plugin before store release
             zenytt_profiles::secrets::use_file(dir.join("secrets.json"));
             let store = zenytt_profiles::Store::open(&dir);
             if let Some(w) = store.warning() {

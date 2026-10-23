@@ -46,6 +46,11 @@ pub async fn admin(store: &Store, sessions: &Sessions, server_id: &str) -> Resul
 
 use crate::store::AuditLog;
 
+/// Convertit toute erreur en `String` pour les commandes Tauri.
+pub fn err(e: impl ToString) -> String {
+    e.to_string()
+}
+
 /// Inscrit le résultat d'une action dans le journal puis le renvoie tel quel.
 pub fn track<T>(audit: &AuditLog, store: &Store, server_id: &str, action: &str, detail: &str, r: Result<T, String>) -> Result<T, String> {
     let name = store.server(server_id).map(|s| s.name).unwrap_or_default();

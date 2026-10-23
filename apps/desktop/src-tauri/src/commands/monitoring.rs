@@ -11,7 +11,7 @@ use zenytt_core::Connection;
 use zenytt_protocol::proc::{parse_collect, COLLECT_SCRIPT};
 use zenytt_protocol::{AgentConfig, HistoryPoint, Metrics, RawSample};
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::AuditLog;
 use crate::store::Store;
@@ -25,10 +25,6 @@ const AGENT_AARCH64: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zenyttd-a
 #[derive(Default)]
 pub struct Monitor {
     pub prev: Mutex<HashMap<String, RawSample>>,
-}
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
 }
 
 fn now_ms() -> i64 {
