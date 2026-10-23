@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
+use crate::firewall::section;
 use crate::ssh::shell_quote;
 use crate::{Connection, Error, Result};
 
@@ -295,16 +296,6 @@ if [ -n "$P" ]; then
 fi
 ! ip link show zenytt >/dev/null 2>&1
 "#;
-
-fn section<'a>(out: &'a str, name: &str) -> &'a str {
-    let marker = format!("@@{name}\n");
-    let Some(start) = out.find(&marker) else { return "" };
-    let rest = &out[start + marker.len()..];
-    match rest.find("\n@@") {
-        Some(end) => &rest[..end],
-        None => rest,
-    }
-}
 
 /// Ce que le PC doit savoir d'un serveur avant de l'ajouter à un réseau.
 #[derive(Debug, Clone, PartialEq)]

@@ -10,7 +10,8 @@ import { useLock } from "../../lib/lock";
 import { useAssistant } from "../../lib/assistant";
 import { badgesOf, useHealth } from "../../lib/health";
 import { display, shortcutOf } from "../../lib/shortcuts";
-import { ALWAYS_VISIBLE, SECTIONS, type SectionId } from "../../sections";
+import { hasShell, protocolBadge } from "../../lib/api";
+import { ALWAYS_VISIBLE, needsShell, SECTIONS, type SectionId } from "../../sections";
 import { Avatar, FOCUS_RING, StatusDot, useContextMenu } from "../ui";
 import ServerSwitcher from "./ServerSwitcher";
 
@@ -54,7 +55,7 @@ export default function Sidebar({ version }: { version?: string }) {
 
   // Onglets masqués par l'utilisateur (Réglages) ; celui qu'on regarde reste affiché.
   const hidden = useApp((s) => s.settings.hiddenSections);
-  const shown = (id: SectionId) => ALWAYS_VISIBLE.includes(id) || id === section || !hidden?.includes(id);
+  const shown = (id: SectionId) => (hasShell(server) || !needsShell(id)) && (ALWAYS_VISIBLE.includes(id) || id === section || !hidden?.includes(id));
   const setSettings = useApp((s) => s.setSettings);
   const menu = useContextMenu();
 
@@ -141,7 +142,10 @@ export default function Sidebar({ version }: { version?: string }) {
           {open && (
             <>
               <span className="flex min-w-0 flex-1 flex-col text-left">
-                <span className="truncate text-[13px] font-semibold">{server?.name ?? "Choisir un serveur"}</span>
+                <span className="flex items-center gap-1.5 truncate text-[13px] font-semibold">
+                  {server?.name ?? "Choisir un serveur"}
+                  {protocolBadge(server) && <span className="rounded bg-hover-strong px-1 font-mono text-[9.5px] font-medium text-muted">{protocolBadge(server)}</span>}
+                </span>
                 <span className="truncate font-mono text-[10.5px] text-muted">{server ? `${server.username}@${server.host}` : "aucun serveur actif"}</span>
               </span>
               <ChevronsUpDown size={14} className="shrink-0 text-muted" />

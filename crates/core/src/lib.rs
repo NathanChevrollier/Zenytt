@@ -15,9 +15,11 @@ pub mod docker;
 pub mod domains;
 pub mod fail2ban;
 pub mod firewall;
+pub mod ftp;
 pub mod legacy;
 pub mod mesh;
 pub mod nginx;
+pub mod provider;
 pub mod redis;
 pub mod registry;
 pub mod schedule;
@@ -51,6 +53,8 @@ pub enum Error {
     Ssh(#[from] russh::Error),
     #[error("Erreur SFTP : {0}")]
     Sftp(String),
+    #[error("Erreur FTP : {0}")]
+    Ftp(String),
     #[error("Commande distante en échec : {0}")]
     Remote(String),
     #[error("{0}")]

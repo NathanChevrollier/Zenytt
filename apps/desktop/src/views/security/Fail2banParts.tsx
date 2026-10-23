@@ -37,7 +37,7 @@ export const useIpInfo = create<IpInfoState>((set, get) => ({
 export const jailLabel = (name: string) => MANUAL_JAILS[name] ?? name;
 
 /** « sshd, jusqu'au 6 oct. 2026, 13:13 » ; « Bannissement manuel · définitif » (sans répéter « définitif »). */
-export function banSummary(jail: F2bJail, ip: string): string {
+function banSummary(jail: F2bJail, ip: string): string {
   const end = banEnd(jail, ip);
   const text = banEndText(end);
   return text && end !== null ? `${jailLabel(jail.name)}, ${text}` : jail.name in MANUAL_JAILS || !text ? jailLabel(jail.name) : `${jailLabel(jail.name)}, ${text}`;
@@ -72,7 +72,7 @@ export function IpTags({ ip, recidivist }: { ip: string; compact?: boolean; reci
 }
 
 /** Adresse déjà bannie qui recommence. */
-export function RecidivistBadge({ r }: { r: Recidivist }) {
+function RecidivistBadge({ r }: { r: Recidivist }) {
   const detail = `${r.bans} bannissement(s) dans le journal${r.retriesSinceUnban ? `, ${r.retriesSinceUnban} tentative(s) depuis son dernier déblocage` : ""}${r.lastSeen ? ` · dernière tentative ${r.lastSeen}` : ""}`;
   return (
     <Badge tone="warn" title={detail}>

@@ -7,13 +7,9 @@ use zenytt_core::db_admin::{self, BackupFile};
 use zenytt_core::db_schema::{self, SchemaOp};
 use zenytt_core::docker::{self, Access};
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::{secrets, AuditLog, Store};
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 /// Nom du secret (keyring) qui garde le compte d'une instance.
 fn login_key(instance_id: &str) -> String {
@@ -315,6 +311,32 @@ pub async fn db_tables(
 }
 
 /// Exécute du SQL. Les requêtes qui modifient les données sont inscrites au journal d'actions.
+/// Remplace le contenu des littéraux entre guillemets par `?` : un `IDENTIFIED BY 'secret'` ne
+/// doit pas finir dans les journaux.
+fn mask_literals(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut quote: Option<char> = None;
+    let mut chars = sql.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            None if c == '\'' || c == '"' => {
+                quote = Some(c);
+                out.push_str(&format!("{c}?"));
+            }
+            None => out.push(c),
+            Some(_) if c == '\\' => {
+                chars.next();
+            }
+            Some(q) if c == q => {
+                quote = None;
+                out.push(c);
+            }
+            Some(_) => {}
+        }
+    }
+    out
+}
+
 #[tauri::command]
 pub async fn db_query(
     audit: State<'_, AuditLog>,
@@ -336,8 +358,12 @@ pub async fn db_query(
     if read_only {
         return r;
     }
-    let detail =
-        format!("{} · {} : {}", instance.label, database.unwrap_or_default(), sql.split_whitespace().collect::<Vec<_>>().join(" "));
+    let detail = format!(
+        "{} · {} : {}",
+        instance.label,
+        database.unwrap_or_default(),
+        mask_literals(&sql).split_whitespace().collect::<Vec<_>>().join(" ")
+    );
     track(&audit, &store, &server_id, "db.query", &detail.chars().take(500).collect::<String>(), r)
 }
 
@@ -352,12 +378,6 @@ pub fn db_schema_sql(engine: Engine, op: SchemaOp) -> Result<String, String> {
 #[tauri::command]
 pub fn db_column_types(engine: Engine) -> Vec<&'static str> {
     db_schema::column_types(engine).to_vec()
-}
-
-/// Requête d'aperçu du contenu d'une table (identifiant vérifié côté Rust).
-#[tauri::command]
-pub fn db_preview_query(engine: Engine, table: String, limit: usize) -> Result<String, String> {
-    db::preview_query(engine, &table, limit.min(5000)).map_err(err)
 }
 
 /// Colonnes d'une table, avec le repérage de la clé primaire. C'est cette information qui autorise
@@ -426,11 +446,14 @@ pub async fn db_sqlite_files(store: State<'_, Store>, sessions: State<'_, Sessio
     Ok(db::parse_sqlite(&out.stdout))
 }
 
-/// Ouvre un fichier SQLite choisi à la main (par exemple repéré dans l'explorateur de fichiers).
-#[tauri::command]
-pub fn db_sqlite_instance(path: String, container: Option<String>) -> Result<Instance, String> {
-    if !db::safe_file_path(&path) {
-        return Err("chemin invalide : un chemin absolu est attendu".into());
+#[cfg(test)]
+mod mask_tests {
+    use super::mask_literals;
+
+    #[test]
+    fn literals_are_masked() {
+        assert_eq!(mask_literals("ALTER USER 'bob'@'%' IDENTIFIED BY 'p\\'w d'"), "ALTER USER '?'@'?' IDENTIFIED BY '?'");
+        assert_eq!(mask_literals("SET PASSWORD = \"x\"; SELECT 1"), "SET PASSWORD = \"?\"; SELECT 1");
+        assert_eq!(mask_literals("CREATE USER a IDENTIFIED BY 'oops"), "CREATE USER a IDENTIFIED BY '?");
     }
-    Ok(Instance::sqlite(path, container))
 }

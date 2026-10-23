@@ -12,7 +12,7 @@ mod vnc_bridge;
 
 use commands::{
     assistant, backups, dashboard, databases, deploy, docker, files, identities, logs, mesh, monitoring, rdp, redis, security, servers,
-    share, sites, sync, terminal, tunnels, vms, workspace,
+    share, sites, sync, system, terminal, tunnels, vms, workspace,
 };
 use tauri::Manager;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
@@ -68,6 +68,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // Verrouillage configuré : Zenytt démarre verrouillé, avant de servir la moindre commande.
+            // Sinon quitter puis relancer l'app suffirait à lever le verrou.
+            workspace::app_lock_engage();
             let dir = app.path().app_config_dir()?;
             // Installation de la version précédente : profils repris avant la première lecture.
             legacy::migrate_local(&dir);
@@ -172,14 +175,12 @@ pub fn run() {
             databases::db_databases,
             databases::db_tables,
             databases::db_query,
-            databases::db_preview_query,
             databases::db_columns,
             databases::db_table_query,
             databases::db_update_cell_sql,
             databases::db_delete_row_sql,
             databases::db_insert_row_sql,
             databases::db_sqlite_files,
-            databases::db_sqlite_instance,
             redis::redis_servers,
             redis::redis_overview,
             redis::redis_scan,
@@ -200,7 +201,6 @@ pub fn run() {
             share::term_share_start,
             share::term_share_send,
             share::term_share_stop,
-            share::term_shares,
             share::term_join,
             share::term_join_write,
             share::term_join_close,
@@ -232,6 +232,19 @@ pub fn run() {
             files::fs_cancel,
             files::fs_copy_between,
             monitoring::mon_metrics,
+            system::system_info,
+            system::system_power,
+            system::system_cancel_power,
+            system::system_wait_online,
+            system::system_set_hostname,
+            system::system_timezones,
+            system::system_set_timezone,
+            system::system_updates,
+            system::system_apply_updates,
+            system::provider_get,
+            system::provider_set,
+            system::provider_test,
+            system::provider_action,
             monitoring::mon_processes,
             monitoring::mon_kill,
             monitoring::mon_services,

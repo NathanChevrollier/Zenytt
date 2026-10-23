@@ -2,6 +2,17 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 
 export type AuthKind = "password" | "key" | "agent";
 
+/** Protocole d'accès : seul `ssh` ouvre un shell, les autres ne servent qu'aux fichiers. */
+export type Protocol = "ssh" | "sftp" | "ftp" | "ftps";
+
+export const PROTOCOL_LABELS: Record<Protocol, string> = { ssh: "SSH complet", sftp: "SFTP seul", ftp: "FTP", ftps: "FTPS" };
+
+/** Ce serveur accepte-t-il des commandes (terminal, Docker, supervision…) ? Les anciens profils sont en SSH. */
+export const hasShell = (s?: { protocol?: Protocol } | null) => !s || !s.protocol || s.protocol === "ssh";
+
+/** Pastille « SFTP » / « FTP » / « FTPS » des serveurs sans shell (rien pour le SSH). */
+export const protocolBadge = (s?: { protocol?: Protocol } | null) => (hasShell(s) ? null : (s!.protocol as Protocol).toUpperCase());
+
 export interface ServerProfile {
   id: string;
   name: string;
@@ -9,6 +20,8 @@ export interface ServerProfile {
   port: number;
   username: string;
   authKind: AuthKind;
+  /** Absent des anciens profils : SSH. */
+  protocol?: Protocol;
   keyPath?: string | null;
   color?: string | null;
   group?: string | null;
@@ -491,6 +504,52 @@ export interface Process {
   elapsed: number;
   name: string;
   command: string;
+}
+
+export interface SystemInfo {
+  hostname: string;
+  os: string;
+  kernel: string;
+  uptimeSecs: number;
+  /** Secondes Unix. */
+  bootTime: number;
+  timezone: string;
+  rebootRequired: boolean;
+  scheduled: { at: number; mode: string } | null;
+  packageManager: string | null;
+  cpuModel: string;
+  cpuCount: number;
+  /** Octets. */
+  memoryTotal: number;
+}
+
+export interface SystemUpdate {
+  name: string;
+  current: string;
+  candidate: string;
+}
+
+export type ProviderKind = "hetzner" | "scaleway" | "digitalOcean" | "ovh";
+export type ProviderAction = "status" | "reboot" | "reset" | "powerOn" | "powerOff";
+
+export interface ProviderLink {
+  kind: ProviderKind;
+  serverRef: string;
+  /** Scaleway : zone ; OVH : région de l'API (ovh-eu, ovh-ca, ovh-us). */
+  zone?: string | null;
+}
+
+/** Secrets en écriture seule : seule leur présence est renvoyée. */
+export interface ProviderView {
+  link: ProviderLink | null;
+  hasToken: boolean;
+  hasSecret: boolean;
+  hasConsumer: boolean;
+}
+
+export interface ProviderStatus {
+  state: "running" | "off" | "starting" | "stopping" | "unknown";
+  raw: string;
 }
 
 export interface Service {
@@ -1383,7 +1442,6 @@ export const api = {
   dbTables: (serverId: string, instance: DbInstance, database: string) => invoke<DbNamed[]>("db_tables", { serverId, instance, database }),
   dbQuery: (serverId: string, instance: DbInstance, database: string | null, sql: string, limit = 500) =>
     invoke<DbQueryResult>("db_query", { serverId, instance, database, sql, limit }),
-  dbPreviewQuery: (engine: DbEngine, table: string, limit = 200) => invoke<string>("db_preview_query", { engine, table, limit }),
   dbColumns: (serverId: string, instance: DbInstance, database: string | null, table: string) =>
     invoke<DbColumn[]>("db_columns", { serverId, instance, database, table }),
   dbTableQuery: (engine: DbEngine, table: string, filters: DbFilter[], sortColumn: string | null, sortDesc: boolean, limit: number, offset = 0) =>
@@ -1412,7 +1470,6 @@ export const api = {
   dbActivity: (serverId: string, instance: DbInstance) => invoke<DbQueryResult>("db_activity", { serverId, instance }),
   dbKill: (serverId: string, instance: DbInstance, id: number, whole: boolean) => invoke<void>("db_kill", { serverId, instance, id, whole }),
   dbSqliteFiles: (serverId: string) => invoke<DbInstance[]>("db_sqlite_files", { serverId }),
-  dbSqliteInstance: (path: string, container: string | null = null) => invoke<DbInstance>("db_sqlite_instance", { path, container }),
 
   dockerCatalog: () => invoke<CatalogApp[]>("docker_catalog"),
   dockerCatalogDefaults: (appId: string) => invoke<[string, string][]>("docker_catalog_defaults", { appId }),
@@ -1493,7 +1550,6 @@ export const api = {
   /** Envoie l'écran courant à un invité qui vient d'arriver. */
   termShareSend: (termId: number, data: string) => invoke<void>("term_share_send", { termId, data }),
   termShareStop: (termId: number) => invoke<void>("term_share_stop", { termId }),
-  termShares: () => invoke<ShareInfo[]>("term_shares"),
   /** Rejoint le terminal partagé d'une invitation. */
   termJoin: (code: string, onEvent: (e: TermEvent) => void) => {
     const channel = new Channel<TermEvent>();
@@ -1558,6 +1614,24 @@ export const api = {
   services: (serverId: string) => invoke<Service[] | null>("mon_services", { serverId }),
   serviceAction: (serverId: string, unit: string, action: string) => invoke<void>("mon_service_action", { serverId, unit, action }),
   serviceLogs: (serverId: string, unit: string, lines = 300) => invoke<string>("mon_service_logs", { serverId, unit, lines }),
+
+  systemInfo: (serverId: string) => invoke<SystemInfo>("system_info", { serverId }),
+  systemPower: (serverId: string, action: "reboot" | "poweroff", delayMinutes: number) => invoke<void>("system_power", { serverId, action, delayMinutes }),
+  systemCancelPower: (serverId: string) => invoke<void>("system_cancel_power", { serverId }),
+  /** Attend le retour du serveur après un redémarrage ; renvoie la durée en secondes. */
+  systemWaitOnline: (serverId: string, bootTime?: number, timeoutSecs = 600) =>
+    invoke<number>("system_wait_online", { serverId, timeoutSecs, bootTime }),
+  systemSetHostname: (serverId: string, name: string) => invoke<void>("system_set_hostname", { serverId, name }),
+  systemTimezones: (serverId: string) => invoke<string[]>("system_timezones", { serverId }),
+  systemSetTimezone: (serverId: string, timezone: string) => invoke<void>("system_set_timezone", { serverId, timezone }),
+  systemUpdates: (serverId: string, refresh: boolean) => invoke<SystemUpdate[]>("system_updates", { serverId, refresh }),
+  systemApplyUpdates: (serverId: string) => invoke<string>("system_apply_updates", { serverId }),
+  providerGet: (serverId: string) => invoke<ProviderView>("provider_get", { serverId }),
+  /** `undefined` = secret inchangé, `""` = supprimé. Sans `link`, le compte est délié. */
+  providerSet: (serverId: string, link: ProviderLink | null, secrets: { token?: string; secret?: string; consumer?: string }) =>
+    invoke<void>("provider_set", { serverId, link, ...secrets }),
+  providerTest: (serverId: string) => invoke<ProviderStatus>("provider_test", { serverId }),
+  providerAction: (serverId: string, action: ProviderAction) => invoke<ProviderStatus>("provider_action", { serverId, action }),
   agentInfo: (serverId: string) => invoke<AgentInfo>("agent_info", { serverId }),
   agentHistory: (serverId: string, rangeSecs: number, points = 400) =>
     invoke<HistoryPoint[]>("agent_history", { serverId, rangeSecs, points }),
@@ -1705,6 +1779,15 @@ export function formatDuration(secs: number): string {
   if (h) return `${h} h ${m} min`;
   if (secs < 60) return `${Math.max(0, Math.round(secs))} s`;
   return `${m} min`;
+}
+
+/** Il y a combien de temps, en clair (`ms` = durée écoulée en millisecondes). */
+export function formatAgo(ms: number): string {
+  const s = ms / 1000;
+  if (s < 60) return "à l'instant";
+  if (s < 3600) return `il y a ${Math.round(s / 60)} min`;
+  if (s < 86400) return `il y a ${Math.round(s / 3600)} h`;
+  return `il y a ${Math.round(s / 86400)} j`;
 }
 
 export function formatBytes(n: number): string {

@@ -43,6 +43,29 @@ describe("métadonnées des images jointes", () => {
     expect(sos(out).equals(sos(input))).toBe(true);
   });
 
+  it("JPEG : abandonne tout ce qui suit l'EOI (JPEG secondaire MPF avec EXIF/GPS)", () => {
+    const photo = fixture("photo.jpg");
+    const secret = Buffer.from("SECRET-mpf");
+    const exif = Uint8Array.from([0xff, 0xd8, 0xff, 0xe1, 0x00, 2 + secret.length, ...secret, 0xff, 0xd9]);
+    const input = Uint8Array.from([...photo, ...exif]);
+    expect(text(input)).toContain("SECRET-mpf");
+    const out = stripMetadata(input, "jpeg");
+    expect(text(out)).not.toContain("SECRET-mpf");
+    expect(out).toEqual(stripMetadata(photo, "jpeg"));
+    expect([out.at(-2), out.at(-1)]).toEqual([0xff, 0xd9]);
+  });
+
+  it("GIF : retire les extensions d'application (XMP) mais garde NETSCAPE", () => {
+    const gif = fixture("anim.gif");
+    const secret = Buffer.from("SECRET-xmp");
+    const xmp = [0x21, 0xff, 0x0b, ...Buffer.from("XMP DataXMP"), secret.length, ...secret, 0x00];
+    const input = Uint8Array.from([...gif.subarray(0, -1), ...xmp, 0x3b]);
+    expect(text(input)).toContain("SECRET-xmp");
+    const out = stripMetadata(input, "gif");
+    expect(text(out)).not.toContain("SECRET-xmp");
+    expect(text(out)).toContain(text(gif).includes("NETSCAPE2.0") ? "NETSCAPE2.0" : "GIF");
+  });
+
   it("refuse un fichier abîmé plutôt que de publier n'importe quoi", () => {
     const broken = fixture("photo.jpg").slice(0, 40);
     broken[20] = 0x00;

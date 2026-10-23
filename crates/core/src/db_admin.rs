@@ -21,11 +21,11 @@ pub fn dump_command(instance: &Instance, database: &str) -> Result<String> {
     const MYSQL_OPTS: &str = "--single-transaction --routines --triggers --events --databases";
     Ok(match (instance.engine, &instance.container) {
         (Engine::Mysql, Some(c)) => {
-            let script = format!("{}D=$(command -v mysqldump || command -v mariadb-dump); exec \"$D\" -u\"$ZU\" {MYSQL_OPTS} {database}", db::MYSQL_CONTAINER_SCRIPT);
+            let script = format!("{}D=$(command -v mysqldump || command -v mariadb-dump); exec \"$D\" -u\"$ZU\" {MYSQL_OPTS} {}", db::MYSQL_CONTAINER_SCRIPT, shell_quote(database));
             format!("docker exec -i {c} sh -c {}", shell_quote(&script))
         }
         (Engine::Mysql, None) => format!(
-            "{SKIP_LOGIN} D=$(command -v mysqldump || command -v mariadb-dump); if [ -n \"$ZU\" ]; then export MYSQL_PWD=\"$ZP\"; set -- -u\"$ZU\"; fi; \"$D\" \"$@\" {MYSQL_OPTS} {database}"
+            "{SKIP_LOGIN} D=$(command -v mysqldump || command -v mariadb-dump); if [ -n \"$ZU\" ]; then export MYSQL_PWD=\"$ZP\"; set -- -u\"$ZU\"; fi; \"$D\" \"$@\" {MYSQL_OPTS} {}", shell_quote(database)
         ),
         (Engine::Postgres, Some(c)) => {
             let script = format!(
@@ -350,11 +350,12 @@ mod tests {
     #[test]
     fn dump_commands() {
         let m = dump_command(&mysql(), "shop").unwrap();
-        assert!(m.contains("--databases shop") && m.contains("docker exec -i db") && !m.contains("-it"), "{m}");
+        assert!(m.contains("--databases ") && m.contains("shop") && m.contains("docker exec -i db") && !m.contains("-it"), "{m}");
         assert!(!m.contains(" -p") && m.contains("MYSQL_PWD"), "même authentification que le client : {m}");
         let pg = dump_command(&Instance::server("local:postgres", "pg", Engine::Postgres, None), "app").unwrap();
         assert!(pg.contains("pg_dump -d app"));
         assert!(dump_command(&mysql(), "shop; rm -rf /").is_err());
+        assert!(dump_command(&mysql(), "-eSHUTDOWN").is_err() && dump_command(&mysql(), "$ZP").is_err());
         let s = dump_command(&Instance::sqlite("/srv/app/db.sqlite", None), "main").unwrap();
         assert!(s.ends_with("sqlite3 '/srv/app/db.sqlite' .dump") && s.starts_with("IFS= read -r ZU"), "{s}");
     }

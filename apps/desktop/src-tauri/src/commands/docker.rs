@@ -12,7 +12,7 @@ use zenytt_core::registry as zenytt_registry;
 use zenytt_core::ssh::shell_quote;
 use zenytt_core::Connection;
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::AuditLog;
 use crate::store::{secrets, Store};
@@ -21,10 +21,6 @@ use zenytt_profiles::Registry;
 /// Mode d'accès à Docker mémorisé par serveur.
 #[derive(Default)]
 pub struct DockerAccess(Mutex<HashMap<String, Access>>);
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 struct Ctx {
     conn: Connection,

@@ -31,6 +31,10 @@ const envSchema = z.object({
     .regex(/^$|^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/, "GITHUB_ATTACHMENTS_BRANCH doit être un nom de branche valide")
     .refine((v) => !v.includes("..") && !v.endsWith(".lock") && !v.endsWith("/"), "GITHUB_ATTACHMENTS_BRANCH doit être un nom de branche valide")
     .default("feedback-attachments"),
+  // Captures dans un dépôt SÉPARÉ, avec son propre jeton (Contents: write sur ce seul dépôt) : le
+  // jeton du dépôt Zenytt reste limité aux issues et ne peut pas pousser de tag ni de code.
+  GITHUB_ATTACHMENTS_REPO: z.preprocess((value) => (value === "" ? undefined : value), z.string().regex(/^[A-Za-z0-9_.-]+$/).optional()),
+  GITHUB_ATTACHMENTS_TOKEN: z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).optional()),
   GITHUB_BUG_LABEL: z.string().min(1).max(50).default("bug"),
   GITHUB_SUGGESTION_LABEL: z.string().min(1).max(50).default("enhancement"),
   GITHUB_BRAINSTORMING_LABEL: z.string().min(1).max(50).default("brainstorming"),

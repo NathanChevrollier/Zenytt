@@ -5,7 +5,7 @@ use tauri::State;
 use zenytt_core::shell_history;
 
 use crate::sessions::{Sessions, TermEvent};
-use crate::store::Store;
+use crate::store::{secrets, Store};
 
 #[tauri::command]
 pub async fn term_open(
@@ -19,17 +19,58 @@ pub async fn term_open(
     on_event: Channel<TermEvent>,
 ) -> Result<u64, String> {
     let conn = sessions.get(&store, &server_id).await?;
+    // Mot de passe sudo enregistré : une commande `sudo …` lancée dans l'onglet ne le redemande pas.
+    let sudo_pw = command.as_deref().filter(|c| c.contains("sudo")).and_then(|_| secrets::get(&server_id, "sudo"));
+    // Propre à ce terminal : la sortie d'un programme (journal, console de VM, conteneur) ne peut
+    // pas imiter le signal de l'amorce sans le connaître.
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
     // Une session tmux remplace le shell : elle survit aux coupures et à la fermeture de l'app.
     let command = match (command, tmux_session) {
         // Onglet ouvert sur une commande (mises à jour, journal…) : elle est lancée par un shell
         // qui annonce son PID, sinon Zenytt perdrait le dossier courant de cet onglet.
+        (Some(c), _) if sudo_pw.is_some() => Some(announcing_pid(&with_sudo_primed(&c, &nonce))),
         (Some(c), _) => Some(announcing_pid(&c)),
         (None, Some(name)) => Some(zenytt_core::tmux::attach_command(&name).map_err(|e| e.to_string())?),
         // Shell simple : il annonce son PID (séquence OSC ignorée par l'affichage) pour que
         // Zenytt retrouve son dossier courant (panneau Fichiers, glisser-déposer).
         (None, None) => Some(announcing_pid(LOGIN_SHELL)),
     };
-    sessions.open_terminal(&conn, cols, rows, command, on_event).await
+    sessions.open_terminal(&conn, cols, rows, command, sudo_pw.map(|pw| (pw, nonce)), on_event).await
+}
+
+/// Fait précéder la commande d'une amorce de sudo : l'autorisation sudo est liée au terminal, donc
+/// elle doit être obtenue dans ce terminal. Le script coupe l'écho, émet la séquence OSC privée
+/// `7771;<nonce>`, lit le mot de passe que Zenytt écrit alors (jamais dans la ligne de commande ni
+/// à l'écran), l'envoie à `sudo -S -v`, puis lance la commande. Rien à faire pour root, NOPASSWD
+/// ou une autorisation en cache : l'amorce émet alors `7771;<nonce>;-` et Zenytt n'écrit rien. Si
+/// le mot de passe est refusé, sudo le redemande normalement.
+fn with_sudo_primed(command: &str, nonce: &str) -> String {
+    format!(
+        "if [ \"$(id -u)\" != 0 ] && ! sudo -n true 2>/dev/null; then \
+           stty -echo; printf '\\033]7771;{nonce}\\007'; IFS= read -r zpw; stty echo; \
+           printf '%s\\n' \"$zpw\" | sudo -S -p '' -v >/dev/null 2>&1; unset zpw; \
+         else printf '\\033]7771;{nonce};-\\007'; \
+         fi; {command}"
+    )
+}
+
+/// Octets de fin de sortie à conserver d'un paquet à l'autre : de quoi reconstituer un marqueur
+/// coupé entre deux paquets (marqueur + octet suivant, le nonce fait 32 caractères).
+pub const SUDO_TAIL: usize = 64;
+
+/// Réponse à la sortie d'un terminal amorcé (voir [`with_sudo_primed`]) : `None` tant que l'amorce
+/// ne s'est pas annoncée ; sinon l'amorce est désarmée, avec le texte à écrire s'il y en a un. Un
+/// mot de passe contenant un caractère de contrôle n'est jamais écrit : la suite partirait au shell.
+pub fn sudo_answer(output: &[u8], nonce: &str, password: &str) -> Option<Option<String>> {
+    let marker = format!("\x1b]7771;{nonce}");
+    let at = output.windows(marker.len()).position(|w| w == marker.as_bytes())?;
+    match output.get(at + marker.len()) {
+        Some(b'\x07') if !password.chars().any(char::is_control) => Some(Some(format!("{password}\n"))),
+        Some(b'\x07' | b';') => Some(None),
+        // Séquence coupée en fin de sortie : l'appelant rejoue la fin (`SUDO_TAIL`) avec le paquet
+        // suivant, jusqu'à la limite qu'il s'est fixée.
+        _ => None,
+    }
 }
 
 /// Shell de connexion de l'utilisateur (`exec` : il garde le PID annoncé).
@@ -218,6 +259,42 @@ mod tests {
         // Aucune apostrophe de la commande ne doit fermer la chaîne du `sh -c`.
         assert!(c.contains(r"'\''salut'\''"), "{c}");
         assert!(c.ends_with("-l'"), "{c}");
+    }
+
+    #[test]
+    fn amorce_sudo_sans_mot_de_passe_en_clair() {
+        let c = announcing_pid(&super::with_sudo_primed("sudo apt-get update; exec \"$SHELL\" -l", "abc123"));
+        assert!(c.contains("stty -echo") && c.contains("sudo -S -p"), "{c}");
+        assert!(c.contains(r"\033]7771;abc123\007") && c.contains(r"\033]7771;abc123;-\007"), "{c}");
+        // Le script d'amorce passe avant la commande de l'utilisateur.
+        assert!(c.find("sudo -S").unwrap() < c.find("apt-get").unwrap(), "{c}");
+        assert!(c.starts_with("exec sh -c '") && c.ends_with("-l'"), "{c}");
+    }
+
+    #[test]
+    fn mot_de_passe_ecrit_seulement_sur_le_bon_signal() {
+        use super::sudo_answer;
+        let n = "0123456789abcdef0123456789abcdef";
+        let ready = format!("\x1b]7770;42\x07\x1b]7771;{n}\x07");
+        assert_eq!(sudo_answer(ready.as_bytes(), n, "pw"), Some(Some("pw\n".into())));
+        // Root, NOPASSWD, autorisation en cache : désarmé sans rien écrire.
+        assert_eq!(sudo_answer(format!("\x1b]7771;{n};-\x07").as_bytes(), n, "pw"), Some(None));
+        // Ancien marqueur fixe ou mauvais nonce (journal, console de VM, conteneur) : rien.
+        assert_eq!(sudo_answer(b"\x1b]7771;\x07", n, "pw"), None);
+        assert_eq!(sudo_answer(b"\x1b]7771;ffffffffffffffffffffffffffffffff\x07", n, "pw"), None);
+        assert_eq!(sudo_answer(b"sortie ordinaire", n, "pw"), None);
+        // Marqueur coupé entre deux paquets : retrouvé en rejouant la fin du précédent.
+        for (full, want) in [(ready.clone(), Some(Some("pw\n".to_string()))), (format!("\x1b]7771;{n};-\x07"), Some(None))] {
+            for cut in 1..full.len() {
+                let (a, b) = full.as_bytes().split_at(cut);
+                assert_eq!(sudo_answer(&a[..a.len().min(10)], n, "pw"), None);
+                assert_eq!(sudo_answer(&[a, b].concat(), n, "pw"), want, "coupure {cut}");
+            }
+        }
+        // Caractère de contrôle dans le mot de passe : jamais écrit.
+        for pw in ["a\nrm -rf ~", "a\rb", "a\x03"] {
+            assert_eq!(sudo_answer(ready.as_bytes(), n, pw), Some(None), "{pw:?}");
+        }
     }
 
     #[test]

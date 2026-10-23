@@ -8,17 +8,13 @@ use tokio::sync::Mutex;
 use zenytt_core::vm::{self, Access, Vm, VmAction, VmDetail};
 use zenytt_core::Connection;
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::{AuditLog, Store};
 
 /// Mode d'accès à libvirt mémorisé par serveur.
 #[derive(Default)]
 pub struct VmAccess(Mutex<HashMap<String, Access>>);
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 pub(crate) fn unavailable_message(reason: &str) -> String {
     if reason.contains("n'est pas installé") {

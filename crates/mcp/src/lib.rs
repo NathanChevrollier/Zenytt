@@ -103,6 +103,13 @@ pub fn readable(path: &str) -> bool {
         && !READ_DENY.iter().any(|d| path.contains(d))
 }
 
+/// Fichier `.env` (`.env`, `.env.production`, `.env-prod`, `.envrc`, `prod.env`) : toutes ses valeurs sont masquées.
+/// À décider sur le chemin réel : un lien `config -> .env` ne doit pas y échapper.
+pub fn is_dotenv(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.starts_with(".env") || name.ends_with(".env")
+}
+
 /// Chemin réel (liens symboliques résolus) : un lien placé dans un dossier autorisé ne doit pas
 /// ouvrir l'accès à un fichier qui ne l'est pas (`/opt/x -> /etc/shadow`).
 pub async fn real_path(c: &Connection, sudo: Option<&str>, path: &str) -> Result<String, String> {
@@ -302,9 +309,21 @@ impl Zenytt {
             for p in projects {
                 out.push_str(&format!("## Projet {} ({})\n", p.name, p.status));
                 for f in p.config_files.split(',').map(str::trim).filter(|f| f.starts_with('/')) {
-                    let content =
-                        c.exec(&format!("cat -- {}", zenytt_core::ssh::shell_quote(f)), None).await.map(|o| o.stdout).unwrap_or_default();
-                    out.push_str(&format!("### {f}\n```yaml\n{}```\n", mask::mask(&content, false)));
+                    // Les chemins viennent des étiquettes des conteneurs, que n'importe qui peut écrire :
+                    // mêmes règles que read_file, sur le chemin réel.
+                    let real = match real_path(&c, s, f).await {
+                        Ok(r) if readable(f) && readable(&r) => r,
+                        _ => {
+                            out.push_str(&format!("### {f}\n(fichier non autorisé pour l'IA)\n"));
+                            continue;
+                        }
+                    };
+                    let content = c
+                        .exec(&format!("head -c 300000 -- {}", zenytt_core::ssh::shell_quote(&real)), None)
+                        .await
+                        .map(|o| o.stdout)
+                        .unwrap_or_default();
+                    out.push_str(&format!("### {f}\n```yaml\n{}```\n", mask::mask(&content, is_dotenv(&real))));
                 }
             }
             text(out).map_err(|_| String::new())
@@ -380,8 +399,7 @@ impl Zenytt {
             } else {
                 c.exec_sudo(&format!("head -c 300000 -- {q}"), sudo.as_deref(), None).await.map_err(e)?.into_result().map_err(e)?.stdout
             };
-            let dotenv = path.rsplit('/').next().is_some_and(|n| n.starts_with(".env") || n.ends_with(".env"));
-            text(mask::mask(&content, dotenv)).map_err(|_| String::new())
+            text(mask::mask(&content, is_dotenv(&path) || is_dotenv(&real))).map_err(|_| String::new())
         })
         .await
     }
@@ -439,5 +457,15 @@ mod tests {
         assert!(!readable("/opt/../etc/shadow"));
         assert!(!readable("/etc/letsencrypt/live/x/privkey.pem"));
         assert!(!readable("/etc/zenytt-backup/env"));
+    }
+
+    #[test]
+    fn dotenv_names() {
+        for p in ["/opt/app/.env", "/opt/app/.env.production", "/srv/x/prod.env", "/a/.env-prod", "/a/.env_local", "/a/.envrc"] {
+            assert!(is_dotenv(p), "{p}");
+        }
+        for p in ["/opt/app/config", "/opt/app/env.yml", "/opt/.envoy/x.yml", "/opt/app/docker-compose.yml"] {
+            assert!(!is_dotenv(p), "{p}");
+        }
     }
 }

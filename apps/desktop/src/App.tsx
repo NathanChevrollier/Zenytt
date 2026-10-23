@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect, useState, type ComponentType } from "react";
 import { ShipWheel } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { api, type AppNotice } from "./lib/api";
+import { api, hasShell, type AppNotice } from "./lib/api";
 import { useApp, useAppPick } from "./lib/store";
-import type { SectionId } from "./sections";
+import { needsShell, type SectionId } from "./sections";
 import { DialogHost, EmptyState, Toasts } from "./components/ui";
 import LockScreen from "./components/LockScreen";
 import ConnectionDoctor from "./components/ConnectionDoctor";
@@ -54,12 +54,13 @@ const VIEWS: Partial<Record<SectionId, ComponentType>> = {
   mesh: lazy(() => import("./views/Mesh")),
   backups: lazy(() => import("./views/Backups")),
   security: lazy(() => import("./views/Security")),
+  system: lazy(() => import("./views/System")),
   help: lazy(() => import("./views/Help")),
   settings: lazy(() => import("./views/Settings")),
 };
 
 export default function App() {
-  const { section, activeServerId, refreshServers, hydrated, hydrate } = useAppPick("section", "activeServerId", "refreshServers", "hydrated", "hydrate");
+  const { section, setSection, activeServerId, refreshServers, hydrated, hydrate } = useAppPick("section", "setSection", "activeServerId", "refreshServers", "hydrated", "hydrate");
   const [version, setVersion] = useState<string>();
   const paletteOpen = useShell((s) => s.paletteOpen);
   const View = VIEWS[section];
@@ -84,7 +85,15 @@ export default function App() {
   }, [rdpShown]);
   const goHome = () => useApp.getState().setSection("home");
 
+  // Zenytt relancé verrouillé : profils, espace de travail (donc connexions automatiques et
+  // synchronisation) ne sont chargés qu'une fois déverrouillé.
+  const unlocked = useLock((s) => s.checked && !s.locked);
+  const [started, setStarted] = useState(false);
   useEffect(() => {
+    if (unlocked) setStarted(true);
+  }, [unlocked]);
+  useEffect(() => {
+    if (!started) return;
     api.version().then(setVersion).catch(() => setVersion(undefined));
     // Profils d'abord (les onglets restaurés en dépendent), puis l'espace de travail sauvegardé.
     // Les deux lectures partent en même temps ; seule leur application suit cet ordre.
@@ -98,7 +107,7 @@ export default function App() {
     void api.storeWarning().then((w) => {
       if (w) void useApp.getState().ask({ title: "Configuration récupérée", body: w, confirmLabel: "Compris" });
     });
-  }, [refreshServers, hydrate]);
+  }, [started, refreshServers, hydrate]);
 
   // Verrouillage : état initial, puis surveillance de l'inactivité.
   const locked = useLock((s) => s.locked);
@@ -160,7 +169,12 @@ export default function App() {
   }, [autoRefreshSecs]);
   // Santé du serveur actif (badges de la barre latérale), seulement s'il est déjà connecté.
   const activeConnected = useApp((s) => s.servers.find((x) => x.id === s.activeServerId)?.connected ?? false);
-  usePolling(() => (activeServerId ? fetchHealth(activeServerId, 30_000) : undefined), 60_000, [activeServerId], activeConnected);
+  const activeShell = useApp((s) => hasShell(s.servers.find((x) => x.id === s.activeServerId)));
+  usePolling(() => (activeServerId ? fetchHealth(activeServerId, 30_000) : undefined), 60_000, [activeServerId], activeConnected && activeShell);
+  // Un compte sans shell n'a que les fichiers : on n'affiche pas une page qui ne peut rien faire.
+  useEffect(() => {
+    if (!activeShell && needsShell(section)) setSection("files");
+  }, [activeShell, section, setSection]);
 
   const assistantOpen = useAssistant((s) => s.open);
   const machinesOpen = useShell((s) => s.machinesOpen);

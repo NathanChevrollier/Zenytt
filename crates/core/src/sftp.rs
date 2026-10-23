@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use crate::ssh::shell_quote;
 use crate::{Connection, Error, Result};
 
-const CHUNK: usize = 256 * 1024;
+pub(crate) const CHUNK: usize = 256 * 1024;
 /// Taille maximale d'un fichier ouvert en entier dans l'éditeur. Au-delà, il s'affiche en
 /// lecture seule par fenêtres de `MAX_WINDOW` octets (voir [`read_range`]).
 pub const MAX_EDIT_SIZE: u64 = 50 * 1024 * 1024;

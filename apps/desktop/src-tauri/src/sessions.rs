@@ -11,7 +11,8 @@ use tokio::sync::Mutex;
 use zenytt_core::russh::client::Msg;
 use zenytt_core::russh::{ChannelMsg, ChannelWriteHalf};
 use zenytt_core::russh_sftp::client::SftpSession;
-use zenytt_core::Connection;
+use zenytt_core::{ftp, Auth, Connection};
+use zenytt_profiles::Protocol;
 
 use crate::store::Store;
 
@@ -28,9 +29,18 @@ pub enum TermEvent {
     },
 }
 
+/// Accès aux fichiers d'un serveur : SFTP (sur une connexion SSH) ou client FTP, qui ne fait
+/// qu'une chose à la fois (d'où le verrou).
+pub enum Fs {
+    Sftp(Arc<SftpSession>),
+    Ftp(Arc<Mutex<ftp::Ftp>>),
+}
+
 pub struct Sessions {
     connections: Mutex<HashMap<String, Connection>>,
     sftp: Mutex<HashMap<String, (Connection, Arc<SftpSession>)>>,
+    /// Un client FTP par serveur FTP/FTPS.
+    ftp: Mutex<HashMap<String, Arc<Mutex<ftp::Ftp>>>>,
     terminals: Arc<Mutex<HashMap<u64, Arc<ChannelWriteHalf<Msg>>>>>,
     /// Copies de la sortie des terminaux partagés (`id du terminal` → destinataire).
     mirrors: Arc<Mutex<HashMap<u64, tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>>,
@@ -56,6 +66,7 @@ impl Sessions {
         Self {
             connections: Mutex::new(HashMap::new()),
             sftp: Mutex::new(HashMap::new()),
+            ftp: Mutex::new(HashMap::new()),
             terminals: Arc::new(Mutex::new(HashMap::new())),
             mirrors: Arc::new(Mutex::new(HashMap::new())),
             connecting: std::sync::Mutex::new(HashMap::new()),
@@ -66,12 +77,14 @@ impl Sessions {
     }
 
     /// Table uid/gid → nom du serveur, lue une fois via `getent`.
-    pub async fn id_names(&self, conn: &Connection, server_id: &str) -> Arc<IdNames> {
+    pub async fn id_names(&self, store: &Store, conn: &Connection, server_id: &str) -> Arc<IdNames> {
         if let Some(n) = self.id_names.lock().await.get(server_id) {
             return n.clone();
         }
         let mut names = IdNames::default();
-        if let Ok(out) = conn.exec("getent passwd; echo ---; getent group", None).await {
+        // Compte SFTP seul : aucune commande n'est permise, les identifiants restent numériques.
+        let shell = store.server(server_id).is_ok_and(|s| s.protocol.has_shell());
+        if let Some(out) = if shell { conn.exec("getent passwd; echo ---; getent group", None).await.ok() } else { None } {
             let mut in_groups = false;
             for line in out.stdout.lines() {
                 if line == "---" {
@@ -104,8 +117,74 @@ impl Sessions {
         Ok(session)
     }
 
+    /// Accès aux fichiers du serveur, quel que soit son protocole.
+    pub async fn fs(&self, store: &Store, server_id: &str) -> Result<Fs, String> {
+        let protocol = store.server(server_id)?.protocol;
+        if matches!(protocol, Protocol::Ssh | Protocol::Sftp) {
+            return Ok(Fs::Sftp(self.sftp(store, server_id).await?));
+        }
+        let cached = self.ftp.lock().await.get(server_id).cloned();
+        if let Some(c) = cached {
+            // Client occupé (transfert, listing) : il vit, inutile d'attendre ni de le sonder.
+            let Ok(mut guard) = c.try_lock() else { return Ok(Fs::Ftp(c)) };
+            // Le serveur coupe les connexions inactives : un `NOOP` dit si elle vit encore.
+            let alive = ftp::op(guard.noop()).await.is_ok();
+            drop(guard);
+            if alive {
+                return Ok(Fs::Ftp(c));
+            }
+            self.drop_ftp(server_id).await;
+        }
+        let gate = self.connecting.lock().unwrap().entry(server_id.to_string()).or_default().clone();
+        let _guard = gate.lock().await;
+        // Une autre demande a peut-être reconnecté le serveur pendant l'attente.
+        if let Some(c) = self.ftp.lock().await.get(server_id).cloned() {
+            return Ok(Fs::Ftp(c));
+        }
+        if let Some(reason) = self.auth_blocked.lock().unwrap().get(server_id) {
+            return Err(format!("AUTH_BLOCKED: {reason} — reconnexion automatique suspendue, clique « Connecter » pour réessayer"));
+        }
+        let params = store.connect_params(server_id)?;
+        let Auth::Password { password } = params.auth else { return Err("FTP : un mot de passe est requis".into()) };
+        let target = format!("{}:{}", params.host, params.port);
+        let client = match ftp::connect(
+            &params.host,
+            params.port,
+            &params.username,
+            &password,
+            protocol == Protocol::Ftps,
+            params.known_fingerprint.as_deref(),
+        )
+        .await
+        {
+            Ok(c) => c,
+            Err(zenytt_core::Error::Auth(reason)) => {
+                log::warn!("{target} : authentification refusée ({reason}), reconnexions automatiques suspendues");
+                self.auth_blocked.lock().unwrap().insert(server_id.to_string(), reason.clone());
+                return Err(format!("Authentification échouée : {reason}"));
+            }
+            Err(e) => {
+                log::warn!("{target} : connexion impossible ({e})");
+                return Err(e.to_string());
+            }
+        };
+        log::info!("{target} : connecté");
+        let client = Arc::new(Mutex::new(client));
+        self.ftp.lock().await.insert(server_id.to_string(), client.clone());
+        Ok(Fs::Ftp(client))
+    }
+
+    /// Oublie le client FTP (coupé, ou canal désynchronisé après un délai dépassé) : le prochain accès se reconnecte.
+    pub async fn drop_ftp(&self, server_id: &str) {
+        self.ftp.lock().await.remove(server_id);
+    }
+
     /// Renvoie la connexion du serveur, en la (re)créant si elle n'existe pas ou a été coupée.
     pub async fn get(&self, store: &Store, server_id: &str) -> Result<Connection, String> {
+        let protocol = store.server(server_id)?.protocol;
+        if matches!(protocol, Protocol::Ftp | Protocol::Ftps) {
+            return Err("Ce serveur est en FTP : pas de commandes".into());
+        }
         if let Some(c) = self.live(server_id).await {
             return Ok(c);
         }
@@ -119,7 +198,7 @@ impl Sessions {
             return Err(format!("AUTH_BLOCKED: {reason} — reconnexion automatique suspendue, clique « Connecter » pour réessayer"));
         }
         let params = store.connect_params(server_id)?;
-        let target = format!("{}@{}:{}", params.username, params.host, params.port);
+        let target = format!("{}:{}", params.host, params.port);
         let result = match store.jump_chain(server_id)?.first() {
             None => Connection::connect(params).await,
             Some(jump) => {
@@ -145,7 +224,9 @@ impl Sessions {
         // Nouvelle connexion : les noms d'utilisateurs ont pu changer depuis la précédente.
         self.id_names.lock().await.remove(server_id);
         self.connections.lock().await.insert(server_id.to_string(), conn.clone());
-        crate::legacy::on_connect(server_id, &conn);
+        if protocol.has_shell() {
+            crate::legacy::on_connect(server_id, &conn);
+        }
         Ok(conn)
     }
 
@@ -159,11 +240,12 @@ impl Sessions {
     }
 
     pub async fn is_connected(&self, server_id: &str) -> bool {
-        self.connections.lock().await.get(server_id).is_some_and(|c| !c.is_closed())
+        self.connections.lock().await.get(server_id).is_some_and(|c| !c.is_closed()) || self.ftp.lock().await.contains_key(server_id)
     }
 
     pub async fn disconnect(&self, server_id: &str) {
         self.sftp.lock().await.remove(server_id);
+        self.ftp.lock().await.remove(server_id);
         if let Some(c) = self.connections.lock().await.remove(server_id) {
             c.disconnect().await;
         }
@@ -176,6 +258,9 @@ impl Sessions {
         cols: u32,
         rows: u32,
         command: Option<String>,
+        // Mot de passe sudo et nonce de l'amorce : le mot de passe n'est écrit que sur le signal de
+        // l'amorce de ce terminal (voir `commands::terminal::sudo_answer`).
+        mut sudo: Option<(String, String)>,
         events: Channel<TermEvent>,
     ) -> Result<u64, String> {
         let channel = match command {
@@ -186,7 +271,8 @@ impl Sessions {
 
         let id = self.next_term.fetch_add(1, Ordering::Relaxed);
         let (mut reader, writer) = channel.split();
-        self.terminals.lock().await.insert(id, Arc::new(writer));
+        let writer = Arc::new(writer);
+        self.terminals.lock().await.insert(id, writer.clone());
 
         let terminals = self.terminals.clone();
         let mirrors = self.mirrors.clone();
@@ -194,6 +280,8 @@ impl Sessions {
             let b64 = base64::engine::general_purpose::STANDARD;
             let mut code = None;
             let mut next = None;
+            let mut sudo_seen = 0usize;
+            let mut sudo_tail: Vec<u8> = Vec::new();
             loop {
                 let msg = match next.take() {
                     Some(m) => m,
@@ -218,11 +306,29 @@ impl Sessions {
                                 Ok(None) | Err(_) => break,
                             }
                         }
+                        if let Some((pw, nonce)) = &sudo {
+                            // Le marqueur peut être coupé entre deux paquets : on rejoue la fin du précédent.
+                            let joined = [sudo_tail.as_slice(), buf.as_slice()].concat();
+                            sudo_tail = joined[joined.len().saturating_sub(crate::commands::terminal::SUDO_TAIL)..].to_vec();
+                            if let Some(answer) = crate::commands::terminal::sudo_answer(&joined, nonce, pw) {
+                                if let Some(line) = answer {
+                                    let _ = writer.data(line.as_bytes()).await;
+                                }
+                                sudo = None;
+                            }
+                        }
+                        // L'amorce s'annonce avant toute sortie de la commande : passé le début, on
+                        // n'attend plus rien (défense en profondeur, le nonce suffit déjà).
+                        sudo_seen += buf.len();
+                        if sudo_seen > 4096 {
+                            sudo = None;
+                        }
+                        let data = b64.encode(&buf);
                         // Terminal partagé : la même sortie part vers les invités.
                         if let Some(mirror) = mirrors.lock().await.get(&id) {
-                            let _ = mirror.send(buf.clone());
+                            let _ = mirror.send(buf);
                         }
-                        if events.send(TermEvent::Data { data: b64.encode(&buf) }).is_err() {
+                        if events.send(TermEvent::Data { data }).is_err() {
                             break;
                         }
                     }

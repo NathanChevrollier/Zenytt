@@ -59,7 +59,7 @@ export const useCloseDialog = create<{ open: boolean; setOpen: (open: boolean) =
 }));
 
 /** Fermeture de la fenêtre : applique le choix retenu, sinon le demande. */
-export async function onCloseRequested(): Promise<void> {
+async function onCloseRequested(): Promise<void> {
   const action = useApp.getState().settings.closeAction;
   // Verrouillée, l'app ne montre rien : sans choix retenu, elle se réduit (rien n'est perdu).
   if (action === "quit") return quitApp();

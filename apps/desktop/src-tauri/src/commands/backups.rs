@@ -9,13 +9,9 @@ use zenytt_core::backup::{self, BackupConfig, DbSource, Destination, Node, Snaps
 use zenytt_core::docker::{self, Access};
 use zenytt_core::ssh::shell_quote;
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::{secrets, AuditLog, Store};
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

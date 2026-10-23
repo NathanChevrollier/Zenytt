@@ -4,10 +4,13 @@
   "scripts": {
     "dev": "pnpm --filter zenytt-desktop tauri dev",
     "build": "pnpm --filter zenytt-desktop tauri build",
+    "dev:mobile": "pnpm --filter zenytt-mobile tauri dev",
+    "android": "pnpm --filter zenytt-mobile tauri android dev",
+    "ios": "pnpm --filter zenytt-mobile tauri ios dev",
     "release": "node scripts/release.mjs",
     "build:agent": "cargo zigbuild -p zenyttd --release --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl && cargo zigbuild --manifest-path sync-server/Cargo.toml --target-dir target --release --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl",
-    "typecheck": "pnpm --filter zenytt-desktop exec tsc --noEmit",
-    "test": "cargo test --workspace && pnpm --filter zenytt-desktop test",
+    "typecheck": "pnpm --filter zenytt-desktop exec tsc --noEmit && pnpm --filter zenytt-mobile exec tsc --noEmit && pnpm --filter zenytt-discord-bot typecheck",
+    "test": "cargo test --workspace && pnpm --filter zenytt-desktop test && pnpm --filter zenytt-mobile test",
     "testenv": "docker compose -f testenv/docker-compose.yml up -d --build"
   },
   "packageManager": "pnpm@12.5.1"

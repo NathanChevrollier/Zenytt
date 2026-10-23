@@ -32,6 +32,26 @@ pub enum AuthKind {
     Agent,
 }
 
+/// Protocole d'accès à un serveur. Seul `Ssh` ouvre un shell : les autres ne servent qu'aux fichiers.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Protocol {
+    #[default]
+    Ssh,
+    /// Transport et authentification SSH, mais jamais de commande (`internal-sftp`, chroot).
+    Sftp,
+    Ftp,
+    /// FTP avec TLS explicite.
+    Ftps,
+}
+
+impl Protocol {
+    /// Peut-on exécuter des commandes sur ce serveur ?
+    pub fn has_shell(self) -> bool {
+        self == Protocol::Ssh
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerProfile {
@@ -41,6 +61,8 @@ pub struct ServerProfile {
     pub port: u16,
     pub username: String,
     pub auth_kind: AuthKind,
+    #[serde(default)]
+    pub protocol: Protocol,
     #[serde(default)]
     pub key_path: Option<String>,
     #[serde(default)]
@@ -60,6 +82,17 @@ pub struct ServerProfile {
     /// Se connecter automatiquement au démarrage de Zenytt (une fois déverrouillé).
     #[serde(default)]
     pub auto_connect: bool,
+    /// Compte chez l'hébergeur, pour piloter l'alimentation par son API quand SSH ne répond plus.
+    /// Les identifiants sont dans le keyring, sous [`ServerProfile::provider_owner`].
+    #[serde(default)]
+    pub provider: Option<zenytt_core::provider::ProviderLink>,
+}
+
+impl ServerProfile {
+    /// Propriétaire des identifiants de l'hébergeur dans le keyring.
+    pub fn provider_owner(id: &str) -> String {
+        format!("provider-{id}")
+    }
 }
 
 /// Identifiant réutilisable (banque de logins) : utilisateur + mot de passe ou clé, partagé
@@ -470,6 +503,18 @@ impl Store {
             }
             None => (profile.username, profile.auth_kind, profile.key_path, server_id.to_string(), "ce serveur"),
         };
+        // Mobile : la clé collée sur le téléphone prime (son chemin n'est jamais dans le profil
+        // synchronisé), et un mot de passe saisi ici vaut mieux qu'une clé du PC absente du téléphone.
+        let phone_key = secrets::is_file().then(|| secrets::get(server_id, secrets::MOBILE_KEY)).flatten();
+        let phone_password = secrets::is_file() && auth_kind != AuthKind::Password && secrets::get(&owner, "password").is_some();
+        let auth_kind = if phone_key.is_some() {
+            AuthKind::Key
+        } else if phone_password {
+            AuthKind::Password
+        } else {
+            auth_kind
+        };
+        let key_path = phone_key.or(key_path);
         let auth = match auth_kind {
             AuthKind::Password => Auth::Password {
                 password: secrets::get(&owner, "password").ok_or(format!("NEED_PASSWORD: aucun mot de passe enregistré pour {what}"))?,
@@ -525,6 +570,8 @@ mod tests {
         let v1 = r#"{"servers":[{"id":"a","name":"VPS","host":"h","port":22,"username":"root","authKind":"password"}],"knownHosts":{},"snippets":[]}"#;
         let d: Data = serde_json::from_str(v1).unwrap();
         assert!(!d.servers[0].ai_access);
+        assert_eq!(d.servers[0].protocol, Protocol::Ssh);
+        assert_eq!(serde_json::to_string(&Protocol::Ftps).unwrap(), "\"ftps\"");
         assert!(d.tunnels.is_empty());
     }
 
@@ -561,7 +608,9 @@ mod tests {
             ai_access: false,
             jump_id: jump.map(str::to_string),
             identity_id: None,
+            protocol: Default::default(),
             auto_connect: false,
+            provider: None,
         };
         s.write(|d| d.servers.extend([p("a", Some("b")), p("b", Some("c")), p("c", None), p("x", Some("y")), p("y", Some("x"))])).unwrap();
         assert_eq!(s.jump_chain("a").unwrap(), vec!["b", "c"]);
@@ -594,7 +643,9 @@ mod tests {
                 ai_access: false,
                 jump_id: None,
                 identity_id: Some("i".into()),
+                protocol: Default::default(),
                 auto_connect: false,
+                provider: None,
             });
         })
         .unwrap();

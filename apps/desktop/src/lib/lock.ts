@@ -10,6 +10,8 @@ interface LockState {
   /** Un mot de passe de verrouillage est défini. */
   configured: boolean;
   locked: boolean;
+  /** L'état initial a été lu : avant, rien ne doit être chargé (Zenytt peut démarrer verrouillé). */
+  checked: boolean;
   refresh: () => Promise<void>;
   lock: () => void;
   unlock: (password: string) => Promise<boolean>;
@@ -51,11 +53,12 @@ export async function verifyPassword(password: string, stored: string): Promise<
 export const useLock = create<LockState>((set, get) => ({
   configured: false,
   locked: false,
+  checked: false,
   refresh: async () => {
     const stored = await api.appLockGet().catch(() => null);
     // L'état « verrouillé » vit côté Rust : un rechargement de l'interface ne l'efface pas.
     const locked = await api.appIsLocked().catch(() => false);
-    set({ configured: !!stored, locked: (get().locked || locked) && !!stored });
+    set({ configured: !!stored, locked: (get().locked || locked) && !!stored, checked: true });
   },
   lock: () => {
     if (!get().configured) return;

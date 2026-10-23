@@ -9,11 +9,12 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::export::{self, Payload};
-use crate::{secrets, Identity, Registry, RemoteDesktop, Store};
+use crate::{secrets, Identity, Registry, RemoteDesktop, ServerProfile, Store};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +53,10 @@ pub struct SyncConfig {
     /// Horodatage (ms) de la dernière synchronisation réussie.
     #[serde(default)]
     pub last_sync: Option<i64>,
+    /// Empreinte du contenu distant (chiffré) à `last_rev` : un autre contenu sous la même
+    /// révision est refusé.
+    #[serde(default)]
+    pub last_remote: Option<String>,
 }
 
 /// Serveur SSH qui héberge `zenytt-sync` et port sur lequel il écoute (sur 127.0.0.1 côté serveur).
@@ -84,6 +89,10 @@ struct Pairing {
     server: Option<crate::ServerProfile>,
     #[serde(default)]
     server_secrets: BTreeMap<String, String>,
+    /// Empreinte de clé d'hôte approuvée de ce serveur : sans elle, l'autre PC devrait accepter
+    /// à l'aveugle la clé présentée à sa première connexion.
+    #[serde(default)]
+    server_host_key: Option<String>,
 }
 
 /// Code d'appairage de ce PC : adresse ou serveur privé, jeton et, en mode privé, le profil SSH du
@@ -101,7 +110,9 @@ pub fn pairing_code(store: &Store) -> Result<String, String> {
         .as_ref()
         .map(|s| SERVER_SECRETS.iter().filter_map(|k| secrets::get(&s.id, k).map(|v| (k.to_string(), v))).collect())
         .unwrap_or_default();
-    let pairing = Pairing { url: cfg.url, tunnel: cfg.tunnel, token, include_secrets: cfg.include_secrets, server, server_secrets };
+    let server_host_key = server.as_ref().and_then(|s| store.read(|d| d.known_hosts.get(&format!("{}:{}", s.host, s.port)).cloned()));
+    let pairing =
+        Pairing { url: cfg.url, tunnel: cfg.tunnel, token, include_secrets: cfg.include_secrets, server, server_secrets, server_host_key };
     let sealed = export::seal_value(&serde_json::to_value(&pairing).map_err(|e| e.to_string())?, &passphrase, PAIRING_FORMAT)?;
     Ok(format!("{PAIRING_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(sealed)))
 }
@@ -124,6 +135,12 @@ pub fn join(store: &Store, code: &str, passphrase: &str) -> Result<(), String> {
                     secrets::set(&server.id, kind, value)?;
                 }
             }
+        }
+        if let Some(fp) = &pairing.server_host_key {
+            // Une empreinte déjà approuvée sur ce PC n'est jamais remplacée.
+            store.write(|d| {
+                d.known_hosts.entry(format!("{}:{}", server.host, server.port)).or_insert_with(|| fp.clone());
+            })?;
         }
     }
     secrets::set(SECRET_OWNER, "token", &pairing.token)?;
@@ -160,6 +177,77 @@ pub trait Transport {
     fn push(&self, base_rev: u64, data: &str) -> Result<PushResult, String>;
 }
 
+/// Serveur `zenytt-sync` (HTTP), commun au bureau et au mobile.
+pub struct HttpTransport {
+    url: String,
+    token: String,
+    agent: ureq::Agent,
+}
+
+impl HttpTransport {
+    pub fn new(url: String, token: String) -> Self {
+        let agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).http_status_as_error(false).build().into();
+        Self { url, token, agent }
+    }
+
+    fn auth(&self) -> String {
+        format!("Bearer {}", self.token)
+    }
+}
+
+fn http_error(status: u16, body: &str) -> String {
+    let detail =
+        serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| v["error"].as_str().map(str::to_string)).unwrap_or_default();
+    match status {
+        401 => "jeton de synchronisation refusé par le serveur".into(),
+        413 => "réglages trop volumineux pour le serveur".into(),
+        _ => format!("serveur de synchronisation : erreur {status} {detail}").trim().to_string(),
+    }
+}
+
+impl Transport for HttpTransport {
+    fn fetch(&self) -> Result<Option<Remote>, String> {
+        let mut res = self
+            .agent
+            .get(format!("{}/v1/state", self.url))
+            .header("Authorization", self.auth())
+            .call()
+            .map_err(|e| format!("serveur injoignable : {e}"))?;
+        let status = res.status().as_u16();
+        let body = res.body_mut().read_to_string().map_err(|e| e.to_string())?;
+        match status {
+            200 => {
+                let v: serde_json::Value = serde_json::from_str(&body).map_err(|_| "réponse du serveur illisible".to_string())?;
+                let rev = v["rev"].as_u64().ok_or("réponse du serveur illisible")?;
+                let data = v["data"].as_str().ok_or("réponse du serveur illisible")?.to_string();
+                Ok(Some(Remote { rev, data }))
+            }
+            404 => Ok(None),
+            s => Err(http_error(s, &body)),
+        }
+    }
+
+    fn push(&self, base_rev: u64, data: &str) -> Result<PushResult, String> {
+        let mut res = self
+            .agent
+            .put(format!("{}/v1/state", self.url))
+            .header("Authorization", self.auth())
+            .send_json(serde_json::json!({ "baseRev": base_rev, "data": data }))
+            .map_err(|e| format!("serveur injoignable : {e}"))?;
+        let status = res.status().as_u16();
+        let body = res.body_mut().read_to_string().map_err(|e| e.to_string())?;
+        match status {
+            200 => serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v["rev"].as_u64())
+                .map(PushResult::Ok)
+                .ok_or_else(|| "réponse du serveur illisible".to_string()),
+            409 => Ok(PushResult::Conflict),
+            s => Err(http_error(s, &body)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Action {
@@ -191,8 +279,11 @@ pub(crate) fn fingerprint(p: &Payload) -> String {
         r.sort_by(|a, b| a.id.cmp(&b.id));
     }
     p.ignored_findings.sort_by(|a, b| (&a.server_id, &a.finding_id).cmp(&(&b.server_id, &b.finding_id)));
-    let json = serde_json::to_vec(&p).unwrap_or_default();
-    ring::digest::digest(&ring::digest::SHA256, &json).as_ref().iter().map(|b| format!("{b:02x}")).collect()
+    digest(&serde_json::to_vec(&p).unwrap_or_default())
+}
+
+fn digest(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes).as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Union des deux versions : un élément présent des deux côtés garde sa version locale.
@@ -267,7 +358,8 @@ fn apply(store: &Store, p: &Payload, include_secrets: bool) -> Result<(Vec<Strin
             None => Vec::new(),
         };
         d.ignored_findings = p.ignored_findings.clone();
-        d.known_hosts.extend(p.known_hosts.clone());
+        // Seulement les clés des serveurs du contenu, comme à l'import.
+        d.known_hosts.extend(export::own_host_keys(p));
         (rs, ri, rt, rd, rr)
     })?;
     for id in &removed_registries {
@@ -278,12 +370,13 @@ fn apply(store: &Store, p: &Payload, include_secrets: bool) -> Result<(Vec<Strin
     }
     for id in &removed_servers {
         secrets::delete_all(id);
+        secrets::delete_all(&ServerProfile::provider_owner(id));
     }
     for id in &removed_identities {
         secrets::delete_all(&Identity::secret_owner(id));
     }
     if include_secrets {
-        export::store_secrets(&p.secrets)?;
+        export::store_secrets(p)?;
     }
     Ok((removed_servers, removed_tunnels))
 }
@@ -292,14 +385,26 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-fn save_state(store: &Store, rev: u64, hash: String) -> Result<(), String> {
+fn save_state(store: &Store, rev: u64, hash: String, remote: &str) -> Result<(), String> {
     store.write(|d| {
         if let Some(c) = d.sync.as_mut() {
             c.last_rev = rev;
             c.last_hash = Some(hash);
             c.last_sync = Some(now_ms());
+            c.last_remote = Some(digest(remote.as_bytes()));
         }
     })
+}
+
+/// Envoie `p` scellé pour la révision `base + 1`, la seule que le transport peut lui donner.
+/// `None` : conflit (quelqu'un d'autre a envoyé entre-temps).
+fn push_sealed(transport: &dyn Transport, base: u64, p: &Payload, passphrase: &str) -> Result<Option<(u64, String)>, String> {
+    let data = export::seal_sync(p, passphrase, base + 1)?;
+    match transport.push(base, &data)? {
+        PushResult::Ok(rev) if rev == base + 1 => Ok(Some((rev, data))),
+        PushResult::Ok(rev) => Err(format!("révision inattendue renvoyée par la synchronisation ({rev} au lieu de {})", base + 1)),
+        PushResult::Conflict => Ok(None),
+    }
 }
 
 /// Synchronise les réglages avec le contenu distant.
@@ -318,45 +423,68 @@ pub fn run(store: &Store, transport: &dyn Transport, passphrase: &str) -> Result
         let done = |action, rev, rs: Vec<String>, rt: Vec<String>| Outcome { action, rev, removed_servers: rs, removed_tunnels: rt };
 
         let Some(remote) = transport.fetch()? else {
+            // Contenu disparu après une synchronisation : sinon un tiers qui vide le fichier ou le
+            // serveur remettrait les révisions à zéro, puis rejouerait d'anciens contenus.
+            if cfg.last_rev > 0 {
+                return Err(format!(
+                    "le contenu de synchronisation a disparu (révision {} attendue) : s'il a été effacé volontairement, désactive puis réactive la synchronisation",
+                    cfg.last_rev
+                ));
+            }
             // Premier envoi.
-            match transport.push(0, &export::seal(&local, passphrase)?)? {
-                PushResult::Ok(rev) => {
-                    save_state(store, rev, local_hash)?;
+            match push_sealed(transport, 0, &local, passphrase)? {
+                Some((rev, data)) => {
+                    save_state(store, rev, local_hash, &data)?;
                     return Ok(done(Action::Pushed, rev, removed_servers, removed_tunnels));
                 }
-                PushResult::Conflict => continue,
+                None => continue,
             }
         };
-        let theirs = export::open(&remote.data, passphrase).map_err(|e| {
+        let replayed = remote.rev < cfg.last_rev
+            || (remote.rev == cfg.last_rev && cfg.last_remote.as_deref().is_some_and(|h| h != digest(remote.data.as_bytes())));
+        if replayed {
+            return Err("contenu de synchronisation plus ancien que celui déjà reçu (rejoué ?) : refusé".into());
+        }
+        let (theirs, bound) = export::open_sync(&remote.data, passphrase, remote.rev).map_err(|e| {
             if e.starts_with("mot de passe incorrect") {
                 "phrase de passe de synchronisation incorrecte".into()
             } else {
                 e
             }
         })?;
+        // Un appareil qui a déjà reçu du contenu de version 2 ne revient jamais à la version 1 :
+        // sinon un ancien contenu rejoué serait fusionné puis renvoyé comme authentifié.
+        if !bound && cfg.last_remote.is_some() {
+            return Err(
+                "contenu de synchronisation de version 1 refusé : cet appareil a déjà reçu du contenu authentifié (contenu rejoué ?)"
+                    .into(),
+            );
+        }
         let remote_changed = remote.rev != cfg.last_rev;
 
-        match (remote_changed, local_changed) {
+        // Contenu de version 1 (révision non authentifiée) : fusionné puis renvoyé en version 2,
+        // jamais appliqué tel quel (il pourrait être un ancien contenu rejoué).
+        match (remote_changed, local_changed || !bound) {
             (false, false) => {
-                save_state(store, remote.rev, local_hash)?;
+                save_state(store, remote.rev, local_hash, &remote.data)?;
                 return Ok(done(Action::UpToDate, remote.rev, removed_servers, removed_tunnels));
             }
             (false, true) => {
                 let mut outgoing = local.clone();
                 outgoing.secrets = carry_secrets(&theirs, &local.secrets);
-                match transport.push(remote.rev, &export::seal(&outgoing, passphrase)?)? {
-                    PushResult::Ok(rev) => {
-                        save_state(store, rev, local_hash)?;
+                match push_sealed(transport, remote.rev, &outgoing, passphrase)? {
+                    Some((rev, data)) => {
+                        save_state(store, rev, local_hash, &data)?;
                         return Ok(done(Action::Pushed, rev, removed_servers, removed_tunnels));
                     }
-                    PushResult::Conflict => continue,
+                    None => continue,
                 }
             }
             (true, false) => {
                 let (rs, rt) = apply(store, &theirs, cfg.include_secrets)?;
                 removed_servers.extend(rs);
                 removed_tunnels.extend(rt);
-                save_state(store, remote.rev, fingerprint(&export::snapshot(store, cfg.include_secrets)))?;
+                save_state(store, remote.rev, fingerprint(&export::snapshot(store, cfg.include_secrets)), &remote.data)?;
                 return Ok(done(Action::Pulled, remote.rev, removed_servers, removed_tunnels));
             }
             (true, true) => {
@@ -365,12 +493,12 @@ pub fn run(store: &Store, transport: &dyn Transport, passphrase: &str) -> Result
                 removed_servers.extend(rs);
                 removed_tunnels.extend(rt);
                 let hash = fingerprint(&export::snapshot(store, cfg.include_secrets));
-                match transport.push(remote.rev, &export::seal(&merged, passphrase)?)? {
-                    PushResult::Ok(rev) => {
-                        save_state(store, rev, hash)?;
+                match push_sealed(transport, remote.rev, &merged, passphrase)? {
+                    Some((rev, data)) => {
+                        save_state(store, rev, hash, &data)?;
                         return Ok(done(Action::Merged, rev, removed_servers, removed_tunnels));
                     }
-                    PushResult::Conflict => continue,
+                    None => continue,
                 }
             }
         }
@@ -449,7 +577,9 @@ mod tests {
             ai_access: false,
             jump_id: None,
             identity_id: None,
+            protocol: Default::default(),
             auto_connect: false,
+            provider: None,
         }
     }
 
@@ -500,6 +630,7 @@ mod tests {
             include_secrets: true,
             server: Some(server("vps")),
             server_secrets: BTreeMap::from([("password".into(), "mdp".into())]),
+            server_host_key: Some("SHA256:vps".into()),
         };
         let sealed = export::seal_value(&serde_json::to_value(&pairing).unwrap(), "phrase de passe", PAIRING_FORMAT).unwrap();
         assert!(!sealed.contains("jeton-secret") && !sealed.contains("vps.exemple"), "rien en clair");
@@ -531,6 +662,114 @@ mod tests {
         assert_eq!(m.servers.iter().find(|s| s.id == "a").unwrap().name, "local");
         assert_eq!(m.secrets["a"]["password"], "distant");
         assert_eq!(fingerprint(&m), fingerprint(&Payload { servers: m.servers.iter().rev().cloned().collect(), ..m.clone() }));
+    }
+
+    fn write_remote(path: &std::path::Path, rev: u64, data: &str) {
+        let f = SyncFile { format: FILE_FORMAT.into(), rev, updated: 0, data: data.into() };
+        std::fs::write(path, serde_json::to_string(&f).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn un_contenu_rejoue_ou_en_clair_est_refuse() {
+        let (a_dir, b_dir, shared) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let t = FileTransport { path: shared.path().join("s.json") };
+        let (a, b) = (store(a_dir.path()), store(b_dir.path()));
+        let pass = "phrase de passe";
+        a.write(|d| d.servers.push(server("ancien"))).unwrap();
+        run(&a, &t, pass).unwrap();
+        let old = t.fetch().unwrap().unwrap();
+        a.write(|d| d.servers = vec![server("nouveau")]).unwrap();
+        run(&a, &t, pass).unwrap();
+        // Première synchronisation de B : fusion, renvoyée en révision 3.
+        assert_eq!(run(&b, &t, pass).unwrap().rev, 3);
+
+        // Ancien contenu (révision 1) servi comme révision 4 : refusé, rien n'est supprimé.
+        write_remote(&t.path, 4, &old.data);
+        assert!(run(&b, &t, pass).unwrap_err().contains("rejoué"));
+        // Ancien contenu sous sa propre révision, plus ancienne que la dernière reçue : refusé.
+        write_remote(&t.path, 1, &old.data);
+        assert!(run(&b, &t, pass).unwrap_err().contains("rejoué"));
+        // Contenu en clair glissé par un tiers : refusé.
+        let plain = export::seal(&Payload { servers: vec![server("pirate")], ..Default::default() }, "").unwrap();
+        write_remote(&t.path, 4, &plain);
+        assert!(run(&b, &t, pass).unwrap_err().contains("non chiffré"));
+        // Fichier vidé : pas de remise à zéro silencieuse des révisions.
+        std::fs::remove_file(&t.path).unwrap();
+        assert!(run(&b, &t, pass).unwrap_err().contains("disparu"));
+        assert_eq!(b.read(|d| d.servers.iter().map(|s| s.id.clone()).collect::<Vec<_>>()), vec!["nouveau".to_string()]);
+    }
+
+    #[test]
+    fn un_contenu_de_version_1_est_fusionne_jamais_applique() {
+        let (b_dir, shared) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let t = FileTransport { path: shared.path().join("s.json") };
+        let b = store(b_dir.path());
+        let pass = "phrase de passe";
+        b.write(|d| d.servers.push(server("mien"))).unwrap();
+        // Appareil neuf : n'a jamais reçu de version 2, il peut lire la version 1 une fois.
+        // Contenu de version 1 (révision non authentifiée) sans le serveur de B.
+        let v1 = export::seal(&Payload { servers: vec![server("autre")], ..Default::default() }, pass)
+            .unwrap()
+            .replace("\"version\": 2", "\"version\": 1");
+        write_remote(&t.path, 1, &v1);
+        assert_eq!(run(&b, &t, pass).unwrap().action, Action::Merged);
+        assert_eq!(b.read(|d| d.servers.len()), 2, "le serveur local n'est pas supprimé");
+        // Renvoyé en version 2 : lié à sa révision.
+        let now = t.fetch().unwrap().unwrap();
+        assert!(export::open_sync(&now.data, pass, now.rev).unwrap().1);
+    }
+
+    #[test]
+    fn un_contenu_de_version_1_rejoue_apres_la_version_2_est_refuse() {
+        let (b_dir, shared) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let t = FileTransport { path: shared.path().join("s.json") };
+        let b = store(b_dir.path());
+        let pass = "phrase de passe";
+        b.write(|d| d.servers.push(server("mien"))).unwrap();
+        run(&b, &t, pass).unwrap();
+        let v1 = export::seal(&Payload { servers: vec![server("ancien")], ..Default::default() }, pass)
+            .unwrap()
+            .replace("\"version\": 2", "\"version\": 1");
+        write_remote(&t.path, 2, &v1);
+        assert!(run(&b, &t, pass).unwrap_err().contains("version 1 refusé"));
+        assert_eq!(b.read(|d| d.servers.len()), 1);
+    }
+
+    #[test]
+    fn la_synchronisation_n_approuve_que_les_cles_de_ses_serveurs() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = store(dir.path());
+        let mut p = Payload { servers: vec![server("vps")], ..Default::default() };
+        p.known_hosts.insert("vps.exemple:22".into(), "SHA256:vps".into());
+        p.known_hosts.insert("banque.example:22".into(), "SHA256:piege".into());
+        apply(&s, &p, false).unwrap();
+        s.read(|d| {
+            assert_eq!(d.known_hosts.get("vps.exemple:22").map(String::as_str), Some("SHA256:vps"));
+            assert!(!d.known_hosts.contains_key("banque.example:22"));
+        });
+    }
+
+    #[test]
+    fn rejoindre_reprend_la_cle_d_hote_du_serveur_prive() {
+        use base64::Engine;
+        // Secrets dans un fichier temporaire plutôt que dans le coffre de l'OS.
+        let secrets_dir = tempfile::tempdir().unwrap().keep();
+        secrets::use_file(secrets_dir.join("secrets.json"));
+        let pairing = Pairing {
+            url: None,
+            tunnel: Some(SyncTunnel { server_id: "vps".into(), port: 8091 }),
+            token: "jeton".into(),
+            include_secrets: false,
+            server: Some(server("vps")),
+            server_secrets: BTreeMap::new(),
+            server_host_key: Some("SHA256:vps".into()),
+        };
+        let sealed = export::seal_value(&serde_json::to_value(&pairing).unwrap(), "phrase de passe", PAIRING_FORMAT).unwrap();
+        let code = format!("{PAIRING_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(sealed));
+        let dir = tempfile::tempdir().unwrap();
+        let s = store(dir.path());
+        join(&s, &code, "phrase de passe").unwrap();
+        assert_eq!(s.read(|d| d.known_hosts.get("vps.exemple:22").cloned()), Some("SHA256:vps".into()));
     }
 
     fn registry(id: &str) -> crate::Registry {

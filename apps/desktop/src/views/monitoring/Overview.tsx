@@ -87,26 +87,25 @@ export default function Overview({
     visible,
   );
 
+  const rangeSecs = RANGES.find((x) => x.id === range)!.secs;
   useEffect(() => {
-    const r = RANGES.find((x) => x.id === range)!;
-    if (!r.secs || !agentOk) {
-      setHistory(null);
-      return;
-    }
-    let stop = false;
-    const load = () =>
-      api
-        .agentHistory(serverId, r.secs)
-        .then((h) => !stop && setHistory(h))
-        .catch((e) => !stop && setError(errorMessage(e)));
-    void load();
-    // Pas de relecture quand la fenêtre est masquée ou la vue cachée.
-    const id = setInterval(() => !document.hidden && visible && void load(), 30_000);
-    return () => {
-      stop = true;
-      clearInterval(id);
-    };
-  }, [serverId, range, agentOk, visible]);
+    if (!rangeSecs || !agentOk) setHistory(null);
+  }, [rangeSecs, agentOk]);
+  // Résultat périmé (autre serveur ou période choisis entre-temps) : ignoré.
+  const historyKey = useRef("");
+  historyKey.current = `${serverId}|${range}`;
+  usePolling(
+    () => {
+      const key = historyKey.current;
+      return api
+        .agentHistory(serverId, rangeSecs)
+        .then((h) => historyKey.current === key && setHistory(h))
+        .catch((e) => historyKey.current === key && setError(errorMessage(e)));
+    },
+    30_000,
+    [serverId, range],
+    !!rangeSecs && agentOk && visible,
+  );
 
   // Le premier relevé direct n'a pas de CPU calculé : on l'écarte des graphiques.
   const points: HistoryPoint[] = useMemo(() => {

@@ -8,14 +8,10 @@ use zenytt_core::docker::{self, Access};
 use zenytt_core::nginx::{self, ApplyResult, Engine, NginxState};
 use zenytt_core::ssh::shell_quote;
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::AuditLog;
 use crate::store::Store;
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 /// Préfixe des actions dans le journal (`nginx.write`, `apache.write`…).
 fn action(engine: Engine, what: &str) -> String {

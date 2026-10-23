@@ -8,13 +8,9 @@ use tauri::State;
 use zenytt_core::docker::{self, Access};
 use zenytt_core::redis::{self, KeyPage, KeyValue, Overview, Server};
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::{AuditLog, Store};
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 /// Serveurs trouvés : conteneurs Redis/Valkey/KeyDB en cours, puis le service installé.
 #[tauri::command]

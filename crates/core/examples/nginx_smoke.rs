@@ -43,22 +43,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let avail = "/etc/nginx/sites-available/zenytt-test.example.com";
     let link = "/etc/nginx/sites-enabled/zenytt-test.example.com";
-    let _ = nginx::delete_site(&conn, sudo, avail, link).await;
+    let _ = nginx::delete_site_for(&conn, sudo, nginx::Engine::Nginx, avail, link).await;
 
     // 1. Nouveau site valide → appliqué, servi par nginx.
     let good = nginx::proxy_vhost("zenytt-test.example.com", 8081);
-    let r = nginx::write_config(&conn, sudo, avail, &good, Some(link)).await?;
+    let r = nginx::write_config_for(&conn, sudo, nginx::Engine::Nginx, avail, &good, Some(link), "").await?;
     assert!(r.ok, "{r:?}");
     assert_eq!(http(&root, "zenytt-test.example.com").await, "200");
     println!("✓ site ajouté, sauvegarde {} , HTTP 200 via nginx", r.backup.unwrap());
 
     // 2. Configuration cassée → refusée ET restaurée, nginx continue de servir.
-    let r = nginx::write_config(
+    let r = nginx::write_config_for(
         &conn,
         sudo,
+        nginx::Engine::Nginx,
         avail,
         "server { listen 80; server_name x; location / { proxy_pass http://127.0.0.1:1 }",
         Some(link),
+        "",
     )
     .await?;
     assert!(!r.ok, "une config invalide a été acceptée");
@@ -71,21 +73,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Nouveau fichier invalide → supprimé (n'existait pas avant), lien retiré.
     let bad_new = "/etc/nginx/sites-available/zenytt-bad.example.com";
     let bad_link = "/etc/nginx/sites-enabled/zenytt-bad.example.com";
-    let r = nginx::write_config(&conn, sudo, bad_new, "nonsense;", Some(bad_link)).await?;
+    let r = nginx::write_config_for(&conn, sudo, nginx::Engine::Nginx, bad_new, "nonsense;", Some(bad_link), "").await?;
     assert!(!r.ok);
     assert_eq!(root.run(&format!("ls {bad_new} {bad_link} 2>/dev/null | wc -l")).await?.trim(), "0");
     println!("✓ nouveau fichier invalide entièrement retiré");
 
     // 4. Désactiver / réactiver / supprimer.
-    assert!(nginx::set_enabled(&conn, sudo, avail, link, false).await?.ok);
+    assert!(nginx::set_enabled_for(&conn, sudo, nginx::Engine::Nginx, avail, link, false).await?.ok);
     assert_eq!(nginx::discover(&conn, sudo).await?.disabled.iter().filter(|f| f.path == avail).count(), 1);
-    assert!(nginx::set_enabled(&conn, sudo, avail, link, true).await?.ok);
-    assert!(nginx::delete_site(&conn, sudo, avail, link).await?.ok);
+    assert!(nginx::set_enabled_for(&conn, sudo, nginx::Engine::Nginx, avail, link, true).await?.ok);
+    assert!(nginx::delete_site_for(&conn, sudo, nginx::Engine::Nginx, avail, link).await?.ok);
     assert_eq!(root.run(&format!("ls {avail} 2>/dev/null | wc -l")).await?.trim(), "0");
     println!("✓ désactivation, réactivation et suppression");
 
     // 5. Chemin hors de /etc/nginx refusé avant même d'appeler le serveur.
-    assert!(nginx::write_config(&conn, sudo, "/etc/passwd", "x", None).await.is_err());
+    assert!(nginx::write_config_for(&conn, sudo, nginx::Engine::Nginx, "/etc/passwd", "x", None, "").await.is_err());
     println!("✓ écriture hors de /etc/nginx refusée");
 
     let ports = nginx::used_ports(&conn).await?;

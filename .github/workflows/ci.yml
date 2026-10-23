@@ -1,22 +1,95 @@
 name: CI
 
+# Ne lance que ce que la modification concerne (job « changes ») : un changement de doc ne compile
+# rien, un changement du frontend ne réveille pas Rust. Appelée par release.yml avec `full: true` :
+# une release n'est publiée que si TOUTE la CI passe. Le job « CI OK » résume l'ensemble : c'est lui
+# qu'il faut exiger dans la protection de branche (un job ignoré compte comme réussi).
 on:
   push:
     branches: [main]
   pull_request:
-  # Appelé par release.yml : une release n'est publiée que si toute la CI passe.
+  # Nouvelles failles publiées dans des dépendances inchangées.
+  schedule:
+    - cron: "17 5 * * 1"
   workflow_call:
+    inputs:
+      full:
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
+  # Une release attend toujours sa CI ; ailleurs, un nouveau push remplace le précédent.
+  cancel-in-progress: ${{ inputs.full != true }}
+
+env:
+  CARGO_TERM_COLOR: always
+  TAURI_APT: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
 jobs:
-  check:
+  changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      rust: ${{ inputs.full == true || steps.f.outputs.ci == 'true' || steps.f.outputs.rust == 'true' }}
+      frontend: ${{ inputs.full == true || steps.f.outputs.ci == 'true' || steps.f.outputs.frontend == 'true' }}
+      sync: ${{ inputs.full == true || steps.f.outputs.ci == 'true' || steps.f.outputs.sync == 'true' }}
+      e2e: ${{ inputs.full == true || steps.f.outputs.ci == 'true' || steps.f.outputs.e2e == 'true' }}
+      agent: ${{ inputs.full == true || steps.f.outputs.ci == 'true' || steps.f.outputs.agent == 'true' }}
+      audit: ${{ inputs.full == true || github.event_name == 'schedule' || steps.f.outputs.ci == 'true' || steps.f.outputs.deps == 'true' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: inputs.full != true && github.event_name != 'schedule'
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: f
+        if: inputs.full != true && github.event_name != 'schedule'
+        with:
+          filters: |
+            ci:
+              - .github/workflows/ci.yml
+            rust:
+              - Cargo.toml
+              - Cargo.lock
+              - rustfmt.toml
+              - .cargo/**
+              - crates/**
+              - apps/*/src-tauri/**
+            frontend:
+              - package.json
+              - pnpm-lock.yaml
+              - pnpm-workspace.yaml
+              - apps/desktop/**
+              - apps/mobile/**
+            sync:
+              - sync-server/**
+            # Les faux VPS ne testent que la couche serveur (zenytt-core) et l'environnement de test.
+            e2e:
+              - Cargo.lock
+              - crates/core/**
+              - crates/protocol/**
+              - testenv/**
+            agent:
+              - Cargo.lock
+              - crates/agent/**
+              - crates/protocol/**
+              - sync-server/**
+            deps:
+              - Cargo.lock
+              - pnpm-lock.yaml
+              - sync-server/Cargo.lock
+              - .cargo/audit.toml
+
+  # Typage et tests du frontend : ni Rust ni bibliothèques système.
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -24,67 +97,126 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - name: Dépendances système Tauri
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm --filter zenytt-desktop test
+      - run: pnpm --filter zenytt-mobile test
+
+  # Formatage et clippy, en parallèle des tests (deux compilations distinctes de toute façon).
+  lint:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: clippy, rustfmt
       - run: cargo fmt --all --check
+      # Pas d'action de cache apt : elle restaure mal les fichiers pkg-config de GTK (glib-2.0).
+      - name: Dépendances système Tauri
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $TAURI_APT
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Les PR lisent le cache de main sans l'écraser (quota de 10 Go par dépôt).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      # Pas d'action de cache apt : elle restaure mal les fichiers pkg-config de GTK (glib-2.0).
+      - name: Dépendances système Tauri
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $TAURI_APT
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --workspace
-      # Serveur de synchronisation (projet Cargo séparé, construit dans son image Docker).
-      - run: cargo fmt --manifest-path sync-server/Cargo.toml --check
-      - run: cargo clippy --manifest-path sync-server/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --manifest-path sync-server/Cargo.toml
 
   # Clippy sous Windows : le code propre à Windows (import PuTTY, registre) n'est vérifié qu'ici.
   check-windows:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # Serveur de synchronisation (projet Cargo séparé, construit dans son image Docker).
+  sync-server:
+    needs: changes
+    if: needs.changes.outputs.sync == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: sync-server
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt --manifest-path sync-server/Cargo.toml --check
+      - run: cargo clippy --manifest-path sync-server/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path sync-server/Cargo.toml
 
   # Vulnérabilités connues dans les dépendances Rust et JavaScript.
   audit:
+    needs: changes
+    if: needs.changes.outputs.audit == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-          cache: pnpm
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
           tool: cargo-audit
       # Avis ignorés et justifiés dans .cargo/audit.toml ; les crates non maintenues restent des avertissements.
       - run: cargo audit
-      - run: pnpm install --frozen-lockfile
+      - run: cargo audit --file sync-server/Cargo.lock
+      # Lit seulement le lockfile : pas besoin d'installer les dépendances.
       - run: pnpm audit --prod --audit-level high
 
   # Tests de bout en bout contre les faux VPS (Ubuntu root, Debian non-root avec fail2ban, membres
-  # d'un réseau privé WireGuard, hôte de VM libvirt).
+  # d'un réseau privé WireGuard, hôte de VM libvirt). En parallèle des autres jobs : c'est le plus long.
   e2e:
-    needs: check
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - name: Démarrage des faux VPS
-        run: docker compose -f testenv/docker-compose.yml up -d --build
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Les images se construisent pendant que les exemples compilent.
+      - name: Démarrage des faux VPS (en arrière-plan)
+        run: nohup docker compose -f testenv/docker-compose.yml up -d --build > compose.log 2>&1 &
+      - name: Compilation des exemples
+        run: cargo build -p zenytt-core --examples
       - name: Attente de SSH
         run: |
+          while pgrep -f "docker compose -f testenv" > /dev/null; do sleep 2; done
+          cat compose.log
           for port in 2222 2223 2224 2225 2226; do
             for i in $(seq 1 90); do
               (echo > /dev/tcp/127.0.0.1/$port) 2>/dev/null && head -c 4 < /dev/tcp/127.0.0.1/$port | grep -q SSH && break
@@ -108,14 +240,18 @@ jobs:
   # Agent zenyttd et serveur de synchronisation zenytt-sync : binaires Linux statiques (x86_64 et
   # arm64), embarqués ensuite dans l'app par release.yml (l'app les installe sur les serveurs).
   agent:
-    needs: check
+    needs: changes
+    if: needs.changes.outputs.agent == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
@@ -131,3 +267,15 @@ jobs:
             target/x86_64-unknown-linux-musl/release/zenytt-sync
             target/aarch64-unknown-linux-musl/release/zenytt-sync
           if-no-files-found: error
+
+  # Résumé unique pour la protection de branche : échoue si un job a échoué ou a été annulé.
+  ci-ok:
+    name: CI OK
+    if: always()
+    needs: [changes, frontend, lint, test, check-windows, sync-server, audit, e2e, agent]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - run: echo "Toutes les vérifications nécessaires ont réussi."

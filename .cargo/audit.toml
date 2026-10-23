@@ -1,8 +1,21 @@
 # Avis ignorés par `cargo audit`, avec leur justification. À réexaminer à chaque mise à jour.
 [advisories]
 ignore = [
-    # rsa « Marvin » : attaque temporelle à distance contre un serveur qui DÉCHIFFRE en RSA.
-    # Zenytt n'utilise RSA que pour signer localement l'authentification SSH avec la clé de
-    # l'utilisateur ; aucun correctif n'existe en amont (dépendance de russh / ssh-key).
+    # rsa « Marvin » : attaque temporelle sur les opérations à clé privée RSA (déchiffrement
+    # ET signature). Zenytt ne signe en RSA que localement, pour l'authentification SSH avec la
+    # clé de l'utilisateur : l'attaquant devrait mesurer ces signatures locales, sans canal
+    # distant exploitable, donc risque faible. Aucun correctif en amont (russh / ssh-key).
     "RUSTSEC-2023-0071",
+    # zip 4.6.1 (extraction : bits SUID/SGID, liens symboliques) tiré par tauri-plugin-updater,
+    # sans version corrigée côté plugin (zip >= 9 requis). L'archive de mise à jour n'est
+    # extraite qu'après vérification de sa signature minisign : l'attaquant devrait détenir la
+    # clé de signature. À retirer dès qu'un tauri-plugin-updater utilise zip >= 9.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+    # glib 0.18 (RUSTSEC-2024-0429, GHSA-wrw7-89jp-8q8g) : itérateur VariantStrIter non sain.
+    # Dépendance transitive de GTK3 (gtk-rs 0.18) tirée par Tauri/wry/tao sous Linux ; Zenytt
+    # n'itère jamais sur des chaînes de glib::Variant. Correctif (glib >= 0.20) bloqué tant que
+    # Tauri n'a pas migré vers gtk-rs 0.20+ (GTK4).
+    "RUSTSEC-2024-0429",
 ]

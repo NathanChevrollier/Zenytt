@@ -36,7 +36,7 @@ import AiSettingsPanel from "../components/AiSettings";
 import { ALWAYS_VISIBLE, SECTIONS } from "../sections";
 
 /** Nom du système, pour parler de « Windows », « macOS » ou « Linux » plutôt que d'un seul. */
-export const OS_NAME = /Windows/i.test(navigator.userAgent) ? "Windows" : /Mac/i.test(navigator.userAgent) ? "macOS" : "Linux";
+const OS_NAME = /Windows/i.test(navigator.userAgent) ? "Windows" : /Mac/i.test(navigator.userAgent) ? "macOS" : "Linux";
 const VAULT = OS_NAME === "Windows" ? "Gestionnaire d'identification de Windows" : OS_NAME === "macOS" ? "Trousseau de macOS" : "coffre-fort du système (Secret Service)";
 
 type TabId = "general" | "terminal" | "shortcuts" | "lock" | "ai" | "mcp" | "sync" | "maintenance" | "journal";
@@ -53,7 +53,7 @@ const NAV: { id: TabId; label: string; icon: LucideIcon; description: string }[]
 ];
 
 /** Groupe de réglages : un titre, puis des lignes dans une même carte. */
-export function Group({ title, description, children, wide }: { title?: string; description?: string; children: ReactNode; wide?: boolean }) {
+function Group({ title, description, children, wide }: { title?: string; description?: string; children: ReactNode; wide?: boolean }) {
   return (
     <section className="flex flex-col gap-2.5">
       {(title || description) && (
@@ -71,7 +71,7 @@ export function Group({ title, description, children, wide }: { title?: string; 
  * Réglage à valeur (liste, bouton…) : ce que l'on règle à gauche, la valeur en cours à droite.
  * Même disposition partout, pour qu'on sache d'un coup d'œil ce que l'on modifie.
  */
-export function Setting({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
+function Setting({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
   return (
     <div className="flex items-center gap-4 px-4 py-3.5">
       <div className="min-w-0 flex-1">
@@ -84,7 +84,7 @@ export function Setting({ title, description, children }: { title: string; descr
 }
 
 /** Réglage à deux états. */
-export function Toggle({ title, description, checked, onChange }: { title: string; description?: ReactNode; checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ title, description, checked, onChange }: { title: string; description?: ReactNode; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <Setting title={title} description={description}>
       <Switch checked={checked} onChange={onChange} label={title} />

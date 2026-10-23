@@ -8,7 +8,7 @@ use zenytt_core::Connection;
 use zenytt_core::{access, fail2ban, firewall};
 use zenytt_profiles::AuthKind;
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::{AuditLog, Store};
 
@@ -43,10 +43,6 @@ pub fn finding_ignore(
 #[tauri::command]
 pub fn finding_unignore(store: State<'_, Store>, server_id: String, finding_id: String) -> Result<(), String> {
     store.write(|d| d.ignored_findings.retain(|f| !(f.server_id == server_id && f.finding_id == finding_id)))
-}
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
 }
 
 #[tauri::command]

@@ -5,13 +5,9 @@ use zenytt_core::deploy::{self, DeployKey};
 use zenytt_core::docker::{self, Access, ComposeProject};
 use zenytt_core::nginx;
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::{AuditLog, Store};
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 /// Domaine nginx qui sert ce projet (vhost dont le `proxy_pass` vise un port publié par ses conteneurs).
 #[tauri::command]

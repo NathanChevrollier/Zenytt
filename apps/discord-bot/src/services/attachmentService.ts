@@ -50,7 +50,7 @@ export function attachmentPath(type: ImageType, now = new Date(), id = randomUUI
 }
 
 /** Vérifie le contenu réel (pas seulement le type annoncé) puis retire les métadonnées. */
-export function prepare(data: Uint8Array, now = new Date()): PreparedImage {
+function prepare(data: Uint8Array, now = new Date()): PreparedImage {
   const type = detectImageType(data);
   if (!type) throw new Error("ce n'est pas une image PNG, JPEG, GIF ou WebP");
   return { path: attachmentPath(type, now), content: stripMetadata(data, type) };

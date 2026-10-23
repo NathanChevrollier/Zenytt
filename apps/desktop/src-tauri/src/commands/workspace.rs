@@ -4,13 +4,9 @@ use tauri::State;
 use zenytt_core::tmux::{self, Session};
 use zenytt_profiles::audit::Entry;
 
-use crate::commands::{admin, track};
+use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
 use crate::store::{AuditLog, Store};
-
-fn err(e: impl ToString) -> String {
-    e.to_string()
-}
 
 #[tauri::command]
 pub fn ui_state_get(store: State<'_, Store>) -> serde_json::Value {
@@ -36,6 +32,8 @@ static LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::ne
 pub const ALLOWED_WHILE_LOCKED: &[&str] = &[
     "app_version",
     "app_is_locked",
+    // Présence seule du mot de passe (jamais l'empreinte) : l'interface relancée verrouillée en a besoin.
+    "app_lock_get",
     "app_unlock",
     "app_lock_engage",
     "ui_state_get",

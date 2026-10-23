@@ -116,9 +116,18 @@ fi
 export MYSQL_PWD="$ZP"
 "#;
 
+/// Argument « base » du client MySQL : entre apostrophes, absent si aucune base n'est choisie.
+pub(crate) fn mysql_db_arg(database: &str) -> String {
+    if database.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", shell_quote(database))
+    }
+}
+
 /// Script complet (client compris) exécuté dans un conteneur MySQL pour une base.
 pub(crate) fn mysql_container_script(database: &str) -> String {
-    format!("{MYSQL_CONTAINER_SCRIPT}exec \"$C\" --batch --raw --unbuffered -u\"$ZU\" {database}")
+    format!("{MYSQL_CONTAINER_SCRIPT}exec \"$C\" --batch --raw --unbuffered -u\"$ZU\"{}", mysql_db_arg(database))
 }
 
 impl Instance {
@@ -146,9 +155,13 @@ impl Instance {
     }
 }
 
-/// Nom d'objet SQL acceptable dans une commande (base, table) : pas d'injection possible.
+/// Nom d'objet SQL acceptable dans une commande (base, table) : pas d'injection possible, pas
+/// d'expansion shell (`$`) et jamais une option (`-eSHUTDOWN`).
 pub fn safe_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 64 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '$')
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('-')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
 }
 
 pub(crate) fn check(instance: &Instance, database: Option<&str>) -> Result<()> {
@@ -187,7 +200,7 @@ pub(crate) fn client_command(instance: &Instance, database: Option<&str>, limit:
         (Engine::Mysql, Some(c)) => format!("docker exec -i {c} sh -c {}", shell_quote(&mysql_container_script(db))),
         // Service local : socket en root, sauf si un compte est enregistré.
         (Engine::Mysql, None) => format!(
-            "{SKIP_LOGIN} C=$(command -v mysql || command -v mariadb); if [ -n \"$ZU\" ]; then export MYSQL_PWD=\"$ZP\"; set -- -u\"$ZU\"; fi; \"$C\" --batch --raw --unbuffered \"$@\" {db}"
+            "{SKIP_LOGIN} C=$(command -v mysql || command -v mariadb); if [ -n \"$ZU\" ]; then export MYSQL_PWD=\"$ZP\"; set -- -u\"$ZU\"; fi; \"$C\" --batch --raw --unbuffered \"$@\"{}", mysql_db_arg(db)
         ),
         (Engine::Postgres, Some(c)) => {
             let script = format!(
@@ -623,14 +636,6 @@ pub async fn tables(conn: &Connection, sudo: Option<&str>, instance: &Instance, 
     Ok(to_named(&parse(instance.engine, &out)))
 }
 
-/// Requête d'aperçu du contenu d'une table (identifiant vérifié, jamais concaténé sans contrôle).
-pub fn preview_query(engine: Engine, table: &str, limit: usize) -> Result<String> {
-    if !safe_name(table) {
-        return Err(Error::Other("nom de table invalide".into()));
-    }
-    Ok(format!("SELECT * FROM {} LIMIT {limit}", quote_ident(engine, table)?))
-}
-
 /// Version du serveur de base de données, pour l'affichage.
 pub async fn version(conn: &Connection, sudo: Option<&str>, instance: &Instance) -> String {
     let sql = match instance.engine {
@@ -917,12 +922,6 @@ pub fn insert_row_sql(engine: Engine, table: &str, values: &[(String, Option<Str
     Ok(format!("INSERT INTO {} ({}) VALUES ({})", quote_ident(engine, table)?, cols.join(", "), vals.join(", ")))
 }
 
-/// Exécute une instruction d'écriture (pas de lignes à lire) et renvoie le message du moteur.
-pub async fn execute(conn: &Connection, sudo: Option<&str>, instance: &Instance, database: Option<&str>, sql: &str) -> Result<String> {
-    let out = crate::ssh::long(run_sql(conn, sudo, instance, database, sql, None)).await?;
-    Ok(out.trim().to_string())
-}
-
 /// Cherche les fichiers SQLite du serveur dans les emplacements habituels. La recherche est bornée
 /// (profondeur et dossiers) : un `find /` sur un serveur chargé peut durer des minutes.
 pub const SQLITE_PROBE: &str = "command -v sqlite3 >/dev/null 2>&1 || exit 0\n\
@@ -968,6 +967,12 @@ mod tests {
         assert!(pg.contains("ZU=\"${POSTGRES_USER:-postgres}\"") && pg.contains("psql -U \"$ZU\" -d app --csv"), "{pg}");
         assert!(client_command(&container(Engine::Mysql, "db; rm -rf /"), None, None).is_err());
         assert!(client_command(&container(Engine::Mysql, "db"), Some("app; DROP"), None).is_err());
+        // Une base ne peut être ni une option du client, ni une expansion shell.
+        for bad in ["-eSHUTDOWN", "$ZP", "a$b"] {
+            assert!(client_command(&container(Engine::Mysql, "db"), Some(bad), None).is_err(), "{bad}");
+        }
+        let local = client_command(&Instance::server("l", "l", Engine::Mysql, None), Some("app"), None).unwrap();
+        assert!(local.ends_with("\"$@\" 'app'"), "{local}");
     }
 
     #[test]
@@ -976,7 +981,6 @@ mod tests {
         assert!(PG_TABLES.contains("n.nspname || '.' || c.relname"));
         assert_eq!(quote_ident(Engine::Postgres, "pgboss.queue").unwrap(), "\"pgboss\".\"queue\"");
         assert_eq!(quote_ident(Engine::Postgres, "queue").unwrap(), "\"queue\"");
-        assert_eq!(preview_query(Engine::Postgres, "pgboss.queue", 5).unwrap(), "SELECT * FROM \"pgboss\".\"queue\" LIMIT 5");
         assert!(columns_query(Engine::Postgres, "pgboss.queue").unwrap().contains("'\"pgboss\".\"queue\"'::regclass"));
         assert!(quote_ident(Engine::Postgres, "a.b.c").is_err() && quote_ident(Engine::Postgres, ".a").is_err());
     }
@@ -1081,8 +1085,7 @@ mod tests {
         assert!(!is_read_only("SELECT 'a\\'; DROP TABLE x; --'"), "PostgreSQL : l'antislash ne protège pas le guillemet");
         assert!(!is_read_only("SELECT 1 # 2; DROP TABLE x"), "PostgreSQL : # est un opérateur");
         assert_eq!(first_keyword("INSERT INTO t VALUES (1)"), "INSERT");
-        assert!(preview_query(Engine::Mysql, "users", 100).unwrap().contains("`users`"));
-        assert!(preview_query(Engine::Postgres, "users; DROP TABLE x", 10).is_err());
+        assert_eq!(quote_ident(Engine::Mysql, "users").unwrap(), "`users`");
     }
 
     #[test]

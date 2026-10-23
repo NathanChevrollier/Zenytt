@@ -1,6 +1,6 @@
 # Étude : une application iPhone pour Zenytt
 
-*Ticket #26 · 5 octobre 2026 · statut : **proposition, décision à prendre***
+*Ticket #26 · 5 octobre 2026 · statut : **proposition, décision à prendre** · étape 2 « Zenytt Compagnon » démarrée : [`apps/mobile`](../apps/mobile/README.md)*
 
 ## La demande
 

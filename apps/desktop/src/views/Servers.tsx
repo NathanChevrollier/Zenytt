@@ -5,7 +5,7 @@ import {
   Activity, ChevronDown, Container, Database, Download, FolderInput, FolderPlus, FolderTree, Globe, Pencil, Plug, Plus, Search, Server, Share2, ShieldCheck,
   SquareTerminal, Stethoscope, Trash2, Unplug,
 } from "lucide-react";
-import { api, mainDisk, errorMessage, formatDuration, type ServerView } from "../lib/api";
+import { api, mainDisk, errorMessage, formatDuration, hasShell, protocolBadge, type ServerView } from "../lib/api";
 import { ensureConnected, useApp, useAppPick } from "../lib/store";
 import { navigate, useShell, useTabIntent } from "../lib/shell";
 import { fetchHealth, useHealth } from "../lib/health";
@@ -270,7 +270,7 @@ function ServersMasterDetail({ folders, activeId, onEdit, onNewFolder }: { folde
                         onContextMenu={(e) =>
                           menu.open(e, [
                             { label: "Modifier…", icon: <Pencil size={14} />, onClick: () => onEdit(s) },
-                            { label: "Terminal", icon: <SquareTerminal size={14} />, onClick: () => void openTerminal(s) },
+                            ...(hasShell(s) ? [{ label: "Terminal", icon: <SquareTerminal size={14} />, onClick: () => void openTerminal(s) }] : []),
                             "separator",
                             ...moveItems(s),
                           ])
@@ -282,7 +282,10 @@ function ServersMasterDetail({ folders, activeId, onEdit, onNewFolder }: { folde
                       >
                         <Avatar name={s.name} color={s.color} size={30} />
                         <span className="flex min-w-0 flex-1 flex-col">
-                          <span className="truncate text-[13px] font-medium">{s.name}</span>
+                          <span className="flex items-center gap-1.5 truncate text-[13px] font-medium">
+                            {s.name}
+                            {protocolBadge(s) && <Badge>{protocolBadge(s)}</Badge>}
+                          </span>
                           <span className="truncate font-mono text-[10.5px] text-muted">
                             {s.username}@{s.host}
                             {s.port !== 22 && `:${s.port}`}
@@ -325,7 +328,7 @@ function ServerDetail({ server, onEdit, moveItems }: { server: ServerView; onEdi
   const jump = servers.find((s) => s.id === server.jumpId);
 
   useEffect(() => {
-    if (server.connected) void fetchHealth(server.id, 20_000);
+    if (server.connected && hasShell(server)) void fetchHealth(server.id, 20_000);
   }, [server.id, server.connected]);
 
   const connect = async () => {
@@ -357,7 +360,7 @@ function ServerDetail({ server, onEdit, moveItems }: { server: ServerView; onEdi
   const disk = root && root.total ? (root.used / root.total) * 100 : null;
   const go = (section: SectionId) => navigate(section, undefined, server.id);
 
-  const jumps: { section: SectionId; label: string; icon: React.ReactNode; hint: string }[] = [
+  const allJumps: { section: SectionId; label: string; icon: React.ReactNode; hint: string }[] = [
     { section: "monitoring", label: "Supervision", icon: <Activity size={15} />, hint: summary?.connected ? (summary.alerts.length ? `${summary.alerts.length} alerte(s)` : "aucune alerte") : "métriques, processus" },
     { section: "files", label: "Fichiers", icon: <FolderTree size={15} />, hint: "explorateur SFTP" },
     { section: "docker", label: "Docker", icon: <Container size={15} />, hint: summary?.connected && summary.docker ? `${summary.containersRunning} conteneur(s)` : "conteneurs, compose" },
@@ -365,6 +368,7 @@ function ServerDetail({ server, onEdit, moveItems }: { server: ServerView; onEdi
     { section: "sites", label: "Sites", icon: <Globe size={15} />, hint: summary?.connected ? `${summary.certificates.length} certificat(s)` : "nginx, certificats" },
     { section: "security", label: "Sécurité", icon: <ShieldCheck size={15} />, hint: "audit, pare-feu" },
   ];
+  const jumps = hasShell(server) ? allJumps : allJumps.filter((j) => j.section === "files");
 
   return (
     <div className="@container flex flex-col gap-5 px-7 py-6">
@@ -375,15 +379,18 @@ function ServerDetail({ server, onEdit, moveItems }: { server: ServerView; onEdi
             <h2 className="truncate text-[19px] font-semibold">{server.name}</h2>
             {server.connected ? <Badge tone="ok">connecté</Badge> : <Badge>hors ligne</Badge>}
             {server.group && <Badge>{server.group}</Badge>}
+            {protocolBadge(server) && <Badge tone="accent">{protocolBadge(server)}</Badge>}
           </div>
           <div className="mt-0.5 truncate font-mono text-xs text-muted">
             {server.username}@{server.host}:{server.port}
             {m ? ` · en ligne depuis ${formatDuration(m.uptimeSecs)}` : ""}
           </div>
         </div>
-        <Button variant="primary" icon={<SquareTerminal size={14} />} onClick={() => void openTerminal(server)}>
-          Terminal
-        </Button>
+        {hasShell(server) && (
+          <Button variant="primary" icon={<SquareTerminal size={14} />} onClick={() => void openTerminal(server)}>
+            Terminal
+          </Button>
+        )}
         {server.connected ? (
           <Button icon={<Unplug size={14} />} onClick={() => void disconnect()}>
             Déconnecter
@@ -442,7 +449,7 @@ function ServerDetail({ server, onEdit, moveItems }: { server: ServerView; onEdi
             ]}
           />
         </Card>
-        <Card className="flex flex-col gap-3">
+        {hasShell(server) && <Card className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <Eyebrow>Santé</Eyebrow>
             <button type="button" className="text-xs text-accent hover:underline" onClick={() => go("monitoring")}>
@@ -458,7 +465,7 @@ function ServerDetail({ server, onEdit, moveItems }: { server: ServerView; onEdi
           ) : (
             <p className="text-[13px] text-muted">{server.connected ? "Mesure en cours…" : "Connecte le serveur pour voir sa santé."}</p>
           )}
-        </Card>
+        </Card>}
         <Card className="@container flex flex-col gap-3">
           <Eyebrow>Aller à</Eyebrow>
           <div className="grid grid-cols-2 gap-2 @sm:grid-cols-3">

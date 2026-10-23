@@ -17,6 +17,7 @@ pub mod servers;
 pub mod share;
 pub mod sites;
 pub mod sync;
+pub mod system;
 pub mod terminal;
 pub mod tunnels;
 pub mod vms;
@@ -27,13 +28,28 @@ use zenytt_core::Connection;
 use crate::sessions::Sessions;
 use crate::store::{secrets, Store};
 
+/// Refuse l'action sur un compte SFTP seul ou FTP : il n'y a aucun shell pour l'exécuter.
+pub fn need_shell(store: &Store, server_id: &str) -> Result<(), String> {
+    if store.server(server_id)?.protocol.has_shell() {
+        Ok(())
+    } else {
+        Err("indisponible : compte sans shell".into())
+    }
+}
+
 /// Connexion + mot de passe sudo éventuel, pour les actions d'administration.
 pub async fn admin(store: &Store, sessions: &Sessions, server_id: &str) -> Result<(Connection, Option<String>), String> {
+    need_shell(store, server_id)?;
     let conn = sessions.get(store, server_id).await?;
     Ok((conn, secrets::get(server_id, "sudo")))
 }
 
 use crate::store::AuditLog;
+
+/// Convertit toute erreur en `String` pour les commandes Tauri.
+pub fn err(e: impl ToString) -> String {
+    e.to_string()
+}
 
 /// Inscrit le résultat d'une action dans le journal puis le renvoie tel quel.
 pub fn track<T>(audit: &AuditLog, store: &Store, server_id: &str, action: &str, detail: &str, r: Result<T, String>) -> Result<T, String> {

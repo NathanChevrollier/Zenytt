@@ -22,7 +22,7 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 use crate::App;
 
 /// Durée de vie maximale d'une session, et délai au-delà duquel une session sans hôte est fermée.
-const SESSION_TTL: Duration = Duration::from_secs(8 * 3600);
+const SESSION_TTL: Duration = if cfg!(test) { Duration::from_millis(1500) } else { Duration::from_secs(8 * 3600) };
 const WITHOUT_HOST: Duration = Duration::from_secs(120);
 const MAX_GUESTS: usize = 16;
 /// Sessions ouvertes en même temps : par espace (jeton), et au total.
@@ -135,8 +135,12 @@ pub async fn connect(State(app): State<Arc<App>>, Path(session): Path<String>, Q
 async fn host_loop(socket: WebSocket, room: Arc<Room>, mut inbox: mpsc::Receiver<String>, app: Arc<App>, session: String) {
     use futures_util::{SinkExt, StreamExt};
     let (mut tx, mut rx) = socket.split();
+    let expiry = tokio::time::sleep_until((room.created + SESSION_TTL).into());
+    tokio::pin!(expiry);
     loop {
         tokio::select! {
+            // La durée de vie vaut aussi pour les connexions déjà ouvertes.
+            _ = &mut expiry => break,
             incoming = rx.next() => match incoming {
                 Some(Ok(Message::Text(text))) => {
                     let _ = room.to_guests.send(text.to_string());
@@ -164,8 +168,11 @@ async fn guest_loop(socket: WebSocket, room: Arc<Room>) {
     use futures_util::{SinkExt, StreamExt};
     let (mut tx, mut rx) = socket.split();
     let mut feed = room.to_guests.subscribe();
+    let expiry = tokio::time::sleep_until((room.created + SESSION_TTL).into());
+    tokio::pin!(expiry);
     loop {
         tokio::select! {
+            _ = &mut expiry => break,
             incoming = rx.next() => match incoming {
                 Some(Ok(Message::Text(text))) => {
                     if room.to_host.send(text.to_string()).await.is_err() {

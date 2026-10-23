@@ -7,8 +7,8 @@ use crate::commands::track;
 use crate::sessions::Sessions;
 use crate::store::AuditLog;
 use crate::store::{secrets, ServerProfile, Snippet, Store};
-#[cfg(windows)]
 use zenytt_profiles::AuthKind;
+use zenytt_profiles::Protocol;
 
 /// Secrets transmis avec un profil : `None` = inchangé, `Some("")` = supprimé.
 #[derive(Deserialize)]
@@ -64,10 +64,19 @@ pub async fn server_save(
     if profile.host.trim().is_empty() || profile.username.trim().is_empty() {
         return Err("l'hôte et l'utilisateur sont obligatoires".into());
     }
+    // Le FTP n'a ni clé ni rebond : mot de passe uniquement.
+    if matches!(profile.protocol, Protocol::Ftp | Protocol::Ftps) {
+        profile.auth_kind = AuthKind::Password;
+        profile.key_path = None;
+        profile.jump_id = None;
+        profile.identity_id = None;
+    }
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
     }
     let id = profile.id.clone();
+    // Le lien avec l'hébergeur se règle dans la page Système, pas ici.
+    profile.provider = store.server(&id).ok().and_then(|s| s.provider);
     if profile.jump_id.as_deref() == Some("") {
         profile.jump_id = None;
     }
@@ -113,6 +122,7 @@ pub fn servers_set_group(store: State<'_, Store>, ids: Vec<String>, group: Optio
 pub async fn server_delete(store: State<'_, Store>, sessions: State<'_, Sessions>, id: String) -> Result<(), String> {
     sessions.disconnect(&id).await;
     secrets::delete_all(&id);
+    secrets::delete_all(&ServerProfile::provider_owner(&id));
     store.write(|d| d.servers.retain(|s| s.id != id))
 }
 
@@ -145,7 +155,20 @@ pub async fn ssh_connect(
     if user_initiated.unwrap_or(false) {
         sessions.unblock(&id);
     }
+    let protocol = store.server(&id)?.protocol;
+    if matches!(protocol, Protocol::Ftp | Protocol::Ftps) {
+        // Pas de SSH : se connecter, c'est ouvrir le client FTP.
+        sessions.fs(&store, &id).await?;
+        return Ok(ConnectInfo {
+            fingerprint: String::new(),
+            hostname: store.server(&id)?.host,
+            os: format!("{protocol:?}").to_uppercase(),
+        });
+    }
     let conn = sessions.get(&store, &id).await?;
+    if !protocol.has_shell() {
+        return Ok(ConnectInfo { fingerprint: conn.fingerprint.clone(), hostname: store.server(&id)?.host, os: "SFTP".into() });
+    }
     let out = conn
         .exec("hostname; . /etc/os-release 2>/dev/null && echo \"$PRETTY_NAME\" || uname -sr", None)
         .await
@@ -248,7 +271,9 @@ fn read_putty_sessions() -> Option<Vec<ServerProfile>> {
             ai_access: false,
             jump_id: None,
             identity_id: None,
+            protocol: Default::default(),
             auto_connect: false,
+            provider: None,
         });
     }
     Some(out)

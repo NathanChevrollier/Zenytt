@@ -1,11 +1,9 @@
 //! Synchronisation des réglages avec les autres PC : fichier partagé ou serveur `zenytt-sync`.
 
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use zenytt_core::sync_server;
-use zenytt_profiles::sync::{self, Outcome, PushResult, Remote, SyncConfig, SyncMode, SyncTunnel, Transport, SECRET_OWNER};
+use zenytt_profiles::sync::{self, HttpTransport, Outcome, SyncConfig, SyncMode, SyncTunnel, Transport, SECRET_OWNER};
 
 use crate::commands::tunnels::Tunnels;
 use crate::commands::{admin, track};
@@ -94,79 +92,9 @@ pub fn sync_set(store: State<'_, Store>, settings: SyncSettings) -> Result<(), S
             last_rev: if same_target { previous.last_rev } else { 0 },
             last_hash: if same_target && previous.include_secrets == settings.include_secrets { previous.last_hash } else { None },
             last_sync: if same_target { previous.last_sync } else { None },
+            last_remote: if same_target { previous.last_remote } else { None },
         });
     })
-}
-
-/// Serveur `zenytt-sync` (HTTP).
-struct HttpTransport {
-    url: String,
-    token: String,
-    agent: ureq::Agent,
-}
-
-impl HttpTransport {
-    fn new(url: String, token: String) -> Self {
-        let agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).http_status_as_error(false).build().into();
-        Self { url, token, agent }
-    }
-
-    fn auth(&self) -> String {
-        format!("Bearer {}", self.token)
-    }
-}
-
-fn http_error(status: u16, body: &str) -> String {
-    let detail =
-        serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| v["error"].as_str().map(str::to_string)).unwrap_or_default();
-    match status {
-        401 => "jeton de synchronisation refusé par le serveur".into(),
-        413 => "réglages trop volumineux pour le serveur".into(),
-        _ => format!("serveur de synchronisation : erreur {status} {detail}").trim().to_string(),
-    }
-}
-
-impl Transport for HttpTransport {
-    fn fetch(&self) -> Result<Option<Remote>, String> {
-        let mut res = self
-            .agent
-            .get(format!("{}/v1/state", self.url))
-            .header("Authorization", self.auth())
-            .call()
-            .map_err(|e| format!("serveur injoignable : {e}"))?;
-        let status = res.status().as_u16();
-        let body = res.body_mut().read_to_string().map_err(|e| e.to_string())?;
-        match status {
-            200 => {
-                let v: serde_json::Value = serde_json::from_str(&body).map_err(|_| "réponse du serveur illisible".to_string())?;
-                let rev = v["rev"].as_u64().ok_or("réponse du serveur illisible")?;
-                let data = v["data"].as_str().ok_or("réponse du serveur illisible")?.to_string();
-                Ok(Some(Remote { rev, data }))
-            }
-            404 => Ok(None),
-            s => Err(http_error(s, &body)),
-        }
-    }
-
-    fn push(&self, base_rev: u64, data: &str) -> Result<PushResult, String> {
-        let mut res = self
-            .agent
-            .put(format!("{}/v1/state", self.url))
-            .header("Authorization", self.auth())
-            .send_json(serde_json::json!({ "baseRev": base_rev, "data": data }))
-            .map_err(|e| format!("serveur injoignable : {e}"))?;
-        let status = res.status().as_u16();
-        let body = res.body_mut().read_to_string().map_err(|e| e.to_string())?;
-        match status {
-            200 => serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| v["rev"].as_u64())
-                .map(PushResult::Ok)
-                .ok_or_else(|| "réponse du serveur illisible".to_string()),
-            409 => Ok(PushResult::Conflict),
-            s => Err(http_error(s, &body)),
-        }
-    }
 }
 
 /// Lance une synchronisation. Les serveurs et tunnels supprimés sur un autre PC sont fermés ici.
@@ -309,6 +237,7 @@ pub async fn sync_server_install(
                 last_rev: if same { previous.last_rev } else { 0 },
                 last_hash: if same { previous.last_hash } else { None },
                 last_sync: if same { previous.last_sync } else { None },
+                last_remote: if same { previous.last_remote } else { None },
             });
         })?;
         Ok(SyncServerInstalled { port, log })

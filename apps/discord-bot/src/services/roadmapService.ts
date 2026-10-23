@@ -145,7 +145,7 @@ export class RoadmapService {
   }
 }
 
-export function buildRoadmapEmbed(snapshot: RoadmapSnapshot): EmbedBuilder {
+function buildRoadmapEmbed(snapshot: RoadmapSnapshot): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(0x2ea043)
     .setTitle(ROADMAP_TITLE)
@@ -160,7 +160,7 @@ export function buildRoadmapEmbed(snapshot: RoadmapSnapshot): EmbedBuilder {
 }
 
 /** Panneau affiché quand la roadmap ne peut pas être lue : la raison, telle quelle. */
-export function buildRoadmapErrorEmbed(reason: string): EmbedBuilder {
+function buildRoadmapErrorEmbed(reason: string): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(0xd29922)
     .setTitle(ROADMAP_TITLE)

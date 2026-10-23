@@ -3,7 +3,7 @@ import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
 import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Eye, FileDiff, Save, ShieldAlert } from "lucide-react";
 import "../lib/monaco";
 import { languageFor } from "../lib/monaco";
-import { api, errorMessage, formatBytes, type FileStamp, type TextWindow } from "../lib/api";
+import { api, errorMessage, formatBytes, hasShell, type FileStamp, type TextWindow } from "../lib/api";
 import { useApp } from "../lib/store";
 import { Badge, Button, Modal } from "./ui";
 import { useMonacoTheme } from "../lib/theme";
@@ -27,6 +27,8 @@ export default function FileEditor({ serverId, path, line, onClose }: { serverId
   /** Version Monaco du texte tel qu'il est enregistré sur le serveur. */
   const savedVersion = useRef(0);
   const [sudo, setSudo] = useState(false);
+  // Sans shell (SFTP seul, FTP) : pas de sudo possible.
+  const shell = useApp((s) => hasShell(s.servers.find((x) => x.id === serverId)));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
@@ -120,7 +122,7 @@ export default function FileEditor({ serverId, path, line, onClose }: { serverId
             notify(errorMessage(e2), "error");
           }
         }
-      } else if (!sudo && /permission|denied|refus/i.test(msg)) {
+      } else if (shell && !sudo && /permission|denied|refus/i.test(msg)) {
         const ok = await ask({
           title: "Permission refusée",
           body: "Ce fichier appartient à un autre utilisateur. Enregistrer en root avec sudo ?",
@@ -216,7 +218,7 @@ export default function FileEditor({ serverId, path, line, onClose }: { serverId
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <ShieldAlert size={32} className="text-warn" />
             <p className="max-w-md text-sm text-muted">{error}</p>
-            {/permission|denied/i.test(error) && (
+            {shell && /permission|denied/i.test(error) && (
               <Button variant="primary" onClick={() => void load(true)}>
                 Ouvrir en root (sudo)
               </Button>
