@@ -24,7 +24,12 @@ const COMPONENTS: &[(&str, &str, &str, &[&str])] = &[
     ("node", "Node.js", "node --version", &["nodejs"]),
     ("npm", "npm", "npm --version", &["npm"]),
     ("python", "Python 3", "python3 --version", &["python3", "python3-minimal"]),
-    ("mysql", "MySQL / MariaDB", "mysqld --version 2>&1 || mariadbd --version 2>&1", &["mysql-server*", "mariadb-server*", "mysql-community-server", "mariadb-server"]),
+    (
+        "mysql",
+        "MySQL / MariaDB",
+        "mysqld --version 2>&1 || mariadbd --version 2>&1",
+        &["mysql-server*", "mariadb-server*", "mysql-community-server", "mariadb-server"],
+    ),
     ("postgres", "PostgreSQL", "psql --version || postgres --version", &["postgresql*"]),
     ("redis", "Redis", "redis-server --version", &["redis", "redis-server"]),
     ("certbot", "Certbot", "certbot --version 2>&1", &["certbot"]),
@@ -101,9 +106,15 @@ pub fn parse_inventory(out: &str, updates: Option<&[Update]>) -> Inventory {
         if line.is_empty() {
             continue;
         }
-        let update = updates
-            .and_then(|u| u.iter().find(|u| pkgs.iter().any(|p| matches(p, strip_arch(&u.name)))).map(|u| u.candidate.clone()));
-        components.push(Component { id: (*id).into(), label: (*label).into(), version: version_of(line), update, trackable: !pkgs.is_empty() });
+        let update =
+            updates.and_then(|u| u.iter().find(|u| pkgs.iter().any(|p| matches(p, strip_arch(&u.name)))).map(|u| u.candidate.clone()));
+        components.push(Component {
+            id: (*id).into(),
+            label: (*label).into(),
+            version: version_of(line),
+            update,
+            trackable: !pkgs.is_empty(),
+        });
     }
     Inventory { components, updates_known: updates.is_some() }
 }
@@ -287,7 +298,9 @@ mod tests {
         assert_eq!(split_ref("nginx:1.25"), ("nginx".into(), "1.25".into()));
         assert_eq!(split_ref("reg:5000/app"), ("reg:5000/app".into(), "".into()));
         assert_eq!(split_ref("reg:5000/app:2@sha256:abc"), ("reg:5000/app".into(), "2".into()));
-        let c = parse_checks("nginx:1.25\tnginx@sha256:aaa \tsha256:aaa\nredis:7\tredis@sha256:bbb \tsha256:ccc\nmine:1\t\t\nold:1\told@sha256:d \t\n");
+        let c = parse_checks(
+            "nginx:1.25\tnginx@sha256:aaa \tsha256:aaa\nredis:7\tredis@sha256:bbb \tsha256:ccc\nmine:1\t\t\nold:1\told@sha256:d \t\n",
+        );
         assert_eq!(image_state("nginx:1.25", c.get("nginx:1.25")), ImageState::UpToDate);
         assert_eq!(image_state("redis:7", c.get("redis:7")), ImageState::UpdateAvailable);
         assert_eq!(image_state("mine:1", c.get("mine:1")), ImageState::Unknown);
