@@ -581,6 +581,37 @@ export interface ProviderStatus {
   raw: string;
 }
 
+export interface GithubStatus {
+  configured: boolean;
+  login: string | null;
+}
+
+export interface GithubRepo {
+  fullName: string;
+  name: string;
+  owner: string;
+  private: boolean;
+  defaultBranch: string;
+  pushedAt: string | null;
+  openIssues: number;
+  description: string | null;
+  fork: boolean;
+  archived: boolean;
+}
+
+/** Clone d'un dépôt GitHub présent sur un serveur. */
+export interface GithubClone {
+  path: string;
+  branch: string;
+  /** Fichiers modifiés ou non suivis. */
+  dirty: number;
+  /** [en avance, en retard] sur la branche suivie ; null sans branche suivie. */
+  aheadBehind: [number, number] | null;
+  commit: string;
+  commitDate: string;
+  subject: string;
+}
+
 export interface Service {
   unit: string;
   load: string;
@@ -1663,6 +1694,15 @@ export const api = {
     invoke<void>("provider_set", { serverId, link, ...secrets }),
   providerTest: (serverId: string) => invoke<ProviderStatus>("provider_test", { serverId }),
   providerAction: (serverId: string, action: ProviderAction) => invoke<ProviderStatus>("provider_action", { serverId, action }),
+  githubStatus: () => invoke<GithubStatus>("github_status"),
+  /** Jeton vide = supprime le compte. Il n'est jamais renvoyé. */
+  githubSetToken: (token: string) => invoke<GithubStatus>("github_set_token", { token }),
+  githubRepos: () => invoke<GithubRepo[]>("github_repos"),
+  githubClones: (serverId: string, owner: string, repo: string) => invoke<GithubClone[]>("github_clones", { serverId, owner, repo }),
+  githubCloneState: (serverId: string, owner: string, repo: string, path: string, fetch: boolean) =>
+    invoke<GithubClone>("github_clone_state", { serverId, owner, repo, path, fetch }),
+  githubClone: (serverId: string, owner: string, repo: string, folder: string) => invoke<string>("github_clone", { serverId, owner, repo, folder }),
+  githubPull: (serverId: string, owner: string, repo: string, path: string) => invoke<string>("github_pull", { serverId, owner, repo, path }),
   agentInfo: (serverId: string) => invoke<AgentInfo>("agent_info", { serverId }),
   agentHistory: (serverId: string, rangeSecs: number, points = 400) =>
     invoke<HistoryPoint[]>("agent_history", { serverId, rangeSecs, points }),

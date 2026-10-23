@@ -99,8 +99,11 @@ pub(crate) fn snapshot(store: &Store, include_secrets: bool) -> Payload {
 /// le jeton de synchronisation ni les secrets d'un élément absent du contenu.
 fn own_owners(p: &Payload) -> Vec<String> {
     // Un identifiant de serveur qui imiterait un propriétaire réservé (`sync`, `identity-…`) n'ouvre aucun droit.
-    let reserved =
-        |id: &str| id == crate::sync::SECRET_OWNER || ["provider-", "identity-", "rdp-", "registry-"].iter().any(|p| id.starts_with(p));
+    // `github` (jeton de la page GitHub) et `ai` (clé de l'assistant) sont propres à ce poste.
+    let reserved = |id: &str| {
+        [crate::sync::SECRET_OWNER, secrets::GITHUB_OWNER, "ai"].contains(&id)
+            || ["provider-", "identity-", "rdp-", "registry-"].iter().any(|p| id.starts_with(p))
+    };
     p.servers
         .iter()
         .filter(|s| !reserved(&s.id))
@@ -898,9 +901,11 @@ mod tests {
         let owners = own_owners(&p);
         assert!(owners.contains(&"a".to_string()) && owners.contains(&"provider-a".to_string()));
         assert!(!owners.iter().any(|o| o == "sync" || o == "b"), "ni le jeton de synchronisation ni un autre serveur");
-        let mut sneaky = p.servers[0].clone();
-        sneaky.id = "sync".into();
-        assert!(!own_owners(&Payload { servers: vec![sneaky], ..Default::default() }).iter().any(|o| o == "sync"));
+        for reserved in ["sync", "github", "ai"] {
+            let mut sneaky = p.servers[0].clone();
+            sneaky.id = reserved.into();
+            assert!(!own_owners(&Payload { servers: vec![sneaky], ..Default::default() }).iter().any(|o| o == reserved), "{reserved}");
+        }
     }
 
     #[test]

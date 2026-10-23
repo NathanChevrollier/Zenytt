@@ -16,6 +16,7 @@ pub mod domains;
 pub mod fail2ban;
 pub mod firewall;
 pub mod ftp;
+pub mod github;
 pub mod inventory;
 pub mod legacy;
 pub mod mesh;
