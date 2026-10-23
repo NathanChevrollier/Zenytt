@@ -7772,7 +7772,7 @@ dependencies = [
 
 [[package]]
 name = "zenytt-ai"
-version = "1.1.7"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7781,7 +7781,7 @@ dependencies = [
 
 [[package]]
 name = "zenytt-core"
-version = "1.1.7"
+version = "1.2.0"
 dependencies = [
  "base64 0.23.1",
  "futures",
@@ -7800,7 +7800,7 @@ dependencies = [
 
 [[package]]
 name = "zenytt-desktop"
-version = "1.1.7"
+version = "1.2.0"
 dependencies = [
  "base64 0.23.1",
  "flate2",
@@ -7838,7 +7838,7 @@ dependencies = [
 
 [[package]]
 name = "zenytt-mcp"
-version = "1.1.7"
+version = "1.2.0"
 dependencies = [
  "regex",
  "rmcp",
@@ -7852,7 +7852,7 @@ dependencies = [
 
 [[package]]
 name = "zenytt-mobile"
-version = "1.1.7"
+version = "1.2.0"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -7871,7 +7871,7 @@ dependencies = [
 
 [[package]]
 name = "zenytt-profiles"
-version = "1.1.7"
+version = "1.2.0"
 dependencies = [
  "base64 0.23.1",
  "dirs 6.0.0",
@@ -7886,7 +7886,7 @@ dependencies = [
 
 [[package]]
 name = "zenytt-protocol"
-version = "1.1.7"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7894,7 +7894,7 @@ dependencies = [
 
 [[package]]
 name = "zenyttd"
-version = "1.1.7"
+version = "1.2.0"
 dependencies = [
  "libc",
  "serde",
