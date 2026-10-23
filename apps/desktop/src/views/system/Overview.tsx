@@ -1,9 +1,10 @@
 // Vue d'ensemble : fiche du serveur (nom d'hôte et fuseau modifiables sur place), états à traiter
 // et zone d'alimentation (redémarrer, programmer, éteindre), avec l'attente du retour après un redémarrage.
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { CalendarClock, Check, Clock, Cpu, Globe, Loader2, MemoryStick, Pencil, PowerOff, RotateCw, Server, X } from "lucide-react";
+import { CalendarClock, Check, Clock, Cpu, Globe, Loader2, MemoryStick, Pencil, PowerOff, RotateCw, Server, ShieldCheck, X } from "lucide-react";
 import { api, errorMessage, formatBytes, formatDuration, type SystemInfo, type SystemUpdate } from "../../lib/api";
-import { formatAt, updateGroup, validHostname } from "../../lib/system";
+import { formatAt, scoreVerdict, updateGroup, validHostname } from "../../lib/system";
+import { ScoreGauge, type SecTab } from "./Security";
 import { useApp } from "../../lib/store";
 import { Button, Card, ErrorState, Field, IconButton, Input, Loading, Meter, Modal, ResultBanner, Section, Segmented } from "../../components/ui";
 
@@ -19,6 +20,9 @@ export default function Overview({
   reload,
   updates,
   onShowUpdates,
+  security,
+  auditing,
+  onShowSecurity,
 }: {
   serverId: string;
   name: string;
@@ -27,6 +31,9 @@ export default function Overview({
   reload: () => Promise<void>;
   updates: SystemUpdate[] | null;
   onShowUpdates: () => void;
+  security: { score: number; problems: unknown[]; serious: number; banned: number | null } | null;
+  auditing: boolean;
+  onShowSecurity: (sub?: SecTab) => void;
 }) {
   const { notify, refreshServers } = useApp.getState();
   const [zones, setZones] = useState<string[]>([]);
@@ -190,6 +197,8 @@ export default function Overview({
         </div>
       )}
 
+      <SecuritySummary security={security} auditing={auditing} onOpen={onShowSecurity} />
+
       <Section title="Alimentation" description="Coupe les sessions et les services en cours">
         {waitStart ? (
           <Waiting name={name} start={waitStart} onStop={stopWaiting} />
@@ -216,6 +225,41 @@ export default function Overview({
 
       {modal && <PowerModal mode={modal} name={name} onClose={() => setModal(null)} onConfirm={(k, d) => void doPower(k, d)} />}
     </>
+  );
+}
+
+function SecuritySummary({ security, auditing, onOpen }: { security: { score: number; problems: unknown[]; serious: number; banned: number | null } | null; auditing: boolean; onOpen: (sub?: SecTab) => void }) {
+  if (!security) {
+    if (!auditing) return null;
+    return (
+      <Card className="flex items-center gap-3 text-[13px] text-muted">
+        <Loader2 size={16} className="animate-spin" />
+        Audit de sécurité en cours… (lecture seule)
+      </Card>
+    );
+  }
+  const n = security.problems.length;
+  return (
+    <Card tone={security.serious ? "danger" : undefined} className="flex flex-wrap items-center gap-4 !py-3">
+      <ScoreGauge score={security.score} small />
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-medium">{scoreVerdict(security.score)}</div>
+        <div className="text-xs text-muted">
+          {n ? `${n} point${n > 1 ? "s" : ""} à traiter${security.serious ? `, dont ${security.serious} prioritaire${security.serious > 1 ? "s" : ""}` : ""}` : "Aucun problème détecté par l'audit"}
+          {security.banned != null && (
+            <>
+              {", "}
+              <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-fg" onClick={() => onOpen("fail2ban")}>
+                {security.banned} IP bannie{security.banned > 1 ? "s" : ""} par fail2ban
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      <Button size="sm" icon={<ShieldCheck size={13} />} onClick={() => onOpen("audit")}>
+        {n ? "Voir l'audit" : "Ouvrir la sécurité"}
+      </Button>
+    </Card>
   );
 }
 

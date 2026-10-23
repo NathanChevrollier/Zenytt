@@ -1,5 +1,5 @@
 // Aides pures de la page Système : regroupement des mises à jour et des images, validation.
-import type { ContainerImage, SystemUpdate } from "./api";
+import type { ContainerImage, Finding, Severity, SystemUpdate } from "./api";
 
 export type UpdateGroup = "kernel" | "libs" | "apps";
 export const UPDATE_GROUP_LABEL: Record<UpdateGroup, string> = { kernel: "Noyau et démarrage", libs: "Bibliothèques", apps: "Applications et outils" };
@@ -32,4 +32,26 @@ export function formatAt(unixSecs: number, now = new Date()): string {
   const d = new Date(unixSecs * 1000);
   const time = d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
   return d.toDateString() === now.toDateString() ? time : `${d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })} ${time}`;
+}
+
+/** Points retirés au score de sécurité par constat, selon sa gravité. */
+export const PENALTY: Record<Severity, number> = { critical: 30, high: 15, medium: 6, low: 2, ok: 0 };
+
+/** Constats à traiter (hors ignorés), conformes, prioritaires et score sur 100. */
+export function auditSummary(findings: Finding[], ignoredIds: string[]) {
+  const problems = findings.filter((f) => f.severity !== "ok" && !ignoredIds.includes(f.id));
+  const ok = findings.filter((f) => f.severity === "ok");
+  const serious = problems.filter((f) => f.severity === "critical" || f.severity === "high").length;
+  const score = Math.max(0, 100 - problems.reduce((n, f) => n + PENALTY[f.severity], 0));
+  return { problems, ok, serious, score };
+}
+
+export function scoreVerdict(score: number): string {
+  return score >= 90 ? "Serveur bien protégé" : score >= 70 ? "Quelques points à renforcer" : score >= 40 ? "Des failles à corriger" : "Serveur exposé";
+}
+
+/** Onglet demandé à la page Système : « security/fail2ban » ouvre Sécurité sur son sous-onglet. */
+export function splitTab(tab: string): [string, string | null] {
+  const i = tab.indexOf("/");
+  return i < 0 ? [tab, null] : [tab.slice(0, i), tab.slice(i + 1)];
 }

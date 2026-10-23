@@ -242,8 +242,11 @@ export const useApp = create<State>((set, get) => ({
     try {
       const raw = (await (saved ?? api.uiStateGet())) as Partial<Persisted> | null;
       if (raw && raw.v === 1) {
+        // L'ancienne section « Sécurité » vit désormais dans Système (onglet Sécurité).
+        const legacySecurity = (raw.section as string) === "security";
+        if (legacySecurity) void import("./shell").then(({ useShell }) => useShell.setState({ intent: { section: "system", tab: "security" } }));
         set({
-          section: raw.section ?? "servers",
+          section: legacySecurity ? "system" : (raw.section ?? "servers"),
           // Les sessions partagées ne survivent pas à la fermeture de l'app.
           tabs: (raw.tabs ?? []).filter((t) => !t.join),
           activeTab: raw.activeTab ?? null,

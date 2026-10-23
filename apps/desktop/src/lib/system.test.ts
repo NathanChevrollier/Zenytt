@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ContainerImage } from "./api";
-import { formatAt, sortImages, sortUpdates, updateGroup, validHostname } from "./system";
+import type { ContainerImage, Finding } from "./api";
+import { auditSummary, formatAt, scoreVerdict, sortImages, sortUpdates, splitTab, updateGroup, validHostname } from "./system";
 
 const img = (container: string, project: string | null, service: string | null = null) => ({ container, project, service }) as ContainerImage;
 
@@ -33,5 +33,21 @@ describe("système", () => {
     const now = new Date(2026, 9, 23, 10, 0);
     expect(formatAt(new Date(2026, 9, 23, 14, 30).getTime() / 1000, now)).toBe("14:30");
     expect(formatAt(new Date(2026, 9, 24, 8, 5).getTime() / 1000, now)).toBe("24/10 08:05");
+  });
+
+  it("résumé de l'audit", () => {
+    const f = (id: string, severity: Finding["severity"]) => ({ id, severity, title: id, detail: "", fix: null, fixLabel: null });
+    const s = auditSummary([f("a", "critical"), f("b", "medium"), f("c", "ok"), f("d", "high")], ["d"]);
+    expect(s.problems.map((p) => p.id)).toEqual(["a", "b"]);
+    expect(s.serious).toBe(1);
+    expect(s.ok).toHaveLength(1);
+    expect(s.score).toBe(64);
+    expect(auditSummary([f("x", "critical"), f("y", "critical"), f("z", "critical"), f("w", "critical")], []).score).toBe(0);
+    expect(scoreVerdict(95)).toBe("Serveur bien protégé");
+  });
+
+  it("onglet et sous-onglet", () => {
+    expect(splitTab("security/fail2ban")).toEqual(["security", "fail2ban"]);
+    expect(splitTab("updates")).toEqual(["updates", null]);
   });
 });
