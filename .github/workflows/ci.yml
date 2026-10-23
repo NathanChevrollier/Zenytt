@@ -114,10 +114,9 @@ jobs:
         with:
           components: clippy, rustfmt
       - run: cargo fmt --all --check
-      - uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
-        with:
-          packages: ${{ env.TAURI_APT }}
-          version: 1
+      # Pas d'action de cache apt : elle restaure mal les fichiers pkg-config de GTK (glib-2.0).
+      - name: Dépendances système Tauri
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $TAURI_APT
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           # Les PR lisent le cache de main sans l'écraser (quota de 10 Go par dépôt).
@@ -132,10 +131,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
-        with:
-          packages: ${{ env.TAURI_APT }}
-          version: 1
+      # Pas d'action de cache apt : elle restaure mal les fichiers pkg-config de GTK (glib-2.0).
+      - name: Dépendances système Tauri
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $TAURI_APT
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
