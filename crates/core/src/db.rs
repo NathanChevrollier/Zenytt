@@ -116,9 +116,14 @@ fi
 export MYSQL_PWD="$ZP"
 "#;
 
+/// Argument « base » du client MySQL : entre apostrophes, absent si aucune base n'est choisie.
+pub(crate) fn mysql_db_arg(database: &str) -> String {
+    if database.is_empty() { String::new() } else { format!(" {}", shell_quote(database)) }
+}
+
 /// Script complet (client compris) exécuté dans un conteneur MySQL pour une base.
 pub(crate) fn mysql_container_script(database: &str) -> String {
-    format!("{MYSQL_CONTAINER_SCRIPT}exec \"$C\" --batch --raw --unbuffered -u\"$ZU\" {database}")
+    format!("{MYSQL_CONTAINER_SCRIPT}exec \"$C\" --batch --raw --unbuffered -u\"$ZU\"{}", mysql_db_arg(database))
 }
 
 impl Instance {
@@ -146,9 +151,10 @@ impl Instance {
     }
 }
 
-/// Nom d'objet SQL acceptable dans une commande (base, table) : pas d'injection possible.
+/// Nom d'objet SQL acceptable dans une commande (base, table) : pas d'injection possible, pas
+/// d'expansion shell (`$`) et jamais une option (`-eSHUTDOWN`).
 pub fn safe_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 64 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '$')
+    !name.is_empty() && name.len() <= 64 && !name.starts_with('-') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
 }
 
 pub(crate) fn check(instance: &Instance, database: Option<&str>) -> Result<()> {
@@ -187,7 +193,7 @@ pub(crate) fn client_command(instance: &Instance, database: Option<&str>, limit:
         (Engine::Mysql, Some(c)) => format!("docker exec -i {c} sh -c {}", shell_quote(&mysql_container_script(db))),
         // Service local : socket en root, sauf si un compte est enregistré.
         (Engine::Mysql, None) => format!(
-            "{SKIP_LOGIN} C=$(command -v mysql || command -v mariadb); if [ -n \"$ZU\" ]; then export MYSQL_PWD=\"$ZP\"; set -- -u\"$ZU\"; fi; \"$C\" --batch --raw --unbuffered \"$@\" {db}"
+            "{SKIP_LOGIN} C=$(command -v mysql || command -v mariadb); if [ -n \"$ZU\" ]; then export MYSQL_PWD=\"$ZP\"; set -- -u\"$ZU\"; fi; \"$C\" --batch --raw --unbuffered \"$@\"{}", mysql_db_arg(db)
         ),
         (Engine::Postgres, Some(c)) => {
             let script = format!(
@@ -968,6 +974,12 @@ mod tests {
         assert!(pg.contains("ZU=\"${POSTGRES_USER:-postgres}\"") && pg.contains("psql -U \"$ZU\" -d app --csv"), "{pg}");
         assert!(client_command(&container(Engine::Mysql, "db; rm -rf /"), None, None).is_err());
         assert!(client_command(&container(Engine::Mysql, "db"), Some("app; DROP"), None).is_err());
+        // Une base ne peut être ni une option du client, ni une expansion shell.
+        for bad in ["-eSHUTDOWN", "$ZP", "a$b"] {
+            assert!(client_command(&container(Engine::Mysql, "db"), Some(bad), None).is_err(), "{bad}");
+        }
+        let local = client_command(&Instance::server("l", "l", Engine::Mysql, None), Some("app"), None).unwrap();
+        assert!(local.ends_with("\"$@\" 'app'"), "{local}");
     }
 
     #[test]

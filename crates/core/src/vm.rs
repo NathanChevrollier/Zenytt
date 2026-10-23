@@ -482,6 +482,10 @@ pub fn removable_disks(d: &VmDetail) -> Vec<String> {
     d.disks.iter().filter(|x| x.device == "disk" && !x.shared && !x.target.is_empty()).map(|x| x.target.clone()).collect()
 }
 
+fn valid_disk_target(t: &str) -> bool {
+    t.starts_with(|c: char| c.is_ascii_lowercase()) && t.len() <= 16 && t.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
 /// `storage` : disques à supprimer (cibles `vda`…), désignés un par un plutôt que
 /// `--remove-all-storage`, qui prendrait aussi les ISO et les disques partagés.
 pub fn delete_args(uuid: &str, storage: &[String], uefi: bool) -> String {
@@ -490,7 +494,11 @@ pub fn delete_args(uuid: &str, storage: &[String], uefi: bool) -> String {
         args.push_str(" --nvram");
     }
     if !storage.is_empty() {
-        args.push_str(&format!(" --storage {}", shell_quote(&storage.join(","))));
+        // Les cibles viennent du XML de la VM : seules celles qui ressemblent à `vda`/`sda` passent.
+        let ok: Vec<&str> = storage.iter().map(String::as_str).filter(|t| valid_disk_target(t)).collect();
+        if !ok.is_empty() {
+            args.push_str(&format!(" --storage {}", shell_quote(&ok.join(","))));
+        }
     }
     args
 }
@@ -671,6 +679,7 @@ mod tests {
         assert_eq!(action_args(VmAction::Shutdown, u), format!("shutdown '{u}' --mode acpi"));
         assert_eq!(action_args(VmAction::ForceOff, u), format!("destroy '{u}' --graceful"));
         assert_eq!(action_args(VmAction::AutostartOff, u), format!("autostart '{u}' --disable"));
+        assert_eq!(delete_args(u, &["vda;id".into(), "-x".into()], false), format!("undefine '{u}' --managed-save --snapshots-metadata"));
         assert_eq!(delete_args(u, &[], false), format!("undefine '{u}' --managed-save --snapshots-metadata"));
         // Disques désignés un par un : jamais --remove-all-storage (il prendrait aussi une ISO partagée).
         assert_eq!(

@@ -284,14 +284,14 @@ pub async fn timezones(conn: &Connection) -> Result<Vec<String>> {
 }
 
 pub fn valid_timezone(tz: &str) -> bool {
-    !tz.is_empty() && !tz.contains("..") && tz.chars().all(|c| c.is_ascii_alphanumeric() || "_+-/".contains(c))
+    !tz.is_empty() && !tz.starts_with('-') && !tz.contains("..") && tz.chars().all(|c| c.is_ascii_alphanumeric() || "_+-/".contains(c))
 }
 
 pub async fn set_timezone(conn: &Connection, tz: &str, sudo_password: Option<&str>) -> Result<()> {
     if !valid_timezone(tz) {
         return Err(Error::Other(format!("fuseau horaire invalide : {tz}")));
     }
-    conn.exec_sudo(&format!("timedatectl set-timezone {}", shell_quote(tz)), sudo_password, None).await?.into_result()?;
+    conn.exec_sudo(&format!("timedatectl set-timezone -- {}", shell_quote(tz)), sudo_password, None).await?.into_result()?;
     Ok(())
 }
 
@@ -411,7 +411,7 @@ mod tests {
             assert!(!valid_hostname(bad), "{bad}");
         }
         assert!(valid_timezone("Europe/Paris") && valid_timezone("Etc/GMT+1") && valid_timezone("America/Port-au-Prince"));
-        for bad in ["", "a b", "Europe/Paris; reboot", "../etc/passwd", "$(id)"] {
+        for bad in ["", "a b", "Europe/Paris; reboot", "../etc/passwd", "$(id)", "-Europe/Paris"] {
             assert!(!valid_timezone(bad), "{bad}");
         }
     }

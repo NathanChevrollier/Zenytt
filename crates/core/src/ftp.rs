@@ -333,6 +333,14 @@ pub async fn remove(ftp: &mut Ftp, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Profondeur maximale d'un téléchargement récursif.
+const MAX_DEPTH: usize = 64;
+
+/// Nom d'entrée distante acceptable : ni `.`/`..`, ni séparateur de chemin.
+fn valid_entry_name(name: &str) -> bool {
+    !matches!(name, "" | "." | "..") && !name.contains(['/', '\\', '\0'])
+}
+
 /// Télécharge un fichier ou un dossier distant vers `local_dir`.
 pub async fn download(
     ftp: &mut Ftp,
@@ -348,13 +356,20 @@ pub async fn download(
         download_file(ftp, remote, &target, total, on_progress).await?;
         return Ok(target);
     }
-    let mut stack = vec![(remote.to_string(), target.clone())];
-    while let Some((rdir, ldir)) = stack.pop() {
+    let mut stack = vec![(remote.to_string(), target.clone(), 0usize)];
+    while let Some((rdir, ldir, depth)) = stack.pop() {
+        // Un serveur malveillant peut boucler (lien symbolique) ou imbriquer sans fin.
+        if depth > MAX_DEPTH {
+            return Err(Error::Other(format!("dossier trop profond (plus de {MAX_DEPTH} niveaux) : {rdir}")));
+        }
         tokio::fs::create_dir_all(&ldir).await.map_err(io_err)?;
         for e in list(ftp, &rdir).await?.entries {
+            if !valid_entry_name(&e.name) {
+                continue;
+            }
             let l = ldir.join(local_name(&e.name));
             match e.kind {
-                EntryKind::Dir => stack.push((e.path, l)),
+                EntryKind::Dir => stack.push((e.path, l, depth + 1)),
                 EntryKind::File => download_file(ftp, &e.path, &l, e.size, on_progress).await?,
                 _ => {}
             }
@@ -443,6 +458,14 @@ async fn upload_file(ftp: &mut Ftp, local: &Path, remote: &str, on_progress: &(d
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entry_names_cannot_escape() {
+        assert!(valid_entry_name("a.txt"));
+        for bad in ["", ".", "..", "a/b", "../x", "a\\b"] {
+            assert!(!valid_entry_name(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn cert_fingerprint_matches_ssh_format() {

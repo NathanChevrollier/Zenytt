@@ -96,14 +96,14 @@ fi
 if [ -f /etc/ssh/sshd_config.d/00-helm.conf ]; then
   sed 's/Helm/Zenytt/g' /etc/ssh/sshd_config.d/00-helm.conf > /etc/ssh/sshd_config.d/00-zenytt.conf
   chmod --reference=/etc/ssh/sshd_config.d/00-helm.conf /etc/ssh/sshd_config.d/00-zenytt.conf
-  mv /etc/ssh/sshd_config.d/00-helm.conf /tmp/00-helm.conf.zenytt-old
+  mv /etc/ssh/sshd_config.d/00-helm.conf /etc/ssh/sshd_config.d/00-helm.conf.zenytt-old
   if sshd -t 2>/dev/null; then
-    rm -f /tmp/00-helm.conf.zenytt-old
+    rm -f /etc/ssh/sshd_config.d/00-helm.conf.zenytt-old
     systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
     echo "réglages SSH : 00-zenytt.conf"
   else
     rm -f /etc/ssh/sshd_config.d/00-zenytt.conf
-    mv /tmp/00-helm.conf.zenytt-old /etc/ssh/sshd_config.d/00-helm.conf
+    mv /etc/ssh/sshd_config.d/00-helm.conf.zenytt-old /etc/ssh/sshd_config.d/00-helm.conf
     echo "réglages SSH : configuration refusée par sshd -t, ancien fichier conservé"
   fi
 fi

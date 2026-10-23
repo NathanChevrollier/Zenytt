@@ -1,12 +1,12 @@
 //! Socket unix : une requête JSON par connexion, une réponse JSON en retour.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use zenytt_protocol::{Request, Response};
 
@@ -52,13 +52,43 @@ fn peer_uid(stream: &UnixStream) -> Option<u32> {
     (rc == 0).then_some(cred.uid)
 }
 
+/// Budget total pour recevoir la requête : un client qui envoie un octet à la fois ne garde pas
+/// un des emplacements plus longtemps.
+const REQUEST_BUDGET: Duration = Duration::from_secs(10);
+
+/// Lit une ligne (64 Ko au plus) avant l'échéance globale.
+fn read_request(stream: &UnixStream) -> Option<String> {
+    let end = Instant::now() + REQUEST_BUDGET;
+    let (mut buf, mut chunk, mut r) = (Vec::new(), [0u8; 1024], stream);
+    while !buf.contains(&b'
+') {
+        let left = end.checked_duration_since(Instant::now()).filter(|d| !d.is_zero())?;
+        stream.set_read_timeout(Some(left)).ok()?;
+        let n = r.read(&mut chunk).ok()?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > 64 * 1024 {
+            return None;
+        }
+    }
+    String::from_utf8(buf).ok()
+}
+
+/// URL sans identifiants (`user:pass@`), requête ni fragment : ce sont souvent des jetons.
+fn redact_url(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").map_or(("", url), |(s, r)| (s, r));
+    let sep = if scheme.is_empty() { "" } else { "://" };
+    let (auth, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+    let host = auth.rsplit('@').next().unwrap_or(auth);
+    format!("{scheme}{sep}{host}{}", tail.split(['?', '#']).next().unwrap_or(""))
+}
+
 fn handle(stream: UnixStream, state: Shared) {
     let privileged = peer_uid(&stream) == Some(0);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let mut line = String::new();
-    if BufReader::new((&stream).take(64 * 1024)).read_line(&mut line).is_err() {
-        return;
-    }
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    let Some(line) = read_request(&stream) else { return };
     let response = match serde_json::from_str::<Request>(line.trim()) {
         Ok(req) => answer(req, &state, privileged),
         Err(e) => Response::Error { message: format!("requête invalide : {e}") },
@@ -74,6 +104,9 @@ fn answer(req: Request, state: &Shared, privileged: bool) -> Response {
             let mut status = state.lock().unwrap().status();
             if !privileged {
                 status.config.notifiers = status.config.notifiers.redacted();
+                for c in &mut status.config.http_checks {
+                    c.url = redact_url(&c.url);
+                }
             }
             Response::Status(Box::new(status))
         }
@@ -91,5 +124,17 @@ fn answer(req: Request, state: &Shared, privileged: bool) -> Response {
             Ok(message) => Response::Ok { message },
             Err(message) => Response::Error { message },
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn urls_lose_credentials_and_query() {
+        assert_eq!(redact_url("https://u:p@example.com:8080/health?token=abc#x"), "https://example.com:8080/health");
+        assert_eq!(redact_url("http://example.com?k=v"), "http://example.com");
+        assert_eq!(redact_url("example.com/a"), "example.com/a");
     }
 }

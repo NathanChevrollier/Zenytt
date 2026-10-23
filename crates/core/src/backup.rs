@@ -164,7 +164,7 @@ echo "Sauvegarde Zenytt — $(date)"
         let c = &db.container;
         if db.kind == "mysql" {
             s.push_str(&format!(
-                "echo \"Dump MySQL/MariaDB : {c}\"\ndocker exec {c} sh -c 'D=$(command -v mysqldump || command -v mariadb-dump); exec \"$D\" --all-databases --single-transaction --routines --events -uroot -p\"${{MYSQL_ROOT_PASSWORD:-$MARIADB_ROOT_PASSWORD}}\"' > \"$STAGE/db/{c}.sql\" || fail \"dump de {c}\"\n"
+                "echo \"Dump MySQL/MariaDB : {c}\"\ndocker exec {c} sh -c 'D=$(command -v mysqldump || command -v mariadb-dump); export MYSQL_PWD=\"${{MYSQL_ROOT_PASSWORD:-$MARIADB_ROOT_PASSWORD}}\"; exec \"$D\" --all-databases --single-transaction --routines --events -uroot' > \"$STAGE/db/{c}.sql\" || fail \"dump de {c}\"\n"
             ));
         } else {
             s.push_str(&format!(
@@ -224,9 +224,10 @@ pkg() {
   else return 1; fi
 }
 echo "Installation de restic avec le gestionnaire de paquets…"
-pkg >/tmp/zenytt-restic-pkg.log 2>&1 || true
+PKGLOG=$(mktemp) || exit 1
+pkg >"$PKGLOG" 2>&1 || true
 if ! command -v restic >/dev/null 2>&1; then
-  tail -n 5 /tmp/zenytt-restic-pkg.log 2>/dev/null
+  tail -n 5 "$PKGLOG" 2>/dev/null
   echo "Paquet indisponible : téléchargement du binaire officiel (github.com/restic/restic)…"
   case "$(uname -m)" in
     x86_64|amd64) A=amd64 ;; aarch64|arm64) A=arm64 ;; armv7l|armv6l) A=arm ;; i386|i686) A=386 ;;
@@ -459,7 +460,7 @@ pub async fn import_dump(conn: &Connection, sudo: Option<&str>, dump: &str, db: 
         }
         let c = &db.container;
         let cmd = match db.kind.as_str() {
-            "mysql" => format!("docker exec -i {c} sh -c 'C=$(command -v mysql || command -v mariadb); exec \"$C\" -uroot -p\"${{MYSQL_ROOT_PASSWORD:-$MARIADB_ROOT_PASSWORD}}\"' < {}", shell_quote(dump)),
+            "mysql" => format!("docker exec -i {c} sh -c 'C=$(command -v mysql || command -v mariadb); export MYSQL_PWD=\"${{MYSQL_ROOT_PASSWORD:-$MARIADB_ROOT_PASSWORD}}\"; exec \"$C\" -uroot' < {}", shell_quote(dump)),
             "postgres" => format!("docker exec -i {c} sh -c 'exec psql -U \"${{POSTGRES_USER:-postgres}}\" -d postgres' < {}", shell_quote(dump)),
             _ => return Err(Error::Other("type de base inconnu".into())),
         };

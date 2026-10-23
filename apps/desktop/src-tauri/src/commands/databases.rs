@@ -315,6 +315,32 @@ pub async fn db_tables(
 }
 
 /// Exécute du SQL. Les requêtes qui modifient les données sont inscrites au journal d'actions.
+/// Remplace le contenu des littéraux entre guillemets par `?` : un `IDENTIFIED BY 'secret'` ne
+/// doit pas finir dans les journaux.
+fn mask_literals(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut quote: Option<char> = None;
+    let mut chars = sql.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            None if c == '\'' || c == '"' => {
+                quote = Some(c);
+                out.push_str(&format!("{c}?"));
+            }
+            None => out.push(c),
+            Some(_) if c == '\\' => {
+                chars.next();
+            }
+            Some(q) if c == q => {
+                quote = None;
+                out.push(c);
+            }
+            Some(_) => {}
+        }
+    }
+    out
+}
+
 #[tauri::command]
 pub async fn db_query(
     audit: State<'_, AuditLog>,
@@ -336,8 +362,12 @@ pub async fn db_query(
     if read_only {
         return r;
     }
-    let detail =
-        format!("{} · {} : {}", instance.label, database.unwrap_or_default(), sql.split_whitespace().collect::<Vec<_>>().join(" "));
+    let detail = format!(
+        "{} · {} : {}",
+        instance.label,
+        database.unwrap_or_default(),
+        mask_literals(&sql).split_whitespace().collect::<Vec<_>>().join(" ")
+    );
     track(&audit, &store, &server_id, "db.query", &detail.chars().take(500).collect::<String>(), r)
 }
 
@@ -433,4 +463,16 @@ pub fn db_sqlite_instance(path: String, container: Option<String>) -> Result<Ins
         return Err("chemin invalide : un chemin absolu est attendu".into());
     }
     Ok(Instance::sqlite(path, container))
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::mask_literals;
+
+    #[test]
+    fn literals_are_masked() {
+        assert_eq!(mask_literals("ALTER USER 'bob'@'%' IDENTIFIED BY 'p\\'w d'"), "ALTER USER '?'@'?' IDENTIFIED BY '?'");
+        assert_eq!(mask_literals("SET PASSWORD = \"x\"; SELECT 1"), "SET PASSWORD = \"?\"; SELECT 1");
+        assert_eq!(mask_literals("CREATE USER a IDENTIFIED BY 'oops"), "CREATE USER a IDENTIFIED BY '?");
+    }
 }
