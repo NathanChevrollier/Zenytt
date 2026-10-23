@@ -1,188 +1,587 @@
 // GitHub : dépôts du compte, où ils sont déployés sur les serveurs connectés, cloner et mettre à jour.
+// Liste à gauche, détail du dépôt choisi à droite (l'un au-dessus de l'autre dans une fenêtre étroite).
 // Le jeton reste dans le coffre de l'OS : l'interface ne le relit jamais.
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ExternalLink, FolderOpen, GitPullRequestArrow, Lock, RefreshCw, Search, SquareTerminal, Unplug } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  ExternalLink, Eye, EyeOff, FolderGit2, FolderOpen, GitBranch, GitCommitHorizontal, GitPullRequestArrow, KeyRound, Loader2, Lock, LogOut, RefreshCw, Rocket, Search, Server, SquareTerminal, UserRound,
+} from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, errorMessage, formatAgo, hasShell, shellQuote, type GithubClone, type GithubRepo, type GithubStatus } from "../lib/api";
-import { filterRepos, repoUrl, validFolder } from "../lib/github";
+import { api, errorMessage, hasShell, shellQuote, type GithubClone, type GithubRepo, type GithubStatus, type ServerView } from "../lib/api";
+import { agoOf, browseRepos, clonePath, cloneSync, githubError, repoUrl, validFolder, validToken, type RepoFilter, type RepoSort } from "../lib/github";
 import { navigate } from "../lib/shell";
-import { useApp } from "../lib/store";
-import { Badge, Button, Card, DataTable, EmptyState, ErrorState, Field, IconButton, Input, Loading, Modal, Select, type Column } from "../components/ui";
+import { useApp, useAppPick } from "../lib/store";
+import { useCachedState } from "../lib/cache";
+import {
+  Avatar, Badge, Button, Card, EmptyState, ErrorState, Field, FOCUS_RING, IconButton, Input, Loading, MenuButton, Modal, ResultBanner, Section, Segmented, Select, Skeleton, StatTile,
+} from "../components/ui";
 import PageLayout from "../components/PageLayout";
 
-const ago = (iso: string | null) => {
-  const t = iso ? Date.parse(iso) : NaN;
-  return Number.isNaN(t) ? "—" : formatAgo(Date.now() - t);
-};
-const open = (r: GithubRepo) => {
+const NEW_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
+const FOLDERS = ["/srv", "/opt", "/var/www"];
+
+interface ServerScan {
+  loading: boolean;
+  clones: GithubClone[];
+  error?: string;
+}
+/** Clones connus, par dépôt puis par serveur. */
+type Scans = Record<string, Record<string, ServerScan>>;
+
+const openRepo = (r: GithubRepo) => {
   const url = repoUrl(r.owner, r.name);
   if (url) void openUrl(url);
 };
+const openTerminal = (serverId: string, title: string, path: string) =>
+  useApp.getState().openTab(serverId, { title, command: `cd ${shellQuote(path)} && exec "$SHELL" -l` });
+const openFiles = (serverId: string, path: string) => {
+  useApp.getState().setFilesPath(serverId, path);
+  navigate("files", undefined, serverId);
+};
 
 export default function GithubView() {
-  const notify = useApp((s) => s.notify);
-  const [status, setStatus] = useState<GithubStatus | null>(null);
-  const [repos, setRepos] = useState<GithubRepo[] | null>(null);
+  const { servers, notify, ask } = useAppPick("servers", "notify", "ask");
+  const targets = useMemo(() => servers.filter((s) => s.connected && hasShell(s)), [servers]);
+  const [status, setStatus] = useCachedState<GithubStatus | null>("github:status", null);
+  const [repos, setRepos] = useCachedState<GithubRepo[] | null>("github:repos", null);
+  const [scans, setScans] = useCachedState<Scans>("github:scans", {});
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<GithubRepo | null>(null);
+  const [filter, setFilter] = useState<RepoFilter>("all");
+  const [sort, setSort] = useState<RepoSort>("pushed");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [tokenOpen, setTokenOpen] = useState(false);
+  const [cloneFor, setCloneFor] = useState<GithubRepo | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
+    setLoading(true);
     try {
       const st = await api.githubStatus();
       setStatus(st);
       setRepos(st.configured ? await api.githubRepos() : null);
     } catch (e) {
       setError(errorMessage(e));
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  }, [setStatus, setRepos]);
   useEffect(() => void load(), [load]);
 
-  const shown = useMemo(() => filterRepos(repos ?? [], query), [repos, query]);
-  const columns: Column<GithubRepo>[] = [
-    {
-      key: "name",
-      header: "Dépôt",
-      width: "minmax(0,2.4fr)",
-      sortValue: (r) => r.fullName.toLowerCase(),
-      render: (r) => (
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="truncate font-medium">{r.fullName}</span>
-          {r.private && <Lock size={12} className="shrink-0 text-muted" aria-label="Privé" />}
-          {r.fork && <Badge>fork</Badge>}
-          {r.archived && <Badge tone="warn">archivé</Badge>}
-        </span>
-      ),
+  const scan = useCallback(
+    async (repo: GithubRepo, serverId: string) => {
+      const put = (v: ServerScan) => setScans((all) => ({ ...all, [repo.fullName]: { ...all[repo.fullName], [serverId]: v } }));
+      put({ loading: true, clones: [] });
+      try {
+        put({ loading: false, clones: await api.githubClones(serverId, repo.owner, repo.name) });
+      } catch (e) {
+        put({ loading: false, clones: [], error: errorMessage(e) });
+      }
     },
-    { key: "branch", header: "Branche", width: "110px", render: (r) => <span className="font-mono text-xs text-muted">{r.defaultBranch}</span> },
-    { key: "push", header: "Dernier push", width: "130px", sortValue: (r) => (r.pushedAt ? Date.parse(r.pushedAt) : 0), render: (r) => <span className="text-muted">{ago(r.pushedAt)}</span> },
-    { key: "issues", header: "Tickets + PR", width: "100px", align: "right", sortValue: (r) => r.openIssues, render: (r) => <span className="text-muted">{r.openIssues}</span> },
-  ];
+    [setScans],
+  );
+  const replace = (repo: GithubRepo, serverId: string, c: GithubClone) =>
+    setScans((all) => {
+      const cur = all[repo.fullName]?.[serverId];
+      if (!cur) return all;
+      return { ...all, [repo.fullName]: { ...all[repo.fullName], [serverId]: { ...cur, clones: cur.clones.map((x) => (x.path === c.path ? c : x)) } } };
+    });
+
+  const deployedCount = useCallback((fullName: string) => Object.values(scans[fullName] ?? {}).reduce((n, s) => n + s.clones.length, 0), [scans]);
+  const shown = useMemo(() => browseRepos(repos ?? [], query, filter, sort, (n) => deployedCount(n) > 0), [repos, query, filter, sort, deployedCount]);
+  const current = shown.find((r) => r.fullName === selected) ?? shown[0] ?? null;
+
+  // Examine les serveurs une fois que la sélection se pose : parcourir la liste au clavier ne lance pas un scan par ligne.
+  const targetIds = targets.map((s) => s.id).join(",");
+  useEffect(() => {
+    if (!current) return;
+    const t = setTimeout(() => {
+      for (const s of targets) if (!scans[current.fullName]?.[s.id]) void scan(current, s.id);
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.fullName, targetIds]);
+
+  const saveToken = async (token: string) => {
+    const st = await api.githubSetToken(token);
+    setStatus(st);
+    setTokenOpen(false);
+    setError(null);
+    if (st.configured) {
+      notify(`Connecté en tant que ${st.login}.`, "success");
+      void load();
+    }
+  };
+  const disconnect = async () => {
+    if (!(await ask({ title: "Déconnecter GitHub ?", body: "Le jeton sera retiré du coffre de ce poste. Les clones sur tes serveurs ne changent pas.", confirmLabel: "Déconnecter", danger: true }))) return;
+    try {
+      setStatus(await api.githubSetToken(""));
+      setRepos(null);
+    } catch (e) {
+      notify(errorMessage(e), "error");
+    }
+  };
+
+  const err = error ? githubError(error) : null;
+  const needToken = err?.kind === "token" || status?.configured === false;
+  const connected = !!status?.configured && !needToken;
+  const login = status?.login ?? "";
 
   return (
     <PageLayout
       title="GitHub"
-      subtitle="Tes dépôts et leurs clones sur tes serveurs."
+      subtitle="Tes dépôts, où ils tournent sur tes serveurs, et leur mise à jour."
+      scroll={!connected || !repos || !!err}
       actions={
-        status?.configured ? (
-          <Button icon={<RefreshCw size={14} />} onClick={() => void load()}>
-            Actualiser
-          </Button>
-        ) : undefined
-      }
-      toolbar={
-        status?.configured ? (
-          <div className="relative w-72 max-w-full">
-            <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted" />
-            <Input className="pl-8" placeholder="Rechercher un dépôt…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Rechercher un dépôt" />
-          </div>
+        connected ? (
+          <>
+            <IconButton title="Actualiser la liste des dépôts" onClick={() => void load()} disabled={loading}>
+              <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+            </IconButton>
+            <MenuButton
+              variant="subtle"
+              title="Compte GitHub"
+              label={
+                <span className="flex items-center gap-2">
+                  <Avatar name={login} size={18} />
+                  {login}
+                  {repos && <span className="font-normal text-faint">{repos.length} dépôts</span>}
+                </span>
+              }
+              items={[
+                { label: "Voir mon profil sur github.com", icon: <UserRound size={14} />, onClick: () => void openUrl(`https://github.com/${encodeURIComponent(login)}`) },
+                { label: "Changer de jeton", icon: <KeyRound size={14} />, onClick: () => setTokenOpen(true) },
+                "separator",
+                { label: "Déconnecter", icon: <LogOut size={14} />, danger: true, onClick: () => void disconnect() },
+              ]}
+            />
+          </>
         ) : undefined
       }
     >
-      <div className="flex flex-col gap-4 pb-6">
-        <Account status={status} onChange={(s) => { setStatus(s); void load(); }} notify={notify} />
-        {error && <ErrorState message={error} onRetry={() => void load()} />}
-        {status?.configured && !error && (repos === null ? <Loading label="Chargement des dépôts…" rows={6} /> : (
-          <DataTable
-            columns={columns}
-            rows={shown}
-            rowKey={(r) => r.fullName}
-            onRowClick={(r) => setSelected(r)}
-            initialSort={null}
-            rowActions={(r) => (
-              <IconButton title={`Ouvrir ${r.fullName} sur github.com`} onClick={(e) => { e.stopPropagation(); open(r); }}>
-                <ExternalLink size={14} />
-              </IconButton>
-            )}
-            empty={<EmptyState title={query ? "Aucun dépôt ne correspond" : "Aucun dépôt"} />}
+      {!status && !error ? (
+        <Loading label="Connexion à GitHub…" />
+      ) : needToken ? (
+        <Onboarding error={err?.kind === "token" ? err.hint : null} onSave={saveToken} />
+      ) : err ? (
+        <div className="p-7">
+          <ErrorState message={<><strong className="font-semibold">Impossible de lister tes dépôts.</strong> {err.hint}</>} onRetry={() => void load()} />
+        </div>
+      ) : !repos ? (
+        <div className="flex gap-6 p-7">
+          <Skeleton rows={8} height="h-12" className="w-[320px] shrink-0" />
+          <Skeleton rows={3} height="h-24" className="flex-1" />
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 max-[1100px]:flex-col">
+          <RepoList
+            repos={shown}
+            total={repos.length}
+            current={current}
+            onSelect={setSelected}
+            deployedCount={deployedCount}
+            {...{ query, setQuery, filter, setFilter, sort, setSort }}
           />
-        ))}
-      </div>
-      {selected && <RepoDialog repo={selected} onClose={() => setSelected(null)} />}
+          <main className="min-h-0 min-w-0 flex-1 overflow-auto" aria-label="Détail du dépôt">
+            {current ? (
+              <RepoDetail
+                key={current.fullName}
+                repo={current}
+                targets={targets}
+                scans={scans[current.fullName] ?? {}}
+                onScan={(id) => void scan(current, id)}
+                onReplace={(id, c) => replace(current, id, c)}
+                onClone={() => setCloneFor(current)}
+              />
+            ) : (
+              <EmptyState icon={<FolderGit2 />} title="Aucun dépôt sélectionné">
+                Choisis un dépôt dans la liste pour voir où il est déployé.
+              </EmptyState>
+            )}
+          </main>
+        </div>
+      )}
+      {tokenOpen && (
+        <Modal title="Changer de jeton" description="Le nouveau jeton remplace l'ancien dans le coffre de ce poste." onClose={() => setTokenOpen(false)}>
+          <TokenForm onSave={saveToken} autoFocus />
+        </Modal>
+      )}
+      {cloneFor && (
+        <CloneDialog
+          repo={cloneFor}
+          targets={targets}
+          scans={scans[cloneFor.fullName] ?? {}}
+          onCloned={(id) => void scan(cloneFor, id)}
+          onClose={() => setCloneFor(null)}
+        />
+      )}
     </PageLayout>
   );
 }
 
-function Account({ status, onChange, notify }: { status: GithubStatus | null; onChange: (s: GithubStatus) => void; notify: (m: string, k?: "success" | "error" | "warn" | "info") => void }) {
+// ---- Premier lancement --------------------------------------------------------------------------
+
+function Onboarding({ error, onSave }: { error: string | null; onSave: (token: string) => Promise<void> }) {
+  const points = [
+    { icon: <FolderGit2 size={16} />, title: "Tes dépôts", text: "Privés et publics, triés par dernier push." },
+    { icon: <Server size={16} />, title: "Où ils tournent", text: "Les clones trouvés sur tes serveurs, et s'ils sont à jour." },
+    { icon: <GitPullRequestArrow size={16} />, title: "Cloner et mettre à jour", text: "Un clic pour cloner ou faire un pull, sans copier de clé." },
+  ];
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col gap-6 px-7 py-10">
+      <div className="flex items-start gap-4">
+        <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-accent">
+          <GitBranch size={24} />
+        </div>
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">Relie ton compte GitHub</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted">Zenytt affiche tes dépôts à côté de tes serveurs : tu vois d'un coup d'œil ce qui est déployé, où, et si c'est en retard.</p>
+        </div>
+      </div>
+      <ul className="grid grid-cols-3 gap-3 max-[1000px]:grid-cols-1">
+        {points.map((p) => (
+          <li key={p.title} className="flex gap-2.5 rounded-xl border border-border px-3.5 py-3">
+            <span className="mt-0.5 text-accent">{p.icon}</span>
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium">{p.title}</span>
+              <span className="block text-xs leading-relaxed text-muted">{p.text}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {error && <ErrorState message={<><strong className="font-semibold">Jeton refusé par GitHub.</strong> {error}</>} />}
+      <Card className="flex flex-col gap-4">
+        <TokenForm onSave={onSave} />
+        <div className="flex flex-col gap-1.5 border-t border-border pt-3 text-xs leading-relaxed text-muted">
+          <p>
+            Crée un jeton <strong className="font-medium text-fg">fine-grained</strong> : accès aux dépôts à suivre (ou à tous), permission <strong className="font-medium text-fg">Contents : lecture seule</strong>. Metadata en lecture
+            est ajouté d'office. Un jeton classique avec le droit « repo » fonctionne aussi.
+          </p>
+          <p className="text-faint">Le jeton est rangé dans le coffre de l'OS. Il n'est ni exporté ni synchronisé, et n'est jamais écrit sur tes serveurs.</p>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function TokenForm({ onSave, autoFocus }: { onSave: (token: string) => Promise<void>; autoFocus?: boolean }) {
   const [token, setToken] = useState("");
+  const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState(false);
-  if (!status) return null;
-  const save = async (value: string) => {
+  const [error, setError] = useState<string | null>(null);
+  const invalid = token.trim() !== "" && !validToken(token);
+  const submit = async () => {
+    if (!validToken(token)) return setError("Un jeton ne contient que des lettres, des chiffres, « _ » et « - ».");
     setBusy(true);
+    setError(null);
     try {
-      onChange(await api.githubSetToken(value));
+      await onSave(token.trim());
       setToken("");
     } catch (e) {
-      notify(errorMessage(e), "error");
+      setError(githubError(errorMessage(e)).hint);
     } finally {
       setBusy(false);
     }
   };
-  if (status.configured) {
-    return (
-      <Card className="flex items-center gap-3 text-[13px]">
-        <span className="flex-1">
-          Connecté en tant que <strong>{status.login}</strong>. Le jeton est dans le coffre de l'OS, il n'est ni exporté ni synchronisé.
-        </span>
-        <Button icon={<Unplug size={14} />} loading={busy} onClick={() => void save("")}>
-          Déconnecter
-        </Button>
-      </Card>
-    );
-  }
   return (
-    <Card className="flex flex-col gap-3 text-[13px]">
-      <p className="text-muted">
-        Colle un jeton d'accès personnel GitHub (fine-grained : « Contents » et « Metadata » en lecture, ou classique avec le droit « repo »). Il sert à lister tes dépôts et à cloner les privés sur tes serveurs.
-      </p>
-      <Field label="Jeton GitHub">
+    <form
+      className="flex flex-col gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <Field
+        label="Jeton d'accès personnel"
+        error={error ?? (invalid ? "Caractère inattendu : vérifie que le jeton est collé en entier, sans espace." : undefined)}
+        hint="Commence par github_pat_ (fine-grained) ou ghp_ (classique)."
+      >
         <div className="flex gap-2">
-          <Input type="password" autoComplete="off" spellCheck={false} placeholder="github_pat_…" value={token} onChange={(e) => setToken(e.target.value)} />
-          <Button variant="primary" loading={busy} disabled={!token.trim()} onClick={() => void save(token)}>
+          <div className="relative min-w-0 flex-1">
+            <Input
+              type={visible ? "text" : "password"}
+              autoComplete="off"
+              spellCheck={false}
+              autoFocus={autoFocus}
+              placeholder="github_pat_…"
+              className="pr-9 font-mono"
+              value={token}
+              aria-invalid={!!error || invalid}
+              onChange={(e) => {
+                setToken(e.target.value);
+                setError(null);
+              }}
+            />
+            <IconButton size="sm" title={visible ? "Masquer le jeton" : "Afficher le jeton"} className="absolute top-0.5 right-0.5" onClick={() => setVisible((v) => !v)}>
+              {visible ? <EyeOff size={14} /> : <Eye size={14} />}
+            </IconButton>
+          </div>
+          <Button type="submit" variant="primary" loading={busy} disabled={!token.trim() || invalid}>
             Connecter
           </Button>
         </div>
       </Field>
-    </Card>
+      <div>
+        <Button size="sm" variant="ghost" className="-ml-2.5" icon={<ExternalLink size={13} />} onClick={() => void openUrl(NEW_TOKEN_URL)}>
+          Créer un jeton sur github.com
+        </Button>
+      </div>
+    </form>
   );
 }
 
-interface ServerResult {
-  loading: boolean;
-  clones: GithubClone[];
-  error?: string;
+// ---- Liste ----------------------------------------------------------------------------------------
+
+function RepoList({
+  repos,
+  total,
+  current,
+  onSelect,
+  deployedCount,
+  query,
+  setQuery,
+  filter,
+  setFilter,
+  sort,
+  setSort,
+}: {
+  repos: GithubRepo[];
+  total: number;
+  current: GithubRepo | null;
+  onSelect: (fullName: string) => void;
+  deployedCount: (fullName: string) => number;
+  query: string;
+  setQuery: (q: string) => void;
+  filter: RepoFilter;
+  setFilter: (f: RepoFilter) => void;
+  sort: RepoSort;
+  setSort: (s: RepoSort) => void;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const focusRow = (i: number) => {
+    const r = repos[Math.max(0, Math.min(repos.length - 1, i))];
+    if (!r) return;
+    onSelect(r.fullName);
+    requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(`[data-repo="${CSS.escape(r.fullName)}"]`)?.focus());
+  };
+  const onKey = (e: KeyboardEvent) => {
+    const i = repos.findIndex((r) => r.fullName === current?.fullName);
+    const moves: Record<string, number> = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: repos.length - 1 };
+    if (e.key in moves) {
+      e.preventDefault();
+      focusRow(moves[e.key]);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      document.getElementById("github-repo-title")?.focus();
+    }
+  };
+  return (
+    <aside className="flex w-[340px] shrink-0 flex-col border-r border-border bg-panel max-[1100px]:max-h-[42%] max-[1100px]:w-full max-[1100px]:border-r-0 max-[1100px]:border-b">
+      <div className="flex flex-col gap-2 border-b border-border p-3">
+        <div className="relative">
+          <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted" />
+          <Input
+            className="pl-8"
+            placeholder="Rechercher un dépôt…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "ArrowDown") return;
+              e.preventDefault();
+              focusRow(0);
+            }}
+            aria-label="Rechercher un dépôt"
+          />
+        </div>
+        <Segmented
+          size="sm"
+          label="Filtrer les dépôts"
+          value={filter}
+          onChange={setFilter}
+          className="self-start"
+          options={[
+            { value: "all", label: "Tous" },
+            { value: "private", label: "Privés" },
+            { value: "public", label: "Publics" },
+            { value: "deployed", label: "Déployés", title: "Dépôts dont un clone a été trouvé sur un serveur" },
+          ]}
+        />
+        <div className="flex items-center justify-between gap-2 text-xs text-muted">
+          <span aria-live="polite">{repos.length === total ? `${total} dépôts` : `${repos.length} sur ${total}`}</span>
+          <Select
+            size="sm"
+            aria-label="Trier les dépôts"
+            value={sort}
+            onChange={setSort}
+            options={[
+              { value: "pushed", label: "Récemment poussés" },
+              { value: "name", label: "Par nom" },
+            ]}
+          />
+        </div>
+      </div>
+      {filter === "deployed" && <p className="border-b border-border px-3 py-2 text-xs text-faint">D'après les dépôts déjà ouverts : la recherche sur les serveurs se fait dépôt par dépôt.</p>}
+      <div ref={listRef} role="listbox" aria-label="Dépôts" className="scroll-thin min-h-0 flex-1 overflow-auto p-1.5" onKeyDown={onKey}>
+        {repos.length === 0 ? (
+          <p className="px-3 py-8 text-center text-[13px] text-muted">{query || filter !== "all" ? "Aucun dépôt ne correspond." : "Ce compte n'a encore aucun dépôt."}</p>
+        ) : (
+          repos.map((r) => {
+            const on = r.fullName === current?.fullName;
+            const n = deployedCount(r.fullName);
+            return (
+              <button
+                key={r.fullName}
+                type="button"
+                role="option"
+                aria-selected={on}
+                data-repo={r.fullName}
+                tabIndex={on ? 0 : -1}
+                onClick={() => onSelect(r.fullName)}
+                className={`flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors ${FOCUS_RING} ${on ? "bg-accent/12" : "hover:bg-hover"}`}
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className={`truncate text-[13px] ${on ? "font-semibold" : "font-medium"}`}>{r.name}</span>
+                  {r.private && <Lock size={11} className="shrink-0 text-muted" aria-label="privé" />}
+                  {r.archived && <Badge tone="warn">archivé</Badge>}
+                  {n > 0 && (
+                    <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-medium text-ok" title={`Déployé : ${n} clone${n > 1 ? "s" : ""}`}>
+                      <Server size={11} aria-hidden />
+                      {n}
+                    </span>
+                  )}
+                </span>
+                <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted">
+                  <span className="truncate">{r.owner}</span>
+                  <span className="text-faint">·</span>
+                  <span className="shrink-0 font-mono text-[11px]">{r.defaultBranch}</span>
+                  <span className="ml-auto shrink-0 text-faint">{agoOf(r.pushedAt)}</span>
+                </span>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </aside>
+  );
 }
 
-function RepoDialog({ repo, onClose }: { repo: GithubRepo; onClose: () => void }) {
-  const { servers, notify, ask, openTab, setFilesPath } = useApp.getState();
-  const targets = servers.filter((s) => s.connected && hasShell(s));
-  const [results, setResults] = useState<Record<string, ServerResult>>({});
-  const [busy, setBusy] = useState<string | null>(null);
-  const [cloneServer, setCloneServer] = useState(targets[0]?.id ?? "");
-  const [folder, setFolder] = useState("/srv");
+// ---- Détail ---------------------------------------------------------------------------------------
 
-  const scan = useCallback(
-    async (serverId: string) => {
-      setResults((r) => ({ ...r, [serverId]: { loading: true, clones: [] } }));
-      try {
-        const clones = await api.githubClones(serverId, repo.owner, repo.name);
-        setResults((r) => ({ ...r, [serverId]: { loading: false, clones } }));
-      } catch (e) {
-        setResults((r) => ({ ...r, [serverId]: { loading: false, clones: [], error: errorMessage(e) } }));
-      }
-    },
-    [repo],
+function RepoDetail({
+  repo,
+  targets,
+  scans,
+  onScan,
+  onReplace,
+  onClone,
+}: {
+  repo: GithubRepo;
+  targets: ServerView[];
+  scans: Record<string, ServerScan>;
+  onScan: (serverId: string) => void;
+  onReplace: (serverId: string, c: GithubClone) => void;
+  onClone: () => void;
+}) {
+  const results = targets.map((s) => ({ s, r: scans[s.id] }));
+  const pending = results.some(({ r }) => !r || r.loading);
+  const found = results.flatMap(({ s, r }) => (r?.clones ?? []).map((c) => ({ s, c })));
+  const empty = results.filter(({ r }) => r && !r.loading && !r.error && r.clones.length === 0).map(({ s }) => s.name);
+
+  return (
+    <div className="mx-auto flex max-w-4xl flex-col gap-6 px-7 py-6">
+      <header className="flex flex-wrap items-start gap-x-4 gap-y-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-xs text-muted">{repo.owner}</div>
+          <h2 id="github-repo-title" tabIndex={-1} className="truncate rounded text-lg font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-accent">
+            {repo.name}
+          </h2>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <Badge tone={repo.private ? "warn" : "muted"}>
+              {repo.private && <Lock size={10} />}
+              {repo.private ? "privé" : "public"}
+            </Badge>
+            {repo.fork && <Badge>fork</Badge>}
+            {repo.archived && <Badge tone="warn">archivé</Badge>}
+          </div>
+          <p className={`mt-2.5 max-w-prose text-[13px] leading-relaxed ${repo.description ? "text-muted" : "text-faint"}`}>{repo.description ?? "Pas de description."}</p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Button icon={<ExternalLink size={14} />} onClick={() => openRepo(repo)}>
+            Ouvrir sur GitHub
+          </Button>
+          <Button variant="primary" icon={<Rocket size={14} />} disabled={targets.length === 0} title={targets.length ? undefined : "Connecte d'abord un serveur SSH"} onClick={onClone}>
+            Cloner sur un serveur
+          </Button>
+        </div>
+      </header>
+
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
+        <StatTile label="Dernier push" value={agoOf(repo.pushedAt)} />
+        <StatTile label="Branche par défaut" value={<span className="font-mono text-lg">{repo.defaultBranch}</span>} />
+        <StatTile label="Tickets et PR ouverts" value={repo.openIssues} />
+        <StatTile label="Déploiements" value={pending && found.length === 0 ? "…" : found.length} tone={found.length ? "ok" : undefined} hint={targets.length ? `sur ${targets.length} serveur${targets.length > 1 ? "s" : ""} examiné${targets.length > 1 ? "s" : ""}` : "aucun serveur connecté"} />
+      </div>
+
+      <Section
+        title="Déploiements"
+        count={found.length || undefined}
+        description="Clones sous /srv, /opt, /var/www et le dossier personnel."
+        actions={
+          targets.length > 0 && (
+            <Button size="sm" variant="ghost" icon={<RefreshCw size={13} className={pending ? "animate-spin" : ""} />} disabled={pending} onClick={() => targets.forEach((s) => onScan(s.id))}>
+              Rechercher à nouveau
+            </Button>
+          )
+        }
+      >
+        {targets.length === 0 ? (
+          <Card className="border-dashed">
+            <EmptyState icon={<Server />} title="Aucun serveur connecté" action={<Button onClick={() => navigate("servers")}>Voir les serveurs</Button>}>
+              Connecte un serveur SSH pour voir où ce dépôt est déployé et le mettre à jour.
+            </EmptyState>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {results.map(({ s, r }) =>
+              !r || r.loading ? (
+                <Card key={s.id} className="flex items-center gap-3 text-[13px]">
+                  <Avatar name={s.name} color={s.color} size={28} />
+                  <span className="font-medium">{s.name}</span>
+                  <span className="flex items-center gap-1.5 text-muted">
+                    <Loader2 size={13} className="animate-spin" /> Recherche des clones…
+                  </span>
+                </Card>
+              ) : r.error ? (
+                <ErrorState key={s.id} message={<><strong className="font-semibold">{s.name} injoignable.</strong> {r.error}</>} onRetry={() => onScan(s.id)} />
+              ) : null,
+            )}
+            {found.map(({ s, c }) => (
+              <CloneCard key={`${s.id}:${c.path}`} repo={repo} server={s} clone={c} onReplace={(nc) => onReplace(s.id, nc)} />
+            ))}
+            {!pending && found.length === 0 && (
+              <Card className="border-dashed">
+                <EmptyState icon={<Rocket />} title="Pas encore déployé" action={<Button variant="primary" onClick={onClone}>Cloner sur un serveur</Button>}>
+                  Aucun clone de {repo.name} sur {empty.join(", ") || "tes serveurs"}.
+                </EmptyState>
+              </Card>
+            )}
+            {found.length > 0 && empty.length > 0 && <p className="text-xs text-faint">Rien trouvé sur {empty.join(", ")}.</p>}
+          </div>
+        )}
+      </Section>
+    </div>
   );
-  useEffect(() => {
-    for (const s of targets) void scan(s.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scan]);
+}
 
-  const act = async (key: string, fn: () => Promise<unknown>, ok: string) => {
-    setBusy(key);
+function CloneCard({ repo, server, clone: c, onReplace }: { repo: GithubRepo; server: ServerView; clone: GithubClone; onReplace: (c: GithubClone) => void }) {
+  const { notify, ask } = useAppPick("notify", "ask");
+  const [busy, setBusy] = useState<"pull" | "fetch" | null>(null);
+  const behind = c.aheadBehind?.[1] ?? 0;
+  const run = async (kind: "pull" | "fetch", ok: string) => {
+    setBusy(kind);
     try {
-      await fn();
+      if (kind === "pull") await api.githubPull(server.id, repo.owner, repo.name, c.path);
+      onReplace(await api.githubCloneState(server.id, repo.owner, repo.name, c.path, kind === "fetch"));
       notify(ok, "success");
     } catch (e) {
       notify(errorMessage(e), "error");
@@ -190,113 +589,182 @@ function RepoDialog({ repo, onClose }: { repo: GithubRepo; onClose: () => void }
       setBusy(null);
     }
   };
-  const replace = (serverId: string, c: GithubClone) =>
-    setResults((r) => ({ ...r, [serverId]: { ...r[serverId], clones: r[serverId].clones.map((x) => (x.path === c.path ? c : x)) } }));
-
-  const pull = async (serverId: string, c: GithubClone) => {
-    if (c.dirty > 0 && !(await ask({ title: "Modifications locales", body: `${c.path} contient ${c.dirty} fichier(s) modifié(s). Le pull échouera s'ils gênent la mise à jour. Continuer ?`, confirmLabel: "Mettre à jour" }))) return;
-    await act(
-      `pull:${serverId}:${c.path}`,
-      async () => {
-        await api.githubPull(serverId, repo.owner, repo.name, c.path);
-        replace(serverId, await api.githubCloneState(serverId, repo.owner, repo.name, c.path, false));
-      },
-      "Dépôt mis à jour (fast-forward).",
-    );
+  const pull = async () => {
+    const body =
+      `git pull --ff-only dans ${c.path} sur ${server.name}. Rien n'est écrasé : la mise à jour s'arrête si l'historique a divergé.` +
+      (c.dirty ? ` Attention, ${c.dirty} fichier(s) modifié(s) sur le serveur peuvent la bloquer.` : "");
+    if (await ask({ title: `Mettre à jour ${repo.name} ?`, body, confirmLabel: "Faire le pull" })) await run("pull", `${repo.name} mis à jour sur ${server.name}.`);
   };
-  const clone = async () => {
-    if (!cloneServer || !validFolder(folder)) return notify("Choisis un serveur et un dossier absolu (ex. /srv).", "warn");
-    await act(
-      "clone",
-      async () => {
-        await api.githubClone(cloneServer, repo.owner, repo.name, folder.trim());
-        await scan(cloneServer);
-      },
-      `Cloné dans ${folder.trim().replace(/\/$/, "")}/${repo.name}.`,
-    );
-  };
-
-  const rows = targets.flatMap((s) => (results[s.id]?.clones ?? []).map((c) => ({ s, c })));
   return (
-    <Modal title={repo.fullName} width="max-w-4xl" description={repo.description ?? undefined} onClose={onClose}>
-      <div className="flex flex-col gap-5">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge tone={repo.private ? "warn" : "ok"}>{repo.private ? "privé" : "public"}</Badge>
-          <Badge>branche {repo.defaultBranch}</Badge>
-          <Badge>{repo.openIssues} ticket(s) / PR ouvert(s)</Badge>
-          <Button size="sm" icon={<ExternalLink size={13} />} onClick={() => open(repo)}>
-            Ouvrir sur github.com
+    <Card padded={false}>
+      <div className="flex items-start gap-3 px-4 pt-3.5">
+        <Avatar name={server.name} color={server.color} size={30} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium">{server.name}</div>
+          <div className="truncate font-mono text-xs text-muted select-text" title={c.path}>
+            {c.path}
+          </div>
+        </div>
+        <Badge title="Branche du clone">
+          <GitBranch size={10} />
+          {c.branch}
+        </Badge>
+      </div>
+      <div className="flex flex-wrap gap-1.5 px-4 pt-3" title="Avance et retard datent du dernier fetch : « Comparer » interroge GitHub.">
+        {cloneSync(c).map((x) => (
+          <Badge key={x.label} tone={x.tone}>
+            {x.label}
+          </Badge>
+        ))}
+      </div>
+      <div className="flex min-w-0 items-center gap-1.5 px-4 pt-2 pb-3 text-xs text-muted">
+        <GitCommitHorizontal size={13} className="shrink-0 text-faint" />
+        <span className="shrink-0 font-mono text-fg/80">{c.commit || "—"}</span>
+        <span className="truncate select-text">{c.subject}</span>
+        <span className="ml-auto shrink-0 pl-2 text-faint">{agoOf(c.commitDate)}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 border-t border-border px-3 py-2">
+        <Button size="sm" variant={behind ? "primary" : "outline"} icon={<GitPullRequestArrow size={13} />} loading={busy === "pull"} disabled={!!busy} onClick={() => void pull()}>
+          Pull
+        </Button>
+        <Button size="sm" icon={<RefreshCw size={13} />} loading={busy === "fetch"} disabled={!!busy} title="git fetch, puis recalcule l'avance et le retard" onClick={() => void run("fetch", "Comparaison avec GitHub à jour.")}>
+          Comparer
+        </Button>
+        <span className="flex-1" />
+        <Button size="sm" variant="ghost" icon={<SquareTerminal size={13} />} onClick={() => openTerminal(server.id, repo.name, c.path)}>
+          Terminal ici
+        </Button>
+        <Button size="sm" variant="ghost" icon={<FolderOpen size={13} />} onClick={() => openFiles(server.id, c.path)}>
+          Fichiers
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+// ---- Clonage --------------------------------------------------------------------------------------
+
+function CloneDialog({
+  repo,
+  targets,
+  scans,
+  onCloned,
+  onClose,
+}: {
+  repo: GithubRepo;
+  targets: ServerView[];
+  scans: Record<string, ServerScan>;
+  onCloned: (serverId: string) => void;
+  onClose: () => void;
+}) {
+  const [serverId, setServerId] = useState(targets[0]?.id ?? "");
+  const [folder, setFolder] = useState(FOLDERS[0]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const server = targets.find((s) => s.id === serverId);
+  const okFolder = validFolder(folder.trim());
+  const target = clonePath(folder, repo.name);
+  const exists = scans[serverId]?.clones.some((c) => c.path === target);
+
+  const submit = async () => {
+    if (!server || !okFolder) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setDone(await api.githubClone(server.id, repo.owner, repo.name, folder.trim()));
+      onCloned(server.id);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done && server) {
+    return (
+      <Modal title={`${repo.name} est cloné`} onClose={onClose} footer={<Button onClick={onClose}>Fermer</Button>}>
+        <ResultBanner tone="ok" title={`Cloné sur ${server.name}`}>
+          <span className="font-mono text-xs">{done}</span>
+        </ResultBanner>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            icon={<FolderOpen size={14} />}
+            onClick={() => {
+              openFiles(server.id, done);
+              onClose();
+            }}
+          >
+            Ouvrir dans Fichiers
+          </Button>
+          <Button
+            icon={<SquareTerminal size={14} />}
+            onClick={() => {
+              openTerminal(server.id, repo.name, done);
+              onClose();
+            }}
+          >
+            Terminal ici
           </Button>
         </div>
+      </Modal>
+    );
+  }
 
-        <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">Déployé sur tes serveurs</h3>
-          {targets.length === 0 && <p className="text-[13px] text-muted">Aucun serveur connecté (avec shell) à examiner.</p>}
-          {targets.map((s) => {
-            const r = results[s.id];
-            if (r?.loading) return <p key={s.id} className="text-[13px] text-muted">Recherche sur {s.name}…</p>;
-            if (r?.error) return <p key={s.id} className="text-[13px] text-danger">{s.name} : {r.error}</p>;
-            return null;
-          })}
-          {rows.map(({ s, c }) => {
-            const key = `${s.id}:${c.path}`;
-            const [ahead, behind] = c.aheadBehind ?? [0, 0];
-            return (
-              <Card key={key} className="flex flex-col gap-2 text-[13px]">
-                <div className="flex flex-wrap items-center gap-2">
-                  <strong>{s.name}</strong>
-                  <span className="font-mono text-xs text-muted">{c.path}</span>
-                  <Badge>{c.branch}</Badge>
-                  {c.dirty > 0 ? <Badge tone="warn">{c.dirty} modifié(s)</Badge> : <Badge tone="ok">propre</Badge>}
-                  {c.aheadBehind && (ahead || behind) ? (
-                    <Badge tone="accent">
-                      <ArrowUp size={11} className="inline" />{ahead} <ArrowDown size={11} className="inline" />{behind}
-                    </Badge>
-                  ) : null}
-                </div>
-                <div className="truncate text-xs text-muted">
-                  <span className="font-mono">{c.commit}</span> {c.subject} · {ago(c.commitDate)}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" icon={<RefreshCw size={13} />} loading={busy === `fetch:${key}`} onClick={() => void act(`fetch:${key}`, async () => replace(s.id, await api.githubCloneState(s.id, repo.owner, repo.name, c.path, true)), "Comparaison avec GitHub à jour.")}>
-                    Comparer (fetch)
-                  </Button>
-                  <Button size="sm" icon={<GitPullRequestArrow size={13} />} loading={busy === `pull:${key}`} onClick={() => void pull(s.id, c)}>
-                    Pull
-                  </Button>
-                  <Button size="sm" icon={<SquareTerminal size={13} />} onClick={() => { openTab(s.id, { title: repo.name, command: `cd ${shellQuote(c.path)} && exec "$SHELL" -l` }); onClose(); }}>
-                    Terminal ici
-                  </Button>
-                  <Button size="sm" icon={<FolderOpen size={13} />} onClick={() => { setFilesPath(s.id, c.path); navigate("files", undefined, s.id); onClose(); }}>
-                    Fichiers
-                  </Button>
-                </div>
-              </Card>
-            );
-          })}
-          {targets.length > 0 && rows.length === 0 && !Object.values(results).some((r) => r.loading) && (
-            <p className="text-[13px] text-muted">Aucun clone trouvé sous /srv, /opt, /var/www ni le dossier personnel (4 niveaux de profondeur).</p>
-          )}
-        </section>
-
-        <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">Cloner sur un serveur</h3>
-          <div className="flex flex-wrap items-end gap-2">
-            <Field label="Serveur">
-              <Select value={cloneServer} onChange={setCloneServer} options={targets.map((s) => ({ value: s.id, label: s.name }))} />
-            </Field>
-            <Field label={`Dossier parent (créera ${repo.name}/)`} className="min-w-56 flex-1">
-              <Input value={folder} onChange={(e) => setFolder(e.target.value)} spellCheck={false} />
-            </Field>
-            <Button variant="primary" loading={busy === "clone"} disabled={!cloneServer} onClick={() => void clone()}>
-              Cloner
+  return (
+    <Modal
+      title={`Cloner ${repo.name}`}
+      description={`${repo.fullName}, branche ${repo.defaultBranch}`}
+      onClose={busy ? () => {} : onClose}
+      footer={
+        <>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
+            Annuler
+          </Button>
+          <Button variant="primary" loading={busy} disabled={!server || !okFolder || exists} onClick={() => void submit()}>
+            {busy ? "Clonage…" : "Cloner"}
+          </Button>
+        </>
+      }
+    >
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <Field label="Serveur">
+          <Select value={serverId} onChange={setServerId} disabled={busy} options={targets.map((s) => ({ value: s.id, label: s.name }))} />
+        </Field>
+        <Field
+          label="Dossier parent"
+          error={!okFolder ? "Chemin absolu attendu (ex. /srv), sans « .. »." : exists ? "Ce dépôt est déjà cloné à cet endroit." : undefined}
+          hint="Créé s'il n'existe pas."
+        >
+          <Input value={folder} onChange={(e) => setFolder(e.target.value)} spellCheck={false} disabled={busy} className="font-mono" aria-invalid={!okFolder || exists} />
+        </Field>
+        <div className="-mt-2 flex gap-1.5">
+          {FOLDERS.map((f) => (
+            <Button key={f} size="sm" variant={folder === f ? "subtle" : "ghost"} className="font-mono" disabled={busy} onClick={() => setFolder(f)}>
+              {f}
             </Button>
-          </div>
-          <p className="text-xs text-muted">
-            Le jeton est transmis au serveur par l'entrée standard de git, pour github.com seulement ; il n'est écrit ni dans l'URL du dépôt, ni dans .git/config, ni dans le journal.
+          ))}
+        </div>
+        <div className="flex flex-col gap-1 rounded-lg border border-border bg-subtle px-3 py-2.5">
+          <span className="text-xs text-muted">Le dépôt sera cloné dans</span>
+          <span className="font-mono text-[13px] break-all select-text">{okFolder ? target : "—"}</span>
+        </div>
+        {busy && (
+          <p className="flex items-center gap-2 text-xs text-muted" aria-live="polite">
+            <Loader2 size={13} className="animate-spin" /> Clonage en cours sur {server?.name}. Un gros dépôt peut prendre une minute.
           </p>
-        </section>
-      </div>
+        )}
+        {error && <ErrorState message={error} />}
+        <p className="text-xs text-faint">
+          Le jeton passe par l'entrée standard de git, pour github.com seulement : il n'est écrit ni dans l'URL du dépôt, ni dans .git/config, ni dans le journal.
+        </p>
+      </form>
     </Modal>
   );
 }
