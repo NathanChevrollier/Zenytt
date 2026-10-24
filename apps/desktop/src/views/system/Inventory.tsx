@@ -74,6 +74,13 @@ export default function Inventory({ serverId, onShowUpdates }: { serverId: strin
     checked ? <Badge title="Empreinte du registre illisible (docker buildx absent, ou image construite localement)">inconnu</Badge> :
     <Badge title="Lance « Vérifier les images » pour comparer au registre">non vérifiée</Badge>;
 
+  const componentColumns: Column<InventoryComponent>[] = [
+    { key: "label", header: "Composant", width: "minmax(0,1fr)", render: (c) => <span className="truncate font-medium">{c.label}</span>, sortValue: (c) => c.label },
+    { key: "version", header: "Installée", width: "minmax(0,1.3fr)", render: (c) => <span className="truncate font-mono text-xs text-muted">{c.version || "—"}</span> },
+    { key: "update", header: "Disponible", width: "minmax(0,1.3fr)", render: (c) => (c.update ? <span className="truncate font-mono text-xs text-warn">{c.update}</span> : <span className="text-faint">—</span>) },
+    { key: "status", header: "État", width: "150px", render: status },
+  ];
+
   const imageColumns: Column<ContainerImage>[] = [
     { key: "container", header: "Service", width: "minmax(0,1fr)", render: (i) => <span className="truncate">{i.service ?? i.container}</span>, sortValue: (i) => i.service ?? i.container },
     { key: "image", header: "Image", width: "minmax(0,1.6fr)", render: (i) => mono(i.name), sortValue: (i) => i.name },
@@ -99,7 +106,7 @@ export default function Inventory({ serverId, onShowUpdates }: { serverId: strin
       <Section
         title="Composants"
         count={inv?.components.length}
-        description="Versions installées sur le serveur"
+        description="Versions installées"
         actions={
           <Button size="sm" icon={<RefreshCw size={13} />} loading={busy === "inv"} disabled={busy === "images"} onClick={() => void loadInventory()}>
             Actualiser
@@ -115,20 +122,9 @@ export default function Inventory({ serverId, onShowUpdates }: { serverId: strin
             <EmptyState title="Rien de détecté">Aucun composant connu (nginx, Docker, bases de données…) n'est installé.</EmptyState>
           </Card>
         ) : (
-          <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">
-            {inv.components.map((c) => (
-              <Card key={c.id} className="flex min-w-0 flex-col gap-1.5 !px-3.5 !py-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-[13px] font-medium">{c.label}</span>
-                  {status(c)}
-                </div>
-                <span className="truncate font-mono text-xs text-muted" title={c.update ? `${c.version} → ${c.update}` : c.version}>
-                  {c.version || "—"}
-                  {c.update && <span className="text-warn"> → {c.update}</span>}
-                </span>
-              </Card>
-            ))}
-          </div>
+          <Card padded={false} className="overflow-hidden">
+            <DataTable rows={inv.components} rowKey={(c) => c.id} columns={componentColumns} rowHeight={32} stickyHeader={false} />
+          </Card>
         )}
       </Section>
 
@@ -137,7 +133,11 @@ export default function Inventory({ serverId, onShowUpdates }: { serverId: strin
         count={images?.length}
         description={checked && outdated ? `${outdated} à mettre à jour` : "Conteneurs en marche, par projet compose"}
         actions={
-          <Button size="sm" icon={<Search size={13} />} loading={busy === "images"} disabled={!!busy || !images?.length} onClick={() => void loadImages(true)}>
+          <Button
+            size="sm"
+            title="Compare l'empreinte locale à celle du registre (docker buildx requis sur le serveur), sans rien télécharger"
+            icon={<Search size={13} />}
+            loading={busy === "images"} disabled={!!busy || !images?.length} onClick={() => void loadImages(true)}>
             Vérifier les images
           </Button>
         }
@@ -164,7 +164,7 @@ export default function Inventory({ serverId, onShowUpdates }: { serverId: strin
           </Card>
         ) : (
           <Card padded={false} className="overflow-hidden">
-            <div className="flex max-h-[min(60vh,560px)] flex-col">
+            <div className="flex max-h-[max(18rem,calc(100vh-15rem))] flex-col">
               <DataTable
                 className="min-h-0 flex-1"
                 rows={sortImages(images)}
@@ -187,9 +187,6 @@ export default function Inventory({ serverId, onShowUpdates }: { serverId: strin
               />
             </div>
           </Card>
-        )}
-        {!checked && images && images.length > 0 && (
-          <p className="text-xs text-muted">La vérification compare l'empreinte locale à celle du registre (docker buildx requis sur le serveur). Rien n'est téléchargé.</p>
         )}
       </Section>
     </>
