@@ -15,7 +15,7 @@
     "@octokit/rest": "^21.1.1",
     "discord.js": "^14.22.1",
     "dotenv": "^17.2.2",
-    "zod": "^4.1.8"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
