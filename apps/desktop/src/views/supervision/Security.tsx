@@ -63,6 +63,7 @@ export default function Security({
 
   const [banned, setBanned] = useState<number | null>(null);
   const [exposed, setExposed] = useState<number | null>(null);
+  const [accounts, setAccounts] = useState<number | null>(null);
   const summary = useMemo(() => (report ? auditSummary(report.findings, ignored.map((i) => i.findingId)) : null), [report, ignored]);
   const n = updates?.length ?? 0;
   const onF2b = (c: number) => {
@@ -94,7 +95,7 @@ export default function Security({
           <span className="text-faint">·</span>
           <Jump onClick={() => scrollTo("firewall")}>{exposed != null ? `pare-feu · ${plural(exposed, "port exposé", "ports exposés")}` : "pare-feu"}</Jump>
           <span className="text-faint">·</span>
-          <Jump onClick={() => scrollTo("access")}>accès SSH</Jump>
+          <Jump onClick={() => scrollTo("access")}>{accounts != null ? `accès SSH · ${plural(accounts, "compte")}` : "accès SSH"}</Jump>
         </nav>
         <div className="flex shrink-0 items-center gap-1.5">
           <Button size="sm" icon={<ListChecks size={13} />} disabled={!report} onClick={onOpenAudit}>
@@ -126,7 +127,7 @@ export default function Security({
             <Firewall serverId={serverId} onCount={setExposed} onAudit={onOpenAudit} />
           </Block>
           <Block id="access" ref={refs.access} title="Accès SSH">
-            <Access serverId={serverId} />
+            <Access serverId={serverId} onCount={setAccounts} />
           </Block>
         </div>
       </div>
