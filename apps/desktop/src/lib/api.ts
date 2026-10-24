@@ -579,6 +579,8 @@ export interface ProviderView {
 export interface ProviderStatus {
   state: "running" | "off" | "starting" | "stopping" | "unknown";
   raw: string;
+  /** Nom du serveur chez l'hébergeur, quand l'API le donne. */
+  name: string | null;
 }
 
 export interface GithubStatus {

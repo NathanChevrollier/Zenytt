@@ -67,6 +67,8 @@ pub struct Status {
     pub state: PowerState,
     /// État tel que le renvoie l'hébergeur.
     pub raw: String,
+    /// Nom du serveur chez l'hébergeur, quand la réponse le donne.
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,14 +180,15 @@ pub fn build(link: &ProviderLink, cred: &Credentials, action: ProviderAction, no
 /// Lit l'état d'alimentation dans la réponse d'un `GET` de statut.
 pub fn parse_status(kind: ProviderKind, text: &str) -> Result<Status> {
     let v: Value = serde_json::from_str(text).map_err(|_| Error::Other("réponse illisible de l'hébergeur".into()))?;
-    let raw = match kind {
-        ProviderKind::Hetzner => &v["server"]["status"],
-        ProviderKind::Scaleway => &v["server"]["state"],
-        ProviderKind::DigitalOcean => &v["droplet"]["status"],
-        ProviderKind::Ovh => &v["state"],
-    }
-    .as_str()
-    .ok_or_else(|| Error::Other("état absent de la réponse de l'hébergeur".into()))?;
+    let (obj, key) = match kind {
+        ProviderKind::Hetzner => (&v["server"], "status"),
+        ProviderKind::Scaleway => (&v["server"], "state"),
+        ProviderKind::DigitalOcean => (&v["droplet"], "status"),
+        ProviderKind::Ovh => (&v, "state"),
+    };
+    // OVH : `displayName` est le nom choisi par le client, `name` celui du service.
+    let name = ["displayName", "name"].iter().find_map(|k| obj[*k].as_str().filter(|n| !n.is_empty())).map(String::from);
+    let raw = obj[key].as_str().ok_or_else(|| Error::Other("état absent de la réponse de l'hébergeur".into()))?;
     let state = match raw {
         "running" | "active" => PowerState::Running,
         "off" | "stopped" | "stopped in place" | "archive" => PowerState::Off,
@@ -193,7 +196,7 @@ pub fn parse_status(kind: ProviderKind, text: &str) -> Result<Status> {
         "stopping" => PowerState::Stopping,
         _ => PowerState::Unknown,
     };
-    Ok(Status { state, raw: raw.to_string() })
+    Ok(Status { state, raw: raw.to_string(), name })
 }
 
 fn http_error(status: u16, body: &str) -> Error {
@@ -314,7 +317,9 @@ mod tests {
         assert_eq!(st(ProviderKind::Scaleway, r#"{"server":{"state":"stopped in place"}}"#).state, PowerState::Off);
         assert_eq!(st(ProviderKind::DigitalOcean, r#"{"droplet":{"status":"new"}}"#).state, PowerState::Starting);
         let s = st(ProviderKind::Ovh, r#"{"state":"rebooting","name":"x"}"#);
-        assert_eq!((s.state, s.raw.as_str()), (PowerState::Starting, "rebooting"));
+        assert_eq!((s.state, s.raw.as_str(), s.name.as_deref()), (PowerState::Starting, "rebooting", Some("x")));
+        assert_eq!(st(ProviderKind::Hetzner, r#"{"server":{"status":"running","name":"web-01"}}"#).name.as_deref(), Some("web-01"));
+        assert_eq!(st(ProviderKind::Hetzner, r#"{"server":{"status":"running"}}"#).name, None);
         assert_eq!(st(ProviderKind::Hetzner, r#"{"server":{"status":"migrating"}}"#).state, PowerState::Unknown);
         assert!(parse_status(ProviderKind::Ovh, "{}").is_err());
     }

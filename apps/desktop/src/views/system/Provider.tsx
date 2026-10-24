@@ -1,6 +1,6 @@
 // Hébergeur : alimentation du serveur via l'API du fournisseur, sans passer par SSH.
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Check, Power, PowerOff, RefreshCw, RotateCw, Zap } from "lucide-react";
+import { Check, CircleAlert, CircleCheck, Power, PowerOff, RefreshCw, RotateCw, Zap } from "lucide-react";
 import { api, errorMessage, type ProviderAction, type ProviderKind, type ProviderStatus, type ProviderView } from "../../lib/api";
 import { useApp } from "../../lib/store";
 import { Badge, Button, Card, ErrorState, FOCUS_RING, Field, IconButton, Input, Loading, Section, StatusDot, type Tone } from "../../components/ui";
@@ -34,23 +34,39 @@ export default function Provider({ serverId, serverName }: { serverId: string; s
   const [status, setStatus] = useState<ProviderStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Résultat du dernier test, affiché à côté du bouton jusqu'à ce qu'un champ change. */
+  const [tested, setTested] = useState<{ ok: true; status: ProviderStatus } | { ok: false; error: string } | null>(null);
   const ovh = kind === "ovh";
+  useEffect(() => setTested(null), [kind, ref, zone, token, secret, consumer]);
 
   const ready = (v: ProviderView | null) => !!v?.link && v.hasToken && (v.link.kind !== "ovh" || (v.hasSecret && v.hasConsumer));
 
-  /** État chez l'hébergeur ; une erreur reste affichée à côté de la pastille, sans toast. */
-  const test = useCallback(async () => {
-    setBusy("status");
-    try {
-      setStatus(await api.providerTest(serverId));
-      setStatusError(null);
-    } catch (e) {
-      setStatus(null);
-      setStatusError(errorMessage(e));
-    } finally {
-      setBusy(null);
-    }
-  }, [serverId]);
+  /** État chez l'hébergeur. `manual` (bouton « Tester ») : résultat en ligne et toast ; sinon, la pastille suffit. */
+  const test = useCallback(
+    async (manual = false) => {
+      setBusy("status");
+      try {
+        const s = await api.providerTest(serverId);
+        setStatus(s);
+        setStatusError(null);
+        if (manual) {
+          setTested({ ok: true, status: s });
+          notify(`Connexion réussie${s.name ? ` : ${s.name}` : ""} (${STATE[s.state][0]})`, "success");
+        }
+      } catch (e) {
+        const msg = errorMessage(e);
+        setStatus(null);
+        setStatusError(msg);
+        if (manual) {
+          setTested({ ok: false, error: msg });
+          notify(`Test de l'hébergeur : ${msg}`, "error");
+        }
+      } finally {
+        setBusy(null);
+      }
+    },
+    [serverId, notify],
+  );
 
   const load = useCallback(async () => {
     try {
@@ -204,9 +220,35 @@ export default function Provider({ serverId, serverName }: { serverId: string; s
               <Button variant="primary" loading={busy === "save"} disabled={!ref.trim()} onClick={() => void save()}>
                 Enregistrer
               </Button>
-              <Button loading={busy === "status"} disabled={!ready(view)} onClick={() => void test()} title={ready(view) ? "Lit l'état du serveur chez l'hébergeur" : "Enregistre d'abord l'identifiant et les clés"}>
+              <Button loading={busy === "status"} disabled={!ready(view)} onClick={() => void test(true)} title={ready(view) ? "Lit l'état du serveur chez l'hébergeur" : "Enregistre d'abord l'identifiant et les clés"}>
                 Tester la connexion
               </Button>
+              <span role="status" aria-live="polite" className="flex min-w-0 items-center gap-1.5 text-xs">
+                {busy === "status" && !tested ? (
+                  <span className="text-muted">Interrogation de l'API…</span>
+                ) : tested?.ok ? (
+                  <>
+                    <CircleCheck size={14} className="shrink-0 text-ok" />
+                    <span className="truncate">
+                      {KINDS.find((k) => k.value === linkedKind)?.label}
+                      {tested.status.name && (
+                        <>
+                          {" · "}
+                          <span className="font-medium">{tested.status.name}</span>
+                        </>
+                      )}
+                      {` · ${STATE[tested.status.state][0]}`}
+                    </span>
+                  </>
+                ) : tested ? (
+                  <>
+                    <CircleAlert size={14} className="shrink-0 text-danger" />
+                    <span className="truncate text-danger" title={tested.error}>
+                      {tested.error}
+                    </span>
+                  </>
+                ) : null}
+              </span>
               {view.link && (
                 <Button variant="ghost" className="ml-auto" loading={busy === "unlink"} onClick={() => void unlink()}>
                   Délier
