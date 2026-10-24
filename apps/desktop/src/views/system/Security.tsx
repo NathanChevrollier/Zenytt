@@ -1,11 +1,11 @@
 // Sécurité (onglet de Système) : audit (score et constats par gravité), pare-feu, fail2ban et accès SSH.
 // L'audit et les constats ignorés viennent de la page Système, qui en tire aussi le résumé de la vue d'ensemble.
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArchiveRestore, AlertTriangle, CheckCircle2, Info, OctagonAlert, RefreshCw, Wrench } from "lucide-react";
+import { Archive, ArchiveRestore, AlertTriangle, CheckCircle2, EyeOff, Info, OctagonAlert, RefreshCw, Wrench } from "lucide-react";
 import { api, errorMessage, type Finding, type FixPlan, type IgnoredFinding, type SecurityReport, type Severity } from "../../lib/api";
 import { auditSummary, PENALTY, scoreVerdict } from "../../lib/system";
 import { useAppPick } from "../../lib/store";
-import { Badge, Button, Card, ErrorState, Loading, Modal, ResultBanner, Section, Segmented } from "../../components/ui";
+import { Badge, Button, Card, ErrorState, IconButton, Loading, Modal, ResultBanner, Segmented } from "../../components/ui";
 import Fail2ban from "../security/Fail2ban";
 import Firewall from "../security/Firewall";
 import Access from "../security/Access";
@@ -129,118 +129,131 @@ export default function Security({
       </div>
 
       {/* Les quatre panneaux restent montés : leurs compteurs s'affichent dans le sélecteur, et revenir
-          sur un panneau ne relance pas sa lecture. */}
-      <div className={sub === "audit" ? "flex flex-col gap-6" : "hidden"}>
+          sur un panneau ne relance pas sa lecture. Audit : constats à gauche, score et listes annexes à droite. */}
+      <div className={sub === "audit" ? "flex min-w-0 flex-col gap-4" : "hidden"}>
         {error && <ErrorState message={error} onRetry={reload} retryLabel="Relancer l'audit" />}
         {!report && !error && <Loading label="Audit en cours… (lecture seule)" rows={5} />}
         {report && summary && (
-          <>
-            <Card className="flex flex-wrap items-center gap-6">
+          <div className="grid min-w-0 items-start gap-4 @5xl:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)] @5xl:grid-rows-[auto_1fr]">
+            <Card className="flex min-w-0 items-center gap-4 @5xl:col-start-2 @5xl:row-start-1">
               <ScoreGauge score={summary.score} />
               <div className="min-w-0 flex-1">
-                <h2 className="text-[15px] font-semibold">{scoreVerdict(summary.score)}</h2>
-                <p className="mt-0.5 text-[13px] text-muted">
+                <h2 className="text-[14px] font-semibold">{scoreVerdict(summary.score)}</h2>
+                <p className="mt-0.5 text-xs text-muted">
                   {summary.problems.length === 0
-                    ? "Aucun problème détecté."
-                    : `${summary.problems.length} point${summary.problems.length > 1 ? "s" : ""} à traiter${summary.serious ? `, dont ${summary.serious} prioritaire${summary.serious > 1 ? "s" : ""}` : ""}.`}{" "}
+                    ? "Aucun problème"
+                    : `${summary.problems.length} à traiter${summary.serious ? `, ${summary.serious} prioritaire${summary.serious > 1 ? "s" : ""}` : ""}`}
+                  {" · "}
                   {summary.ok.length} conforme{summary.ok.length > 1 ? "s" : ""}
-                  {ignored.length ? `, ${ignored.length} ignoré${ignored.length > 1 ? "s" : ""}` : ""}.
+                  {ignored.length ? ` · ${ignored.length} ignoré${ignored.length > 1 ? "s" : ""}` : ""}
                 </p>
-                <p className="mt-2 text-xs text-faint">
-                  {report.os}, SSH sur le port {report.sshPorts.join(", ") || "?"}. Lecture seule : chaque correction montre son script et attend ton accord.
+                <p className="mt-1 truncate text-[11.5px] text-faint" title="Lecture seule : chaque correction montre son script et attend ton accord.">
+                  {report.os} · SSH port {report.sshPorts.join(", ") || "?"}
                 </p>
               </div>
             </Card>
 
-            {GROUPS.map((g) => {
-              const list = summary.problems.filter((f) => g.severities.includes(f.severity)).sort((x, y) => PENALTY[y.severity] - PENALTY[x.severity]);
-              if (!list.length) return null;
-              return (
-                <Section key={g.title} title={g.title} count={list.length}>
-                  <Card padded={false} className="divide-y divide-border">
-                    {list.map((f) => (
-                      <div key={f.id} className="flex items-start gap-3 px-4 py-3">
-                        <div className="mt-0.5">
-                          <SeverityIcon s={f.severity} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-[13px] font-medium">{f.title}</span>
-                            <Badge tone={TONE[f.severity]}>{LABEL[f.severity]}</Badge>
-                          </div>
-                          {f.detail && <p className="mt-0.5 text-xs text-muted">{f.detail}</p>}
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1.5">
-                          <Button size="sm" variant="ghost" onClick={() => void ignore(f)}>
-                            Ignorer
-                          </Button>
-                          {f.fix && (
-                            <Button size="sm" variant={g.severities.includes("critical") ? "primary" : "outline"} icon={<Wrench size={13} />} onClick={() => void startFix(f)}>
-                              {f.fix === "apply-updates" ? "Voir les mises à jour" : f.fixLabel}
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </Card>
-                </Section>
-              );
-            })}
-
-            {summary.problems.length === 0 && (
-              <ResultBanner tone="ok" title="Aucun problème détecté">
-                Relance l'audit après une mise à jour ou un changement de configuration.
-              </ResultBanner>
-            )}
-
-            {summary.ok.length > 0 && (
-              <Section title="Points conformes" count={summary.ok.length}>
-                <div className="flex flex-wrap gap-2">
-                  {summary.ok.map((f) => (
-                    <span key={f.id} className="flex items-center gap-1.5 rounded-full border border-ok/30 px-3 py-1 text-xs">
-                      <CheckCircle2 size={12} className="text-ok" /> {f.title}
-                    </span>
-                  ))}
-                </div>
-              </Section>
-            )}
-
-            {ignored.length > 0 && (
-              <Section
-                title="Constats ignorés"
-                count={ignored.length}
-                actions={
-                  <Button size="sm" variant="ghost" aria-expanded={showIgnored} onClick={() => setShowIgnored((v) => !v)}>
-                    {showIgnored ? "Masquer" : "Afficher"}
-                  </Button>
-                }
-              >
-                {showIgnored && (
-                  <Card padded={false} className="divide-y divide-border">
-                    {ignored.map((f) => {
-                      const current = report.findings.find((x) => x.id === f.findingId);
-                      return (
-                        <div key={f.findingId} className="flex items-start gap-3 px-4 py-2.5 text-[13px]">
-                          <Archive size={15} className="mt-0.5 shrink-0 text-muted" />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-medium">{current?.title ?? f.title}</span>
-                              {current && current.severity !== "ok" ? <Badge tone={TONE[current.severity]}>{LABEL[current.severity]}</Badge> : <Badge tone="ok">réglé depuis</Badge>}
-                              <span className="text-xs text-muted">ignoré le {new Date(f.at).toLocaleDateString("fr-FR")}</span>
+            <Card padded={false} className="min-w-0 overflow-hidden @5xl:col-start-1 @5xl:row-span-2 @5xl:row-start-1">
+              {summary.problems.length === 0 ? (
+                <p className="flex items-center gap-2 px-4 py-3 text-[13px]">
+                  <CheckCircle2 size={15} className="text-ok" /> Aucun problème détecté. Relance l'audit après une mise à jour ou un changement de configuration.
+                </p>
+              ) : (
+                GROUPS.map((g) => {
+                  const list = summary.problems.filter((f) => g.severities.includes(f.severity)).sort((x, y) => PENALTY[y.severity] - PENALTY[x.severity]);
+                  if (!list.length) return null;
+                  return (
+                    <section key={g.title} className="border-b border-border last:border-b-0">
+                      <h3 className="flex h-8 items-center gap-2 border-b border-border bg-subtle px-4 text-xs font-semibold">
+                        {g.title} <span className="font-normal text-faint">{list.length}</span>
+                      </h3>
+                      <ul className="divide-y divide-line">
+                        {list.map((f) => (
+                          <li key={f.id} className="flex items-center gap-3 px-4 py-2 hover:bg-hover-soft">
+                            <SeverityIcon s={f.severity} />
+                            <Badge tone={TONE[f.severity]} className="w-14 justify-center">
+                              {LABEL[f.severity]}
+                            </Badge>
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[13px] font-medium">{f.title}</div>
+                              {f.detail && <p className="line-clamp-2 text-xs text-muted">{f.detail}</p>}
                             </div>
-                            {f.reason && <p className="mt-0.5 text-xs text-muted">{f.reason}</p>}
-                          </div>
-                          <Button size="sm" variant="ghost" icon={<ArchiveRestore size={13} />} onClick={() => void unignore(f)}>
-                            Réafficher
-                          </Button>
-                        </div>
-                      );
-                    })}
+                            <div className="flex shrink-0 items-center gap-1">
+                              <IconButton size="sm" title="Ignorer ce constat…" onClick={() => void ignore(f)}>
+                                <EyeOff size={14} />
+                              </IconButton>
+                              {f.fix && (
+                                <Button size="sm" variant={g.severities.includes("critical") ? "primary" : "outline"} icon={<Wrench size={13} />} onClick={() => void startFix(f)}>
+                                  {f.fix === "apply-updates" ? "Voir les mises à jour" : f.fixLabel}
+                                </Button>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  );
+                })
+              )}
+            </Card>
+
+            {(summary.ok.length > 0 || ignored.length > 0) && (
+              <div className="flex min-w-0 flex-col gap-4 @5xl:col-start-2 @5xl:row-start-2">
+                {summary.ok.length > 0 && (
+                  <Card padded={false} className="overflow-hidden">
+                    <h3 className="flex h-8 items-center gap-2 border-b border-border bg-subtle px-4 text-xs font-semibold">
+                      Points conformes <span className="font-normal text-faint">{summary.ok.length}</span>
+                    </h3>
+                    <ul className="divide-y divide-line">
+                      {summary.ok.map((f) => (
+                        <li key={f.id} className="flex items-center gap-2 px-4 py-1.5 text-xs">
+                          <CheckCircle2 size={12} className="shrink-0 text-ok" />
+                          <span className="truncate" title={f.title}>
+                            {f.title}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </Card>
                 )}
-              </Section>
+                {ignored.length > 0 && (
+                  <Card padded={false} className="overflow-hidden">
+                    <h3 className="flex h-8 items-center gap-2 border-b border-border bg-subtle pr-2 pl-4 text-xs font-semibold">
+                      Constats ignorés <span className="font-normal text-faint">{ignored.length}</span>
+                      <Button size="sm" variant="ghost" className="ml-auto h-6!" aria-expanded={showIgnored} onClick={() => setShowIgnored((v) => !v)}>
+                        {showIgnored ? "Masquer" : "Afficher"}
+                      </Button>
+                    </h3>
+                    {showIgnored && (
+                      <ul className="divide-y divide-line">
+                        {ignored.map((f) => {
+                          const current = report.findings.find((x) => x.id === f.findingId);
+                          return (
+                            <li key={f.findingId} className="flex items-center gap-2 py-1.5 pr-2 pl-4 text-xs">
+                              <Archive size={13} className="shrink-0 text-muted" />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  <span className="truncate font-medium">{current?.title ?? f.title}</span>
+                                  {current && current.severity !== "ok" ? <Badge tone={TONE[current.severity]}>{LABEL[current.severity]}</Badge> : <Badge tone="ok">réglé depuis</Badge>}
+                                </div>
+                                <div className="truncate text-faint" title={f.reason || undefined}>
+                                  le {new Date(f.at).toLocaleDateString("fr-FR")}
+                                  {f.reason ? ` · ${f.reason}` : ""}
+                                </div>
+                              </div>
+                              <IconButton size="sm" title="Réafficher ce constat" onClick={() => void unignore(f)}>
+                                <ArchiveRestore size={14} />
+                              </IconButton>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </Card>
+                )}
+              </div>
             )}
-          </>
+          </div>
         )}
       </div>
       <div className={sub === "firewall" ? "contents" : "hidden"}>
