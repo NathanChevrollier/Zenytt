@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { Cable, ChevronRight, ChevronsDownUp, ChevronsUpDown, Tag, FileCode2, FolderSearch, GitBranch, Layers, Lock, Package, Play, Plus, Rocket, RotateCw, ScrollText, Square, SquareTerminal, UploadCloud } from "lucide-react";
+import { Cable, ChevronRight, Tag, FileCode2, FolderSearch, GitBranch, Layers, Lock, Package, Play, Plus, Rocket, RotateCw, ScrollText, Square, SquareTerminal, UploadCloud } from "lucide-react";
 import { api, errorMessage, formatBytes, type ComposeProject, type Container, type DockerOverview } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
 import { Badge, Button, IconButton, MenuButton, Modal, StatusDot, useContextMenu, type MenuItem } from "../../components/ui";
@@ -17,23 +17,15 @@ const ComposeFileDialog = lazy(() => import("../../components/ComposeFileDialog"
 
 const STOP_WARNING = "Tous les conteneurs du projet seront arrêtés, sans être supprimés : « Démarrer » les relance. Cet arrêt étant voulu, ils ne seront pas signalés comme tombés.";
 
-/**
- * Ligne de projet, mêmes colonnes partout (en-tête compris) : chevron, nom, dossier, état, client,
- * CPU, mémoire, actions. Les colonnes secondaires disparaissent quand la zone se rétrécit.
- */
-const PROJECT_GRID =
-  "grid items-center gap-3 grid-cols-[16px_minmax(0,1fr)_92px_auto] @min-[760px]:grid-cols-[16px_minmax(160px,1fr)_minmax(0,1.2fr)_92px_128px_auto] @min-[1180px]:grid-cols-[16px_minmax(200px,1fr)_minmax(0,1.5fr)_92px_150px_64px_80px_auto]";
-/** Largeur fixe des actions : les colonnes restent alignées d'une ligne à l'autre. */
-const ACTIONS_W = "w-[196px]";
-const WIDE = "hidden @min-[760px]:block";
-const XWIDE = "hidden @min-[1180px]:block";
+/** Largeur minimale d'une carte : 1 colonne jusqu'à ~1170 px de zone, 2 ensuite, 3 sur très grand écran. */
+const CARD_MIN = 580;
 
-/** Services d'un projet déplié : service, image, ports, CPU, mémoire, état, actions. */
+/** Services d'une carte : service, (image si la carte est assez large), ports, CPU, mémoire, actions. */
 const SERVICE_GRID =
-  "grid items-center gap-3 grid-cols-[minmax(120px,1fr)_minmax(0,1fr)_56px_72px_116px] @min-[1000px]:grid-cols-[minmax(150px,1fr)_minmax(0,1.1fr)_minmax(0,1fr)_56px_72px_minmax(0,0.9fr)_116px]";
-const SVC_WIDE = "hidden @min-[1000px]:block";
+  "grid items-center gap-3 grid-cols-[minmax(110px,1fr)_minmax(0,0.9fr)_48px_64px_116px] @min-[640px]:grid-cols-[minmax(130px,1fr)_minmax(0,1fr)_minmax(0,0.9fr)_48px_64px_116px]";
+const SVC_WIDE = "hidden @min-[640px]:block";
 
-/** Projets dépliés et groupes repliés, retenus le temps de la session (changer d'onglet ne les perd pas). */
+/** Groupes repliés, retenus le temps de la session (changer d'onglet ne les perd pas). */
 const sessionSets = new Map<string, Set<string>>();
 function useSessionSet(key: string) {
   const [, bump] = useState(0);
@@ -44,13 +36,11 @@ function useSessionSet(key: string) {
   };
   return {
     has: (id: string) => set.has(id),
-    size: set.size,
     toggle: (id: string) => {
       const next = new Set(set);
       if (!next.delete(id)) next.add(id);
       write(next);
     },
-    setAll: (ids: string[]) => write(new Set(ids)),
   };
 }
 
@@ -70,7 +60,6 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   const clients = useItemFolders("compose", serverId);
   const locks = useLocks(serverId);
   const [clientFilter, setClientFilter] = useState("");
-  const expanded = useSessionSet(`compose:open:${serverId}`);
   const collapsedGroups = useSessionSet(`compose:groups:${serverId}`);
   const lockOf = (p: ComposeProject) => composeLockKey(p);
   if (data.projects.length === 0) {
@@ -210,9 +199,8 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   const counts: Record<string, number> = {};
   for (const p of data.projects) counts[clientOf(p)] = (counts[clientOf(p)] ?? 0) + 1;
   const visible = groups.flatMap(([, list]) => list);
-  const anyOpen = visible.some((p) => expanded.has(p.name));
 
-  const projectRow = (p: ComposeProject) => {
+  const projectCard = (p: ComposeProject) => {
     const file = p.configFiles.split(",")[0];
     const b = (a: string) => busy === `${p.name}:${a}`;
     const services = containersOf(p.name);
@@ -222,72 +210,68 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
     const counts = projectCounts(services, occasional);
     const cpu = services.reduce((n, c) => n + (stats[c.id]?.cpu ?? 0), 0);
     const mem = services.reduce((n, c) => n + (c.state === "running" && stats[c.id] ? memBytes(stats[c.id].memUsage) : 0), 0);
-    const open = expanded.has(p.name);
     const locked = locks.isLocked(lockOf(p));
     const client = clientOf(p);
     const dir = projectDir(p);
     const dirDiffers = projectNameFromPath(dir) !== p.name;
-    const status = services.length > 0 ? `${counts.running}/${counts.expected} en cours` : p.status;
+    const status = services.length > 0 ? `${counts.running}/${counts.expected}` : p.status;
     return (
-      <div key={p.name} className="border-b border-line">
-        <div className={`${PROJECT_GRID} h-11 cursor-pointer px-6 text-[13px] hover:bg-hover-soft`} onClick={() => expanded.toggle(p.name)}>
-          <button type="button" aria-expanded={open} aria-label={open ? `Replier ${p.name}` : `Déplier ${p.name}`} className="flex text-muted hover:text-fg">
-            <ChevronRight size={14} className={`transition-transform ${open ? "rotate-90" : ""}`} />
-          </button>
-          <span className="flex min-w-0 items-center gap-2">
-            <Layers size={14} className="shrink-0 text-accent" />
-            <span className="truncate font-semibold" title={p.name}>
-              {p.name}
-            </span>
-            {locked && (
-              <span className="shrink-0 text-warn" title="Verrouillé : actions destructrices à confirmer en retapant le nom">
-                <Lock size={12} />
+      // Carte : en-tête sur deux lignes (identité | chemin et ressources), actions à droite sans retour à la ligne, puis les services.
+      <section className="@container flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-panel">
+        <header className="flex items-center gap-3 px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2 text-[13px]">
+              <Layers size={14} className="shrink-0 text-accent" />
+              <span className="truncate font-semibold" title={p.name}>
+                {p.name}
               </span>
-            )}
-            {p.missing && (
-              <Badge tone="warn" title="Le dossier du projet a sans doute été renommé, déplacé ou supprimé">
-                introuvable
-              </Badge>
-            )}
-          </span>
-          <span className={`${WIDE} min-w-0`} onClick={(e) => e.stopPropagation()}>
-            {p.missing ? (
-              <span className="block truncate font-mono text-xs text-faint" title={`${p.configFiles}\nCe fichier n'existe plus`}>
-                {file}
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="block max-w-full truncate font-mono text-xs text-muted hover:text-accent"
-                title={`${p.configFiles}${dirDiffers ? `\nLe dossier ne porte pas le nom du projet compose (-p ${p.name})` : ""}\nClic : éditer le fichier`}
-                onClick={() => setEditing(file)}
+              <Badge
+                tone={counts.running === 0 ? "muted" : counts.running === counts.expected ? "ok" : "warn"}
+                className="shrink-0"
+                title={`${services.length > 0 ? `${status} en cours` : status}${counts.occasional > 0 ? `, +${counts.occasional} ponctuel${counts.occasional > 1 ? "s" : ""} (arrêt non signalé)` : ""}`}
               >
-                {file}
-              </button>
-            )}
-          </span>
-          <span className="min-w-0">
-            <Badge
-              tone={counts.running === 0 ? "muted" : counts.running === counts.expected ? "ok" : "warn"}
-              className="max-w-full"
-              title={counts.occasional > 0 ? `${status}, +${counts.occasional} ponctuel${counts.occasional > 1 ? "s" : ""} (arrêt non signalé)` : status}
-            >
-              <span className="truncate">{status}</span>
-            </Badge>
-          </span>
-          <span className={`${WIDE} min-w-0`}>
-            {client ? (
-              <Badge className="max-w-full" title={`Client : ${client}`}>
-                <Tag size={10} className="shrink-0" /> <span className="truncate">{client}</span>
+                {status}
               </Badge>
-            ) : (
-              <span className="text-xs text-faint">—</span>
-            )}
-          </span>
-          <span className={`${XWIDE} text-right text-xs tabular-nums`}>{enMarche > 0 ? `${cpu.toFixed(1)} %` : <span className="text-faint">—</span>}</span>
-          <span className={`${XWIDE} text-right text-xs text-muted tabular-nums`}>{mem > 0 ? formatBytes(mem) : <span className="text-faint">—</span>}</span>
+              {locked && (
+                <span className="shrink-0 text-warn" title="Verrouillé : actions destructrices à confirmer en retapant le nom">
+                  <Lock size={12} />
+                </span>
+              )}
+              {p.missing && (
+                <Badge tone="warn" className="shrink-0" title="Le dossier du projet a sans doute été renommé, déplacé ou supprimé">
+                  introuvable
+                </Badge>
+              )}
+              {client && (
+                <Badge className="max-w-[12rem] min-w-0" title={`Client : ${client}`}>
+                  <Tag size={10} className="shrink-0" /> <span className="truncate">{client}</span>
+                </Badge>
+              )}
+            </div>
+            <div className="mt-0.5 flex min-w-0 items-center gap-3 pl-[22px] text-xs">
+              {p.missing ? (
+                <span className="min-w-0 flex-1 truncate font-mono text-faint" title={`${p.configFiles}\nCe fichier n'existe plus`}>
+                  {file}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 truncate text-left font-mono text-muted hover:text-accent"
+                  title={`${p.configFiles}${dirDiffers ? `\nLe dossier ne porte pas le nom du projet compose (-p ${p.name})` : ""}\nClic : éditer le fichier`}
+                  onClick={() => setEditing(file)}
+                >
+                  {file}
+                </button>
+              )}
+              {enMarche > 0 && (
+                <span className="shrink-0 text-muted tabular-nums" title="CPU et mémoire de tous les services">
+                  {cpu.toFixed(1)} % · {mem > 0 ? formatBytes(mem) : "—"}
+                </span>
+              )}
+            </div>
+          </div>
           {/* Une action principale, le reste en icônes ou derrière « … » : rien ne passe à la ligne. */}
-          <span className={`flex ${ACTIONS_W} items-center justify-end gap-0.5`} onClick={(e) => e.stopPropagation()}>
+          <span className="flex shrink-0 items-center gap-0.5">
             {p.missing ? (
               <Button size="sm" variant="primary" icon={<FolderSearch size={12} />} title="Retrouver le fichier compose à son nouvel emplacement et relancer le projet depuis là" onClick={() => void relink(p)}>
                 Relier…
@@ -327,18 +311,16 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
             </IconButton>
             <MenuButton size="sm" title="Autres actions" items={() => (p.missing ? missingItems(p) : projectItems(p, file, arrete))} />
           </span>
-        </div>
+        </header>
 
-        {open &&
-          (services.length > 0 ? (
-            <div className="border-t border-line bg-subtle/40 pr-6 pb-1 pl-[46px]">
-              <div className={`${SERVICE_GRID} h-7 text-[11px] font-medium text-muted`}>
+        {services.length > 0 ? (
+            <div className="border-t border-border">
+              <div className={`${SERVICE_GRID} h-7 border-b border-line bg-subtle px-3 text-[11px] font-medium text-muted`}>
                 <span>Service</span>
                 <span className={SVC_WIDE}>Image</span>
                 <span>Ports</span>
                 <span className="text-right">CPU</span>
                 <span className="text-right">Mémoire</span>
-                <span className={SVC_WIDE}>État</span>
                 <span />
               </div>
               <ul className="flex flex-col divide-y divide-line">
@@ -348,7 +330,7 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
                   return (
                     <li
                       key={c.id}
-                      className={`group ${SERVICE_GRID} h-9 cursor-pointer rounded-sm text-[13px] hover:bg-hover-soft ${c.id === selectedId ? "bg-hover-soft" : ""}`}
+                      className={`group ${SERVICE_GRID} h-8 cursor-pointer px-3 text-[13px] hover:bg-hover-soft ${c.id === selectedId ? "bg-hover-soft" : ""}`}
                       onClick={() => setSelectedId(c.id === selectedId ? null : c.id)}
                     >
                       <span className="flex min-w-0 items-center gap-2" title={c.status}>
@@ -376,9 +358,6 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
                       <span className="text-right text-xs tabular-nums">{s ? `${s.cpu.toFixed(1)} %` : <span className="text-faint">—</span>}</span>
                       <span className="truncate text-right text-xs text-muted tabular-nums" title={s?.memUsage}>
                         {s ? s.memUsage.split(" / ")[0] : <span className="text-faint">—</span>}
-                      </span>
-                      <span className={`${SVC_WIDE} truncate text-xs text-muted`} title={c.status}>
-                        {c.status}
                       </span>
                       <span className="flex justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
                         <IconButton size="sm" title="Logs en direct" onClick={() => containerActions.logs(c)}>
@@ -408,42 +387,36 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
               </ul>
             </div>
           ) : (
-            <p className="border-t border-line bg-subtle/40 py-2 pr-6 pl-[46px] text-xs text-muted">Aucun conteneur pour ce projet : ▶ le lance (up -d).</p>
-          ))}
-      </div>
+            <p className="border-t border-line px-3 py-2 text-xs text-muted">Aucun conteneur pour ce projet : ▶ le lance (up -d).</p>
+          )}
+      </section>
     );
   };
 
   return (
-    // Liste pleine largeur, une ligne par projet : pas de grille de cartes à hauteurs inégales.
-    <div className="@container flex min-w-0 flex-col">
+    <div className="flex min-w-0 flex-col">
       <div className="flex h-11 items-center gap-3 border-b border-border px-6">
         <ClientFilter names={clients.names} value={filter} onChange={setClientFilter} counts={counts} />
         <span className="ml-auto text-xs text-muted tabular-nums">
           {visible.length} projet{visible.length > 1 ? "s" : ""}
         </span>
-        <IconButton size="sm" title={anyOpen ? "Tout replier" : "Tout déplier"} onClick={() => expanded.setAll(anyOpen ? [] : visible.map((p) => p.name))}>
-          {anyOpen ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />}
-        </IconButton>
       </div>
-      <div className={`${PROJECT_GRID} h-8 border-b border-line bg-subtle px-6 text-[11px] font-medium text-muted`}>
-        <span />
-        <span>Projet</span>
-        <span className={WIDE}>Fichier compose</span>
-        <span>État</span>
-        <span className={WIDE}>Client</span>
-        <span className={`${XWIDE} text-right`}>CPU</span>
-        <span className={`${XWIDE} text-right`}>Mémoire</span>
-        <span className={ACTIONS_W} />
-      </div>
-      {groups.map(([client, list]) => {
-        // Sans aucun client défini, pas d'en-tête de groupe : la liste reste plate.
-        if (clients.names.length === 0) return list.map(projectRow);
-        const gid = client || NO_CLIENT;
-        const folded = collapsedGroups.has(gid);
-        return (
-          <div key={`client:${gid}`}>
-            <div className="flex h-8 items-center gap-2 border-b border-line bg-subtle/60 px-6 text-xs">
+      {/* Maçonnerie en colonnes CSS : des cartes de hauteurs inégales ne laissent pas de trous. Les groupes
+          de clients s'y enchaînent (en-tête collé à leur première carte) : un petit groupe ne laisse pas
+          de rangée à moitié vide. Jamais plus de colonnes que de projets. */}
+      <div className="px-6 py-4" style={{ columns: `${Math.min(3, Math.max(1, visible.length))} ${CARD_MIN}px`, columnGap: 12 }}>
+        {groups.flatMap(([client, list]) => {
+          // Sans aucun client défini, pas d'en-tête de groupe : les cartes s'enchaînent.
+          if (clients.names.length === 0)
+            return list.map((p) => (
+              <div key={p.name} className="mb-3 break-inside-avoid">
+                {projectCard(p)}
+              </div>
+            ));
+          const gid = client || NO_CLIENT;
+          const folded = collapsedGroups.has(gid);
+          const header = (
+            <div className="flex h-7 items-center gap-2 px-1 text-xs">
               <button type="button" aria-expanded={!folded} className="flex min-w-0 items-center gap-1.5 font-medium" onClick={() => collapsedGroups.toggle(gid)}>
                 <ChevronRight size={13} className={`shrink-0 text-muted transition-transform ${folded ? "" : "rotate-90"}`} />
                 <Tag size={12} className="shrink-0 text-muted" />
@@ -456,10 +429,21 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
                 </span>
               )}
             </div>
-            {!folded && list.map(projectRow)}
-          </div>
-        );
-      })}
+          );
+          if (folded)
+            return [
+              <div key={`client:${gid}`} className="mb-3 break-inside-avoid">
+                {header}
+              </div>,
+            ];
+          return list.map((p, i) => (
+            <div key={p.name} className="mb-3 break-inside-avoid">
+              {i === 0 && header}
+              {projectCard(p)}
+            </div>
+          ));
+        })}
+      </div>
       {portMenu.menu}
       {relinkFile && (
         <Suspense fallback={null}>
