@@ -12,7 +12,13 @@ const STEPS = ["Destination", "Contenu", "Planning et rétention", "Chiffrement"
 export default function ConfigWizard({ serverId, data, onClose, onSaved }: { serverId: string; data: BackupOverview; onClose: () => void; onSaved: () => void }) {
   const notify = useApp((s) => s.notify);
   const existing = data.status.config;
-  const [c, setC] = useState<BackupConfig>(existing ?? { ...data.defaultConfig, volumes: data.volumes, databases: data.databases });
+  // Les bases déjà configurées reprennent le projet/service compose détecté : le diagnostic les
+  // retrouvera si leur conteneur est recréé sous un autre nom.
+  const [c, setC] = useState<BackupConfig>(
+    existing
+      ? { ...existing, databases: existing.databases.map((d) => data.databases.find((x) => x.container === d.container && x.kind === d.kind) ?? d) }
+      : { ...data.defaultConfig, volumes: data.volumes, databases: data.databases },
+  );
   const [step, setStep] = useState(0);
   const [s3Secret, setS3Secret] = useState("");
   const [password, setPassword] = useState("");
