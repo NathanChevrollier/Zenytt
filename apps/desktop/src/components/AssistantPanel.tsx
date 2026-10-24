@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, MessageSquarePlus, Play, SendHorizontal, Settings, Sparkles, SquareTerminal, TriangleAlert, Wrench, X } from "lucide-react";
 import { answerProposal, ask, useAssistant, type Entry } from "../lib/assistant";
 import { navigate } from "../lib/shell";
-import { Badge, Button, CodeBlock, IconButton, ResultBanner, Textarea } from "./ui";
+import { Badge, Button, CodeBlock, IconButton, ResizeHandle, ResultBanner, Textarea, useResizable } from "./ui";
 
 /** Noms d'outils tels qu'ils s'affichent dans la discussion. */
 const TOOL_LABELS: Record<string, string> = {
@@ -99,6 +99,7 @@ export default function AssistantPanel() {
   const [text, setText] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const width = useResizable("assistant", 420, 320, Math.max(320, Math.round(window.innerWidth * 0.6)), "left");
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
@@ -117,7 +118,15 @@ export default function AssistantPanel() {
   const configured = config && (config.hasKey || config.provider === "openai");
 
   return (
-    <aside className="relative z-30 flex w-[420px] shrink-0 flex-col border-l border-border bg-panel max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:max-w-[calc(100%-3rem)] max-xl:shadow-2xl xl:max-w-[34vw]">
+    // Largeur réglable par le bord gauche, retenue ; plafonnée à 60 % de la fenêtre (et à la zone en superposition).
+    <aside
+      style={{ width: width.size }}
+      className="relative z-30 flex shrink-0 border-l border-border bg-panel max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:max-w-[calc(100%-3rem)] max-xl:shadow-2xl xl:max-w-[60vw]"
+    >
+      <div className="absolute inset-y-0 -left-1 flex">
+        <ResizeHandle {...width.handle} />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col">
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Sparkles size={15} className="text-accent" />
         <span className="text-sm font-medium">Assistant</span>
@@ -219,6 +228,7 @@ export default function AssistantPanel() {
             Envoyer
           </Button>
         </div>
+      </div>
       </div>
     </aside>
   );
