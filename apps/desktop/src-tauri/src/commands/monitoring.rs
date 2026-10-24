@@ -9,7 +9,7 @@ use zenytt_core::schedule;
 use zenytt_core::system::{self, Process, Service};
 use zenytt_core::Connection;
 use zenytt_protocol::proc::{parse_collect, COLLECT_SCRIPT};
-use zenytt_protocol::{AgentConfig, HistoryPoint, Metrics, RawSample};
+use zenytt_protocol::{AgentConfig, Baseline, HistoryPoint, Metrics};
 
 use crate::commands::{admin, err, track};
 use crate::sessions::Sessions;
@@ -24,7 +24,7 @@ const AGENT_AARCH64: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zenyttd-a
 /// Dernier relevé brut par serveur, pour calculer CPU % et débits.
 #[derive(Default)]
 pub struct Monitor {
-    pub prev: Mutex<HashMap<String, RawSample>>,
+    pub prev: Mutex<HashMap<String, Baseline>>,
 }
 
 fn now_ms() -> i64 {
@@ -58,9 +58,7 @@ pub async fn mon_metrics(
     let conn = sessions.get(&store, &server_id).await?;
     let out = conn.run(COLLECT_SCRIPT).await.map_err(err)?;
     let raw = parse_collect(&out, now_ms());
-    let mut prev = monitor.prev.lock().await;
-    let mut metrics = zenytt_protocol::compute(prev.get(&server_id), &raw);
-    prev.insert(server_id.clone(), raw);
+    let mut metrics = monitor.prev.lock().await.entry(server_id.clone()).or_default().compute(raw);
     apply_disk_rules(&store, &server_id, &mut metrics);
     Ok(metrics)
 }

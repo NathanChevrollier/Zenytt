@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, OctagonAlert, SlidersHorizontal } from "lucide-react";
-import { api, diskCounts, errorMessage, formatBytes, formatDuration, mainDisk, type AgentInfo, type Disk, type DiskRule, type HistoryPoint, type Metrics } from "../../lib/api";
+import { api, diskCounts, errorMessage, formatBytes, formatDuration, fullestDisk, type AgentInfo, type Disk, type DiskRule, type HistoryPoint, type Metrics } from "../../lib/api";
 import TimeChart, { SERIES_COLORS } from "../../components/TimeChart";
 import { Badge, Button, Card, ErrorState, IconButton, Meter, StatTile, meterTone } from "../../components/ui";
-import DiskRuleDialog from "./DiskRuleDialog";
+import DiskRuleDialog from "../supervision/DiskRuleDialog";
 import { usePolling } from "../../lib/poll";
-import { useCachedState } from "../../lib/cache";
+import { useMetrics } from "../../lib/metrics";
 
 export const RANGES = [
   { id: "live", label: "Direct", secs: 0 },
@@ -16,7 +16,6 @@ export const RANGES = [
 ] as const;
 export type RangeId = (typeof RANGES)[number]["id"];
 
-const LIVE_POINTS = 150;
 const pct = (v: number) => `${v.toFixed(0)} %`;
 const rate = (v: number) => `${formatBytes(v)}/s`;
 
@@ -58,34 +57,14 @@ export default function Overview({
   range: RangeId;
   onOpenAgent: () => void;
 }) {
-  const [live, setLive] = useCachedState<Metrics[]>(`live:${serverId}`, []);
+  const { samples: live, error: liveError } = useMetrics(serverId, 2000, visible);
   const [history, setHistory] = useState<HistoryPoint[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [diskRules, setDiskRules] = useState<DiskRule[]>([]);
   const [editingDisk, setEditingDisk] = useState<Disk | null>(null);
   const loadDiskRules = useCallback(() => void api.diskRules(serverId).then(setDiskRules, () => setDiskRules([])), [serverId]);
   useEffect(loadDiskRules, [loadDiskRules]);
-  const serverRef = useRef(serverId);
-  serverRef.current = serverId;
   const agentOk = !!agent?.running;
-
-  // Relevés directs toutes les 2 s tant que la vue est affichée.
-  usePolling(
-    async () => {
-      const current = serverId;
-      try {
-        const m = await api.metrics(serverId);
-        if (current !== serverRef.current) return;
-        setLive((prev) => [...prev, m].slice(-LIVE_POINTS));
-        setError(null);
-      } catch (e) {
-        if (current === serverRef.current) setError(errorMessage(e));
-      }
-    },
-    2000,
-    [serverId],
-    visible,
-  );
 
   const rangeSecs = RANGES.find((x) => x.id === range)!.secs;
   useEffect(() => {
@@ -136,7 +115,7 @@ export default function Overview({
   const m = live[live.length - 1];
   const prevOk = live.length > 1;
   const memPct = m && m.memTotal ? (m.memUsed / m.memTotal) * 100 : 0;
-  const rootDisk = mainDisk(m?.disks);
+  const rootDisk = fullestDisk(m?.disks);
   const diskPct = rootDisk && rootDisk.total ? (rootDisk.used / rootDisk.total) * 100 : 0;
 
   // Tendance des tuiles : les 40 derniers relevés directs.
@@ -147,7 +126,7 @@ export default function Overview({
 
   return (
     <div className="@container flex flex-col gap-4">
-      {error && <ErrorState message={error} />}
+      {(error || liveError) && <ErrorState message={(error || liveError)!} />}
 
       {/* Six tuiles : deux rangées de trois, ou une seule rangée quand la place le permet (jamais une tuile orpheline). */}
       <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-3 @7xl:grid-cols-6">

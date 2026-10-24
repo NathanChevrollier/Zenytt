@@ -2,11 +2,11 @@
 // ressources, audit de sécurité (score, constats à corriger ou ignorer), mises à jour en résumé et alimentation (redémarrer, programmer, éteindre), avec l'attente du retour après un redémarrage.
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { CalendarClock, Check, Clock, Cpu, Globe, Loader2, MemoryStick, Pencil, PowerOff, RotateCw, Server, X } from "lucide-react";
-import { api, diskCounts, errorMessage, formatBytes, formatDuration, type Metrics, type SystemInfo, type SystemUpdate } from "../../lib/api";
+import { api, diskCounts, errorMessage, formatBytes, formatDuration, type SystemInfo, type SystemUpdate } from "../../lib/api";
 import { formatAt, updateGroup, validHostname } from "../../lib/system";
 import { AuditChecks, AuditFindings, type AuditProps } from "./Audit";
 import { useApp } from "../../lib/store";
-import { usePolling } from "../../lib/poll";
+import { useMetrics } from "../../lib/metrics";
 import { Button, Card, CRIT_AT, ErrorState, Eyebrow, Field, IconButton, Input, Loading, Meter, Modal, ResultBanner, Segmented, StatusDot, WARN_AT, type Tone } from "../../components/ui";
 
 type PowerKind = "reboot" | "poweroff";
@@ -506,24 +506,9 @@ function PowerModal({ mode, name, onClose, onConfirm }: { mode: PowerKind | "sch
  * Le premier relevé n'a pas encore de CPU calculé : la jauge attend le deuxième.
  */
 function Resources({ serverId, visible }: { serverId: string; visible: boolean }) {
-  const [m, setM] = useState<Metrics | null>(null);
-  const [samples, setSamples] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  usePolling(
-    async () => {
-      try {
-        setM(await api.metrics(serverId));
-        setSamples((n) => n + 1);
-        setError(null);
-      } catch (e) {
-        setError(errorMessage(e));
-      }
-    },
-    5000,
-    [serverId],
-    visible,
-  );
-
+  const { samples: list, error } = useMetrics(serverId, 5000, visible);
+  const m = list[list.length - 1] ?? null;
+  const samples = list.length;
   const disks = m ? m.disks.filter(diskCounts).sort((a, b) => a.mount.localeCompare(b.mount)) : [];
   const ratio = (used: number, total: number) => (total ? (used / total) * 100 : 0);
 

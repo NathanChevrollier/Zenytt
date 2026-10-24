@@ -100,6 +100,33 @@ pub fn compute(prev: Option<&RawSample>, cur: &RawSample) -> Metrics {
     }
 }
 
+/// Écart minimal entre deux relevés pour calculer CPU % et débits : en dessous, la fenêtre est trop
+/// courte (quelques jiffies) et le pourcentage n'a pas de sens.
+pub const MIN_SAMPLE_GAP_MS: i64 = 1500;
+
+/// Relevés bruts récents d'un serveur, partagés par tous les appelants (supervision, accueil,
+/// barre du terminal). Chaque calcul se fait contre le relevé le plus récent qui a au moins
+/// [`MIN_SAMPLE_GAP_MS`] : deux appels rapprochés ne faussent plus le CPU l'un de l'autre.
+#[derive(Debug, Default)]
+pub struct Baseline(std::collections::VecDeque<RawSample>);
+
+impl Baseline {
+    pub fn compute(&mut self, cur: RawSample) -> Metrics {
+        let at = cur.timestamp;
+        let base = self.0.iter().rev().find(|p| at - p.timestamp >= MIN_SAMPLE_GAP_MS).or(self.0.front());
+        let metrics = compute(base, &cur);
+        self.0.push_back(cur);
+        // Ne garder, en tête, que le plus récent relevé assez ancien : il reste la base des suivants.
+        while self.0.len() > 1 && at - self.0[1].timestamp >= MIN_SAMPLE_GAP_MS {
+            self.0.pop_front();
+        }
+        while self.0.len() > 16 {
+            self.0.pop_front();
+        }
+        metrics
+    }
+}
+
 /// Point d'historique compact (moyenne sur une période).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -348,6 +375,22 @@ pub fn downsample(points: &[HistoryPoint], max: usize) -> Vec<HistoryPoint> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample(t: i64, total: u64, busy: u64) -> RawSample {
+        RawSample { timestamp: t, cpu: proc::CpuTimes { total, busy }, ..Default::default() }
+    }
+
+    #[test]
+    fn baseline_ignores_too_close_samples() {
+        let mut b = Baseline::default();
+        b.compute(sample(0, 1000, 100));
+        // Appel d'une autre vue 2 s plus tard : 50 % sur la fenêtre.
+        assert_eq!(b.compute(sample(2000, 2000, 600)).cpu_percent, 50.0);
+        // 100 ms après : trop court, calculé contre le relevé de t=0 (et non sur 100 ms).
+        assert_eq!(b.compute(sample(2100, 2200, 700)).cpu_percent, 50.0);
+        // Le suivant, 2 s plus tard, part du relevé de t=2100 (le plus récent assez ancien).
+        assert_eq!(b.compute(sample(4000, 3200, 800)).cpu_percent, 10.0);
+    }
 
     #[test]
     fn downsample_averages_groups() {

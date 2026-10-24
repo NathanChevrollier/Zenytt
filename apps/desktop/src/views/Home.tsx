@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Activity, ArrowRight, ChevronRight, LayoutDashboard, LayoutGrid, List, Plus, RotateCw, SquareTerminal, TriangleAlert } from "lucide-react";
 import { useDoctor } from "../components/ConnectionDoctor";
-import { api, hasShell, mainDisk, errorMessage, formatBytes, formatDuration, type AuditEntry, type ContainerCondition, type DashboardSummary, type ServerView } from "../lib/api";
+import { api, hasShell, fullestDisk, errorMessage, formatBytes, formatDuration, type AuditEntry, type ContainerCondition, type DashboardSummary, type ServerView } from "../lib/api";
 import { ensureConnected, useAppPick } from "../lib/store";
 import { navigate, useShell } from "../lib/shell";
 import { fetchHealth, useHealth } from "../lib/health";
@@ -240,7 +240,7 @@ export default function HomeView({ visible }: { visible: boolean }) {
   const healthOf = (r: DashboardSummary | undefined) => {
     const m = r?.metrics;
     const mem = m && m.memTotal ? (m.memUsed / m.memTotal) * 100 : null;
-    const root = mainDisk(m?.disks);
+    const root = fullestDisk(m?.disks);
     const disk = root && root.total ? (root.used / root.total) * 100 : null;
     return { m, mem, root, disk };
   };

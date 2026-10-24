@@ -453,11 +453,16 @@ export interface Disk {
 /** Compte dans l'alerte « Disque » et la jauge principale. */
 export const diskCounts = (d: Disk) => !d.readOnly && !d.ignored;
 
-/** Disque à montrer en jauge principale : `/` s'il compte, sinon le plus gros qui compte. */
-export function mainDisk(disks: Disk[] | undefined): Disk | undefined {
+/**
+ * « Disque le plus plein » : seule définition de l'app (tuiles, accueil, serveurs, barre du terminal),
+ * la même que l'alerte « Disque » de l'agent et l'historique (maximum des volumes qui comptent).
+ * Si aucun ne compte, `/` (ou le premier) reste montré.
+ */
+export function fullestDisk(disks: Disk[] | undefined): Disk | undefined {
   if (!disks?.length) return undefined;
+  const ratio = (d: Disk) => (d.total ? d.used / d.total : 0);
   const counting = disks.filter(diskCounts);
-  return counting.find((d) => d.mount === "/") ?? [...counting].sort((a, b) => b.total - a.total)[0] ?? disks.find((d) => d.mount === "/") ?? disks[0];
+  return [...counting].sort((a, b) => ratio(b) - ratio(a))[0] ?? disks.find((d) => d.mount === "/") ?? disks[0];
 }
 
 /** Réglage d'un point de montage (supervision). */
