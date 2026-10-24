@@ -5,6 +5,7 @@ pub mod agent;
 pub mod apache;
 pub mod archive;
 pub mod backup;
+pub mod backup_health;
 pub mod catalog;
 pub mod db;
 pub mod db_admin;

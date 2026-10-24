@@ -5,7 +5,7 @@ import { ArrowUp, Database, Download, File, Folder, RotateCcw, Undo2 } from "luc
 import { api, errorMessage, formatBytes, type DbSource, type Snapshot, type SnapshotNode } from "../../lib/api";
 import { track } from "../../lib/transfers";
 import { useApp } from "../../lib/store";
-import { Button, Card, DataTable, EmptyState, ErrorState, IconButton, Loading, Modal, Section } from "../../components/ui";
+import { Button, Card, DataTable, ErrorState, IconButton, Loading, Modal, Section } from "../../components/ui";
 
 type Notify = (m: string, k?: "info" | "error" | "success") => void;
 
@@ -73,44 +73,44 @@ export default function SnapshotsBrowser({
   return (
     <Section title="Sauvegardes disponibles" count={snaps?.length}>
       {error && <ErrorState message={error} onRetry={onRetry} />}
-      <div className="grid min-h-[360px] grid-cols-[240px_minmax(0,1fr)] gap-3">
-        <Card padded={false} className="flex max-h-[520px] flex-col overflow-hidden">
-          {ordered === null ? (
-            <div className="p-3">
-              <Loading rows={5} />
-            </div>
-          ) : ordered.length === 0 ? (
-            <p className="p-4 text-xs text-muted">Aucune sauvegarde pour l'instant. La première sera faite à l'heure prévue, ou maintenant via « Sauvegarder maintenant ».</p>
-          ) : (
-            <div className="overflow-auto p-1.5">
-              {ordered.map((s) => {
-                const on = s.short_id === selected;
-                const d = new Date(s.time);
-                return (
-                  <button
-                    key={s.short_id}
-                    type="button"
-                    onClick={() => onSelect(s.short_id)}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${on ? "bg-accent/12 text-fg" : "hover:bg-hover"}`}
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-medium">{d.toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" })}</span>
-                      <span className="block text-[11px] text-muted">
-                        {d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })} · <span className="font-mono">{s.short_id}</span>
+      {ordered?.length === 0 ? (
+        // Pas encore de sauvegarde : une ligne, pas deux panneaux vides côte à côte.
+        <Card className="py-3 text-xs text-muted">Aucune sauvegarde pour l'instant. La première sera faite à l'heure prévue, ou maintenant via « Sauvegarder maintenant ».</Card>
+      ) : (
+        <div className="grid min-h-[360px] grid-cols-[240px_minmax(0,1fr)] gap-3 2xl:grid-cols-[300px_minmax(0,1fr)]">
+          <Card padded={false} className="flex max-h-[520px] flex-col overflow-hidden">
+            {ordered === null ? (
+              <div className="p-3">
+                <Loading rows={5} />
+              </div>
+            ) : (
+              <div className="overflow-auto p-1.5">
+                {ordered.map((s) => {
+                  const on = s.short_id === selected;
+                  const d = new Date(s.time);
+                  return (
+                    <button
+                      key={s.short_id}
+                      type="button"
+                      onClick={() => onSelect(s.short_id)}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${on ? "bg-accent/12 text-fg" : "hover:bg-hover"}`}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13px] font-medium">{d.toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" })}</span>
+                        <span className="block text-[11px] text-muted">
+                          {d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })} · <span className="font-mono">{s.short_id}</span>
+                        </span>
                       </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+                    </button>
+                  );
+                })}
+              </div>
           )}
         </Card>
 
         <Card padded={false} className="flex max-h-[520px] min-w-0 flex-col overflow-hidden">
           {!current ? (
-            <EmptyState icon={<RotateCcw />} title="Choisis une sauvegarde">
-              Parcours son contenu et restaure un fichier, un dossier ou un export de base. Rien n'est remplacé sans ton accord.
-            </EmptyState>
+            <p className="p-4 text-xs text-muted">Choisis une sauvegarde pour parcourir son contenu et restaurer un fichier, un dossier ou un export de base. Rien n'est remplacé sans ton accord.</p>
           ) : (
             <>
               <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2 py-1.5">
@@ -181,6 +181,7 @@ export default function SnapshotsBrowser({
           )}
         </Card>
       </div>
+      )}
 
       {restored && <RestoredDialog serverId={serverId} restored={restored} databases={databases} notify={notify} onClose={() => setRestored(null)} />}
     </Section>

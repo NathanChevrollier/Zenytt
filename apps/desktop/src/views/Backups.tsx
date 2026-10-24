@@ -2,15 +2,16 @@
 // 30 derniers jours), explorateur de sauvegardes avec restauration, configuration en assistant.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { DatabaseBackup, Download, HardDrive, Play, Settings2, ShieldCheck } from "lucide-react";
-import { api, errorMessage, formatAgo, type BackupOverview, type Snapshot } from "../lib/api";
+import { api, errorMessage, formatAgo, type BackupFix, type BackupHealth, type BackupOverview, type Snapshot } from "../lib/api";
 import { useApp, useAppPick } from "../lib/store";
-import { Badge, Button, Card, EmptyState, ErrorState, Loading, MenuButton, Modal, ResultBanner, Section, StatTile } from "../components/ui";
+import { Badge, Button, Card, ErrorState, Loading, MenuButton, Modal, ResultBanner, Section, StatTile } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 import ServerGate, { ServerContext } from "../components/ServerGate";
 import { useCachedState } from "../lib/cache";
 import { useAutoRefresh } from "../lib/refresh";
 import SnapshotsBrowser from "./backups/Snapshots";
 import LocalCopy from "./backups/LocalCopy";
+import { fixKey, fixLabel, HealthPanel } from "./backups/Health";
 
 const ConfigWizard = lazy(() => import("./backups/ConfigWizard"));
 
@@ -22,7 +23,7 @@ const DAY = 86_400_000;
 const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 
 function Backups({ serverId }: { serverId: string }) {
-  const { notify, openTab } = useAppPick("notify", "openTab");
+  const { notify, openTab, ask } = useAppPick("notify", "openTab", "ask");
   const server = useApp((s) => s.servers.find((x) => x.id === serverId));
   const [data, setData] = useCachedState<BackupOverview | null>(`backups:${serverId}`, null);
   const [snaps, setSnaps] = useCachedState<Snapshot[] | null>(`backups:snaps:${serverId}`, null);
@@ -34,6 +35,23 @@ function Backups({ serverId }: { serverId: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installLog, setInstallLog] = useState<{ ok: boolean; text: string } | null>(null);
+  const [health, setHealth] = useCachedState<BackupHealth | null>(`backups:health:${serverId}`, null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [fixing, setFixing] = useState<string | null>(null);
+
+  /** Diagnostic (un script borné sur le serveur) : lancé après l'aperçu, qui reste rapide. */
+  const loadHealth = useCallback(async () => {
+    setHealthLoading(true);
+    try {
+      setHealth(await api.backupHealth(serverId));
+      setHealthError(null);
+    } catch (e) {
+      setHealthError(errorMessage(e));
+    } finally {
+      setHealthLoading(false);
+    }
+  }, [serverId]);
 
   const loadSnapshots = useCallback(async () => {
     try {
@@ -52,11 +70,19 @@ function Backups({ serverId }: { serverId: string }) {
       setError(null);
       // L'actualisation relit aussi la liste des sauvegardes : une exécution manuelle vient
       // peut-être d'en ajouter une.
-      if (d.status.config) void loadSnapshots();
+      if (d.status.config) {
+        void loadSnapshots();
+        void loadHealth();
+      }
     } catch (e) {
       setError(errorMessage(e));
     }
-  }, [serverId, loadSnapshots]);
+  }, [serverId, loadSnapshots, loadHealth]);
+
+  // La sauvegarde la plus récente est ouverte d'office : le panneau de contenu n'est jamais vide.
+  useEffect(() => {
+    if (!selected && snaps?.length) setSelected([...snaps].sort((a, b) => b.time.localeCompare(a.time))[0].short_id);
+  }, [snaps, selected]);
 
   useEffect(() => {
     void load();
@@ -95,6 +121,39 @@ function Backups({ serverId }: { serverId: string }) {
 
   const runNow = () =>
     openTab(serverId, { title: "Sauvegarde", command: "sudo /etc/zenytt-backup/run.sh; echo; echo 'Tu peux fermer cet onglet puis actualiser la page Sauvegardes.'; exec \"$SHELL\" -l" });
+
+  /** Corrections du diagnostic : certaines réutilisent les actions existantes de la page. */
+  const applyFix = async (f: BackupFix) => {
+    if (f.kind === "runNow") return runNow();
+    if (f.kind === "editConfig") return setEditing(true);
+    if (f.kind === "installRestic") return void installRestic();
+    if (f.kind === "removeSource" || f.kind === "relink") {
+      const ok = await ask({
+        title: f.kind === "relink" ? `Relier « ${f.from} » à « ${f.to} » ?` : `Retirer « ${f.name} » des sauvegardes ?`,
+        body:
+          f.kind === "relink"
+            ? "La configuration et le script de sauvegarde sont mis à jour ; les sauvegardes existantes ne changent pas."
+            : "Elle ne sera plus sauvegardée. Les sauvegardes déjà faites la contiennent toujours.",
+        confirmLabel: fixLabel(f),
+        danger: f.kind === "removeSource",
+      });
+      if (!ok) return;
+    }
+    setFixing(fixKey(f));
+    try {
+      if (f.kind === "startContainer") await api.dockerAction(serverId, f.container, "start");
+      else {
+        const out = await api.backupApplyFix(serverId, f);
+        if (f.kind === "unlock" && out.trim()) notify(out.trim(), "info");
+      }
+      notify(`${fixLabel(f)} : fait`, "success");
+      await load();
+    } catch (e) {
+      notify(errorMessage(e), "error");
+    } finally {
+      setFixing(null);
+    }
+  };
 
   const context = server && <ServerContext server={server} />;
   const layout = (children: React.ReactNode) => (
@@ -149,19 +208,20 @@ function Backups({ serverId }: { serverId: string }) {
         }
       >
         {!config ? (
-          <div className="mx-auto flex max-w-3xl flex-col gap-5 px-7 py-10">
-            <EmptyState
-              icon={<DatabaseBackup />}
-              title="Aucune sauvegarde configurée"
-              action={
-                <Button variant="primary" icon={<Settings2 size={14} />} onClick={() => setEditing(true)}>
-                  Configurer en 4 étapes
-                </Button>
-              }
-            >
-              Une sauvegarde quotidienne, chiffrée, avec rétention automatique. Zenytt installe restic si besoin (ou tout de suite avec « Installer restic ») et planifie tout.
-            </EmptyState>
-            <div className="grid gap-3 sm:grid-cols-3">
+          <div className="flex flex-col gap-4 px-7 py-5">
+            <Card className="flex items-center gap-3">
+              <DatabaseBackup size={20} className="shrink-0 text-accent" />
+              <div className="min-w-0 flex-1">
+                <h2 className="text-sm font-semibold">Aucune sauvegarde configurée</h2>
+                <p className="text-xs text-muted">
+                  Une sauvegarde quotidienne, chiffrée, avec rétention automatique. Zenytt installe restic si besoin (ou tout de suite avec « Installer restic ») et planifie tout.
+                </p>
+              </div>
+              <Button variant="primary" icon={<Settings2 size={14} />} onClick={() => setEditing(true)}>
+                Configurer en 4 étapes
+              </Button>
+            </Card>
+            <div className="grid grid-cols-3 gap-3">
               <StatTile label="Bases de données détectées" value={data.databases.length} hint={data.databases.map((d) => d.container).join(", ") || "aucune"} />
               <StatTile label="Volumes Docker" value={data.volumes.length} hint={data.volumes.slice(0, 3).join(", ") || "aucun"} />
               <StatTile label="Dossiers proposés" value={data.defaultConfig.paths.length} hint={data.defaultConfig.paths.slice(0, 3).join(", ")} />
@@ -169,7 +229,7 @@ function Backups({ serverId }: { serverId: string }) {
           </div>
         ) : (
           <div className="flex flex-col gap-6 px-7 py-5">
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3">
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <StatTile
                 label="Dernière sauvegarde"
                 tone={!last ? "muted" : last.ok ? "ok" : "danger"}
@@ -184,11 +244,18 @@ function Backups({ serverId }: { serverId: string }) {
                 hint={config.destination.kind === "s3" ? `${config.destination.bucket}${config.destination.prefix ? `/${config.destination.prefix}` : ""}` : config.destination.path}
               />
               <StatTile
-                label="Contenu"
-                value={`${config.paths.length + config.volumes.length + config.databases.length} éléments`}
+                label="Sources"
+                tone={health && health.sources.some((x) => x.state !== "ok" && x.state !== "unknown") ? "warn" : undefined}
+                value={
+                  health
+                    ? `${health.sources.filter((x) => x.state === "ok").length} / ${health.sources.length} à jour`
+                    : `${config.paths.length + config.volumes.length + config.databases.length} éléments`
+                }
                 hint={`${config.databases.length} base(s) · ${config.volumes.length} volume(s) · ${config.paths.length} dossier(s)`}
               />
             </div>
+
+            <HealthPanel health={health} error={healthError} loading={healthLoading} onRetry={() => void loadHealth()} onFix={(f) => void applyFix(f)} busy={fixing} />
 
             {config.destination.kind === "local" && (
               <ResultBanner

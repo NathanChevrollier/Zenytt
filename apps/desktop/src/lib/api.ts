@@ -1034,6 +1034,9 @@ export type BackupDestination =
 export interface DbSource {
   container: string;
   kind: "mysql" | "postgres";
+  /** Projet/service compose : retrouve le conteneur s'il est recréé sous un autre nom. */
+  project?: string;
+  service?: string;
 }
 
 export interface BackupConfig {
@@ -1051,13 +1054,43 @@ export interface BackupOverview {
   status: {
     restic: string | null;
     config: BackupConfig | null;
-    last: { startedAt: number; finishedAt: number; ok: boolean; message: string } | null;
+    last: { startedAt: number; finishedAt: number; ok: boolean; message: string; step: string } | null;
     nextRun: string | null;
   };
   defaultConfig: BackupConfig;
   volumes: string[];
   databases: DbSource[];
   passwordInKeyring: boolean;
+}
+
+export type BackupSourceKind = "database" | "volume" | "path";
+export type BackupFix =
+  | { kind: "unlock" | "installRestic" | "enableSchedule" | "runNow" | "editConfig" }
+  | { kind: "startContainer"; container: string }
+  | { kind: "relink"; source: BackupSourceKind; from: string; to: string }
+  | { kind: "removeSource"; source: BackupSourceKind; name: string };
+
+export interface BackupSourceCheck {
+  source: BackupSourceKind;
+  name: string;
+  state: "ok" | "stopped" | "missing" | "recreated" | "dbDropped" | "empty" | "authFailed" | "unknown";
+  detail: string;
+  fix: BackupFix | null;
+}
+
+export interface BackupIssue {
+  severity: "danger" | "warn" | "info";
+  title: string;
+  detail: string;
+  evidence: string | null;
+  fix: BackupFix | null;
+}
+
+export interface BackupHealth {
+  now: number;
+  lastSuccess: number | null;
+  sources: BackupSourceCheck[];
+  issues: BackupIssue[];
 }
 
 export interface Snapshot {
@@ -1906,6 +1939,8 @@ export const api = {
   backupStageDownload: (serverId: string, restored: string) => invoke<string>("backup_stage_download", { serverId, restored }),
   backupCheck: (serverId: string) => invoke<string>("backup_check", { serverId }),
   backupInstallRestic: (serverId: string) => invoke<string>("backup_install_restic", { serverId }),
+  backupHealth: (serverId: string) => invoke<BackupHealth>("backup_health", { serverId }),
+  backupApplyFix: (serverId: string, fix: BackupFix) => invoke<string>("backup_apply_fix", { serverId, fix }),
   backupMirror: (serverId: string, dir: string, transferId: number, onProgress: (p: MirrorProgress) => void) => {
     const channel = new Channel<MirrorProgress>();
     channel.onmessage = onProgress;
