@@ -1,23 +1,23 @@
 // GitHub : dépôts du compte, où ils sont déployés sur les serveurs connectés, cloner et mettre à jour.
 // Liste à gauche, détail du dépôt choisi à droite (l'un au-dessus de l'autre dans une fenêtre étroite).
 // Le jeton reste dans le coffre de l'OS : l'interface ne le relit jamais.
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import {
-  Container, ExternalLink, Eye, EyeOff, FolderGit2, FolderOpen, GitBranch, GitCommitHorizontal, GitPullRequestArrow, KeyRound, Loader2, Lock, LogOut, RefreshCw, Rocket, Search, Server, ShieldAlert, SquareTerminal, UserRound,
+  Container, ExternalLink, Eye, EyeOff, FolderGit2, FolderOpen, GitBranch, GitCommitHorizontal, GitPullRequestArrow, KeyRound, Loader2, Lock, LogOut, RefreshCw, Rocket, Search, Server, ShieldAlert, SquareTerminal, TriangleAlert, UserRound,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorMessage, hasShell, shellQuote, type GithubCiRun, type GithubClone, type GithubDeployment, type GithubRepo, type GithubStatus, type ServerView } from "../lib/api";
 import {
-  agoOf, browseRepos, certainDeployments, ciState, clonePath, cloneSync, containerTone, githubError, otherDeployments, repoUrl, urgentAlerts, validFolder, validToken, type InsightKind, type RepoFilter, type RepoSort,
+  agoOf, browseRepos, certainDeployments, ciState, clonePath, cloneSync, containerTone, githubError, oldRemoteName, otherDeployments, repoUrl, urgentAlerts, validFolder, validToken, type InsightKind, type RepoFilter, type RepoSort,
 } from "../lib/github";
 import {
-  AlertBadges, AlertsSection, CiSection, Fold, fetchInsight, GhDeploymentsBlock, INSIGHT_KINDS, IssuesSection, PullsSection, type Insights, type Slot,
+  AlertBadges, AlertsSection, CiSection, Fold, fetchInsight, GhDeploymentsSection, INSIGHT_KINDS, IssuesSection, PullsSection, ReloadButton, type Insights, type Slot,
 } from "./GithubInsights";
 import { navigate } from "../lib/shell";
 import { useApp, useAppPick } from "../lib/store";
 import { useCachedState } from "../lib/cache";
 import {
-  Avatar, Badge, Button, Card, EmptyState, ErrorState, Field, FOCUS_RING, IconButton, Input, Loading, MenuButton, Modal, ResultBanner, Segmented, Select, Skeleton, StatTile, StatusDot,
+  Avatar, Badge, Button, Card, EmptyState, ErrorState, Field, FOCUS_RING, IconButton, Input, Loading, MenuButton, Modal, ResizeHandle, ResultBanner, Segmented, Select, Skeleton, StatusDot, useResizable,
 } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 
@@ -116,7 +116,7 @@ export default function GithubView() {
   // Une commande par serveur couvre tous les dépôts : à l'ouverture de la page (sauf serveurs déjà examinés), ou à la demande.
   const scanServers = useCallback(
     async (ids: string[]) => {
-      const list = (repos ?? []).map((r) => ({ owner: r.owner, name: r.name }));
+      const list = (repos ?? []).map((r) => ({ id: r.id, owner: r.owner, name: r.name }));
       if (!list.length) return;
       setDeps((all) => ({ ...all, ...Object.fromEntries(ids.map((id) => [id, { loading: true, items: all[id]?.items ?? [] }])) }));
       await Promise.all(
@@ -510,6 +510,7 @@ function RepoList({
   setSort: (s: RepoSort) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const width = useResizable("github-repos", 320, 260, 560, "right");
   const focusRow = (i: number) => {
     const r = repos[Math.max(0, Math.min(repos.length - 1, i))];
     if (!r) return;
@@ -528,119 +529,154 @@ function RepoList({
     }
   };
   return (
-    <aside className="flex w-[340px] shrink-0 flex-col border-r border-border bg-panel max-[1100px]:max-h-[42%] max-[1100px]:w-full max-[1100px]:border-r-0 max-[1100px]:border-b">
-      <div className="flex flex-col gap-2 border-b border-border p-3">
-        <div className="relative">
-          <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted" />
-          <Input
-            className="pl-8"
-            placeholder="Rechercher un dépôt…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== "ArrowDown") return;
-              e.preventDefault();
-              focusRow(0);
-            }}
-            aria-label="Rechercher un dépôt"
-          />
-        </div>
-        <Segmented
-          size="sm"
-          label="Filtrer les dépôts"
-          value={filter}
-          onChange={setFilter}
-          className="self-start"
-          options={[
-            { value: "all", label: "Tous" },
-            { value: "private", label: "Privés" },
-            { value: "public", label: "Publics" },
-            { value: "deployed", label: "Déployés", title: "Dépôts dont un clone ou une image a été trouvé sur un serveur" },
-          ]}
-        />
-        <div className="flex items-center justify-between gap-2 text-xs text-muted">
-          <span aria-live="polite">{repos.length === total ? `${total} dépôts` : `${repos.length} sur ${total}`}</span>
-          <Select
+    <>
+      <aside
+        className="flex w-(--list-w) shrink-0 flex-col border-r border-border bg-panel max-[1100px]:max-h-[42%] max-[1100px]:w-full max-[1100px]:border-r-0 max-[1100px]:border-b"
+        style={{ "--list-w": `${width.size}px` } as CSSProperties}
+      >
+        <div className="flex flex-col gap-2 border-b border-border p-3">
+          <div className="relative">
+            <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted" />
+            <Input
+              className="pl-8"
+              placeholder="Rechercher un dépôt…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "ArrowDown") return;
+                e.preventDefault();
+                focusRow(0);
+              }}
+              aria-label="Rechercher un dépôt"
+            />
+          </div>
+          <Segmented
             size="sm"
-            aria-label="Trier les dépôts"
-            value={sort}
-            onChange={setSort}
+            label="Filtrer les dépôts"
+            value={filter}
+            onChange={setFilter}
+            className="self-start"
             options={[
-              { value: "pushed", label: "Récemment poussés" },
-              { value: "name", label: "Par nom" },
+              { value: "all", label: "Tous" },
+              { value: "private", label: "Privés" },
+              { value: "public", label: "Publics" },
+              { value: "deployed", label: "Déployés", title: "Dépôts dont un clone ou une image a été trouvé sur un serveur" },
             ]}
           />
+          <div className="flex items-center justify-between gap-2 text-xs text-muted">
+            <span aria-live="polite">{repos.length === total ? `${total} dépôts` : `${repos.length} sur ${total}`}</span>
+            <Select
+              size="sm"
+              aria-label="Trier les dépôts"
+              value={sort}
+              onChange={setSort}
+              options={[
+                { value: "pushed", label: "Récemment poussés" },
+                { value: "name", label: "Par nom" },
+              ]}
+            />
+          </div>
         </div>
-      </div>
-      {canScan && (
-        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5 text-xs text-muted">
-          <span aria-live="polite">{scanning ? "Recherche sur les serveurs…" : "Clones et images trouvés sur tes serveurs."}</span>
-          <Button size="sm" variant="ghost" icon={<RefreshCw size={12} className={scanning ? "animate-spin" : ""} />} disabled={scanning} onClick={onScanAll}>
-            Rechercher sur les serveurs
-          </Button>
-        </div>
-      )}
-      <div ref={listRef} role="listbox" aria-label="Dépôts" className="scroll-thin min-h-0 flex-1 overflow-auto p-1.5" onKeyDown={onKey}>
-        {repos.length === 0 ? (
-          <p className="px-3 py-8 text-center text-[13px] text-muted">{query || filter !== "all" ? "Aucun dépôt ne correspond." : "Ce compte n'a encore aucun dépôt."}</p>
-        ) : (
-          repos.map((r) => {
-            const on = r.fullName === current?.fullName;
-            const n = deployedCount(r.fullName);
-            const ci = ciOf(r.fullName);
-            const urgent = urgentOf(r.fullName);
-            const st = ci === undefined ? null : ciState(ci ?? undefined);
-            return (
-              <button
-                key={r.fullName}
-                type="button"
-                role="option"
-                aria-selected={on}
-                data-repo={r.fullName}
-                tabIndex={on ? 0 : -1}
-                onClick={() => onSelect(r.fullName)}
-                className={`flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors ${FOCUS_RING} ${on ? "bg-accent/12" : "hover:bg-hover"}`}
-              >
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className={`truncate text-[13px] ${on ? "font-semibold" : "font-medium"}`}>{r.name}</span>
-                  {r.private && <Lock size={11} className="shrink-0 text-muted" aria-label="privé" />}
-                  {r.archived && <Badge tone="warn">archivé</Badge>}
-                  <span className="ml-auto flex shrink-0 items-center gap-2">
-                    {urgent > 0 && (
-                      <span className="flex items-center gap-0.5 text-[11px] font-medium text-danger" title={`${urgent} alerte${urgent > 1 ? "s" : ""} de sécurité critique${urgent > 1 ? "s" : ""} ou haute${urgent > 1 ? "s" : ""}`}>
-                        <ShieldAlert size={11} aria-hidden />
-                        {urgent}
-                      </span>
-                    )}
-                    {st && st.label !== "aucune exécution" && (
-                      <span title={`Intégration continue (${r.defaultBranch}) : ${st.label}`} className="flex">
-                        <StatusDot tone={st.tone} pulse={st.running} className="size-2" />
+        {canScan && (
+          <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1 text-xs text-muted">
+            <span aria-live="polite" className="truncate">
+              {scanning ? "Recherche sur les serveurs…" : "Déploiements sur tes serveurs"}
+            </span>
+            <ReloadButton title="Rechercher les clones et images sur tous les serveurs" slot={{ loading: scanning }} onReload={onScanAll} />
+          </div>
+        )}
+        <div ref={listRef} role="listbox" aria-label="Dépôts" className="scroll-thin min-h-0 flex-1 overflow-auto p-1.5" onKeyDown={onKey}>
+          {repos.length === 0 ? (
+            <p className="px-3 py-8 text-center text-[13px] text-muted">{query || filter !== "all" ? "Aucun dépôt ne correspond." : "Ce compte n'a encore aucun dépôt."}</p>
+          ) : (
+            repos.map((r) => {
+              const on = r.fullName === current?.fullName;
+              const n = deployedCount(r.fullName);
+              const ci = ciOf(r.fullName);
+              const urgent = urgentOf(r.fullName);
+              const st = ci === undefined ? null : ciState(ci ?? undefined);
+              return (
+                <button
+                  key={r.fullName}
+                  type="button"
+                  role="option"
+                  aria-selected={on}
+                  data-repo={r.fullName}
+                  tabIndex={on ? 0 : -1}
+                  onClick={() => onSelect(r.fullName)}
+                  className={`flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors ${FOCUS_RING} ${on ? "bg-accent/12" : "hover:bg-hover"}`}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className={`truncate text-[13px] ${on ? "font-semibold" : "font-medium"}`}>{r.name}</span>
+                    {r.private && <Lock size={11} className="shrink-0 text-muted" aria-label="privé" />}
+                    {r.archived && <Badge tone="warn">archivé</Badge>}
+                    <span className="ml-auto flex shrink-0 items-center gap-2">
+                      {urgent > 0 && (
+                        <span className="flex items-center gap-0.5 text-[11px] font-medium text-danger" title={`${urgent} alerte${urgent > 1 ? "s" : ""} de sécurité critique${urgent > 1 ? "s" : ""} ou haute${urgent > 1 ? "s" : ""}`}>
+                          <ShieldAlert size={11} aria-hidden />
+                          {urgent}
+                        </span>
+                      )}
+                      {st && st.label !== "aucune exécution" && (
+                        <span title={`Intégration continue (${r.defaultBranch}) : ${st.label}`} className="flex">
+                          <StatusDot tone={st.tone} pulse={st.running} className="size-2" />
+                        </span>
+                      )}
+                    </span>
+                    {n > 0 && (
+                      <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-ok" title={`Déployé : ${n} déploiement${n > 1 ? "s" : ""}`}>
+                        <Server size={11} aria-hidden />
+                        {n}
                       </span>
                     )}
                   </span>
-                  {n > 0 && (
-                    <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-ok" title={`Déployé : ${n} déploiement${n > 1 ? "s" : ""}`}>
-                      <Server size={11} aria-hidden />
-                      {n}
+                  {/* Le propriétaire reste entier ; c'est la branche qui se raccourcit (valeur complète en infobulle). */}
+                  <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted">
+                    <span className="max-w-[65%] shrink-0 truncate" title={r.owner}>
+                      {r.owner}
                     </span>
-                  )}
-                </span>
-                <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted">
-                  <span className="truncate">{r.owner}</span>
-                  <span className="text-faint">·</span>
-                  <span className="shrink-0 font-mono text-[11px]">{r.defaultBranch}</span>
-                  <span className="ml-auto shrink-0 text-faint">{agoOf(r.pushedAt)}</span>
-                </span>
-              </button>
-            );
-          })
-        )}
+                    <span className="text-faint">·</span>
+                    <span className="min-w-0 truncate font-mono text-[11px]" title={`Branche par défaut : ${r.defaultBranch}`}>
+                      {r.defaultBranch}
+                    </span>
+                    <span className="ml-auto shrink-0 pl-1 text-faint">{agoOf(r.pushedAt)}</span>
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </aside>
+      {/* Poignée entre la liste et le détail ; la liste empilée (fenêtre étroite) prend toute la largeur. */}
+      <div className="contents max-[1100px]:hidden">
+        <ResizeHandle {...width.handle} />
       </div>
-    </aside>
+    </>
   );
 }
 
 // ---- Détail ---------------------------------------------------------------------------------------
+
+/** Paire libellé/valeur du bandeau de chiffres ; `wide` : seulement quand la fenêtre a la place (jamais de tuile orpheline). */
+function Stat({ label, value, title, tone, wide }: { label: string; value: ReactNode; title?: string; tone?: "ok"; wide?: boolean }) {
+  return (
+    <div className={`flex shrink-0 items-baseline gap-1.5 px-3 first:pl-0 ${wide ? "max-[1400px]:hidden" : ""}`} title={title}>
+      <span className="text-xs text-muted">{label}</span>
+      <span className={`text-[13px] font-medium tabular-nums ${tone === "ok" ? "text-ok" : "text-fg"}`}>{value}</span>
+    </div>
+  );
+}
+
+/** Une ligne d'état (attente, erreur, rien trouvé) dans la section des déploiements. */
+function Line({ icon, children, action, tone }: { icon: ReactNode; children: ReactNode; action?: ReactNode; tone?: "danger" }) {
+  return (
+    <div className={`flex min-h-7 min-w-0 items-center gap-2 px-1 text-xs ${tone === "danger" ? "text-danger" : "text-muted"}`}>
+      <span className="shrink-0 text-faint">{icon}</span>
+      <span className="min-w-0 truncate">{children}</span>
+      {action}
+    </div>
+  );
+}
 
 function RepoDetail({
   repo,
@@ -678,14 +714,14 @@ function RepoDetail({
     .map(({ s }) => s.name);
 
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-6 px-7 py-6">
-      <header className="flex flex-wrap items-start gap-x-4 gap-y-3">
+    <div className="flex flex-col gap-4 px-5 py-4">
+      <header className="flex flex-wrap items-start gap-x-4 gap-y-2">
         <div className="min-w-0 flex-1">
-          <div className="text-xs text-muted">{repo.owner}</div>
-          <h2 id="github-repo-title" tabIndex={-1} className="truncate rounded text-lg font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-accent">
-            {repo.name}
-          </h2>
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <h2 id="github-repo-title" tabIndex={-1} className="min-w-0 truncate rounded text-base font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-accent" title={repo.fullName}>
+              <span className="font-normal text-muted">{repo.owner} / </span>
+              {repo.name}
+            </h2>
             <Badge tone={repo.private ? "warn" : "muted"}>
               {repo.private && <Lock size={10} />}
               {repo.private ? "privé" : "public"}
@@ -694,95 +730,125 @@ function RepoDetail({
             {repo.archived && <Badge tone="warn">archivé</Badge>}
             {insights.alerts?.data && <AlertBadges alerts={insights.alerts.data} />}
           </div>
-          <p className={`mt-2.5 max-w-prose text-[13px] leading-relaxed ${repo.description ? "text-muted" : "text-faint"}`}>{repo.description ?? "Pas de description."}</p>
+          {repo.description && (
+            <p className="mt-0.5 max-w-[90ch] truncate text-xs text-muted" title={repo.description}>
+              {repo.description}
+            </p>
+          )}
         </div>
-        <div className="flex shrink-0 gap-2">
-          <Button icon={<ExternalLink size={14} />} onClick={() => openRepo(repo)}>
+        <div className="flex shrink-0 gap-1.5">
+          <Button size="sm" icon={<ExternalLink size={13} />} onClick={() => openRepo(repo)}>
             Ouvrir sur GitHub
           </Button>
-          <Button variant="primary" icon={<Rocket size={14} />} disabled={targets.length === 0} title={targets.length ? undefined : "Connecte d'abord un serveur SSH"} onClick={onClone}>
+          <Button size="sm" variant="primary" icon={<Rocket size={13} />} disabled={targets.length === 0} title={targets.length ? undefined : "Connecte d'abord un serveur SSH"} onClick={onClone}>
             Cloner sur un serveur
           </Button>
         </div>
       </header>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
-        <StatTile label="Dernier push" value={agoOf(repo.pushedAt)} />
-        <StatTile label="Branche par défaut" value={<span className="font-mono text-lg">{repo.defaultBranch}</span>} />
-        <StatTile label="Dernière version" value={<span className="font-mono text-lg">{insights.release?.error ? "—" : rel === undefined ? "…" : (rel?.tag ?? "—")}</span>} hint={insights.release?.error ? "non lisible" : rel ? agoOf(rel.publishedAt) : rel === null ? "aucune version publiée" : undefined} />
-        <StatTile label="Tickets ouverts" value={count(insights.issues)} hint={insights.issues?.error ? "non lisible" : undefined} />
-        <StatTile label="Pull requests ouvertes" value={count(insights.pulls, 30)} hint={insights.pulls?.error ? "non lisible" : undefined} />
-        <StatTile label="Déploiements" value={pending && found.length === 0 ? "…" : found.length} tone={found.length ? "ok" : undefined} hint={targets.length ? `sur ${targets.length} serveur${targets.length > 1 ? "s" : ""} examiné${targets.length > 1 ? "s" : ""}` : "aucun serveur connecté"} />
+      <div className="flex min-w-0 flex-nowrap items-center divide-x divide-border overflow-hidden border-y border-border py-2" role="group" aria-label="Chiffres du dépôt">
+        <Stat
+          label="Déploiements"
+          value={pending && found.length === 0 ? "…" : found.length}
+          tone={found.length ? "ok" : undefined}
+          title={targets.length ? `Sur ${targets.length} serveur${targets.length > 1 ? "s" : ""} examiné${targets.length > 1 ? "s" : ""}` : "Aucun serveur connecté"}
+        />
+        <Stat label="Push" value={agoOf(repo.pushedAt)} />
+        <Stat label="Branche" value={<span className="font-mono text-xs">{repo.defaultBranch}</span>} wide />
+        <Stat
+          label="Version"
+          value={<span className="font-mono text-xs">{insights.release?.error ? "—" : rel === undefined ? "…" : (rel?.tag ?? "aucune")}</span>}
+          title={insights.release?.error ? "Non lisible" : rel ? `Publiée ${agoOf(rel.publishedAt)}` : undefined}
+        />
+        <Stat label="Tickets" value={count(insights.issues)} wide />
+        <Stat label="PR" value={count(insights.pulls, 30)} title="Pull requests ouvertes" />
       </div>
 
-      <Fold
-        title="Déploiements"
-        count={found.length || undefined}
-        description="Clones sous /srv, /opt, /var/www et le dossier personnel, images GHCR et projets compose."
-        actions={
-          targets.length > 0 && (
-            <Button size="sm" variant="ghost" icon={<RefreshCw size={13} className={pending ? "animate-spin" : ""} />} disabled={pending} onClick={() => targets.forEach((s) => onScan(s.id))}>
-              Rechercher à nouveau
-            </Button>
-          )
-        }
-      >
-        {targets.length === 0 ? (
-          <Card className="border-dashed">
-            <EmptyState icon={<Server />} title="Aucun serveur connecté" action={<Button onClick={() => navigate("servers")}>Voir les serveurs</Button>}>
-              Connecte un serveur SSH pour voir où ce dépôt est déployé et le mettre à jour.
-            </EmptyState>
-          </Card>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {results.map(({ s, r }) =>
-              !r || r.loading ? (
-                <Card key={s.id} className="flex items-center gap-3 text-[13px]">
-                  <Avatar name={s.name} color={s.color} size={28} />
-                  <span className="font-medium">{s.name}</span>
-                  <span className="flex items-center gap-1.5 text-muted">
-                    <Loader2 size={13} className="animate-spin" /> Recherche des clones…
-                  </span>
-                </Card>
-              ) : r.error ? (
-                <ErrorState key={s.id} message={<><strong className="font-semibold">{s.name} injoignable.</strong> {r.error}</>} onRetry={() => onScan(s.id)} />
-              ) : null,
+      {/* 1 colonne ; 2 dès 1400 px (déploiements | activité) ; à 2200 px l'activité se partage elle-même en 2. */}
+      <div className="grid grid-cols-1 items-start gap-x-6 gap-y-5 min-[1400px]:grid-cols-2 min-[2200px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <div className="flex min-w-0 flex-col gap-5">
+          <Fold
+            title="Déploiements serveurs"
+            count={found.length || undefined}
+            hint="Clones sous /srv, /opt, /var/www et le dossier personnel, images GHCR et projets compose"
+            actions={targets.length > 0 && <ReloadButton title="Rechercher à nouveau sur les serveurs" slot={{ loading: pending }} onReload={() => targets.forEach((s) => onScan(s.id))} />}
+          >
+            {targets.length === 0 ? (
+              <Line icon={<Server size={12} />} action={<Button size="sm" variant="ghost" onClick={() => navigate("servers")}>Voir les serveurs</Button>}>
+                Aucun serveur SSH connecté.
+              </Line>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {results.map(({ s, r }) =>
+                  !r || r.loading ? (
+                    <Line key={s.id} icon={<Loader2 size={12} className="animate-spin" />}>
+                      {s.name} : recherche des clones…
+                    </Line>
+                  ) : r.error ? (
+                    <Line key={s.id} tone="danger" icon={<Server size={12} />} action={<Button size="sm" variant="ghost" onClick={() => onScan(s.id)}>Réessayer</Button>}>
+                      <span title={r.error}>
+                        {s.name} injoignable : {r.error}
+                      </span>
+                    </Line>
+                  ) : null,
+                )}
+                {clones.map(({ s, c }) => (
+                  <CloneCard key={`${s.id}:${c.path}`} repo={repo} server={s} clone={c} onReplace={(nc) => onReplace(s.id, nc)} />
+                ))}
+                {images.map(({ s, d }) => (
+                  <ImageCard key={`${s.id}:${d.kind}:${d.project ?? d.containers[0]?.name ?? d.path}`} server={s} dep={d} />
+                ))}
+                {!pending && found.length === 0 && (
+                  <Line icon={<Rocket size={12} />} action={<Button size="sm" variant="ghost" onClick={onClone}>Cloner sur un serveur</Button>}>
+                    Pas encore déployé{empty.length ? ` sur ${empty.join(", ")}` : ""}.
+                  </Line>
+                )}
+                {found.length > 0 && empty.length > 0 && <p className="px-1 text-xs text-faint">Rien sur {empty.join(", ")}.</p>}
+              </div>
             )}
-            {clones.map(({ s, c }) => (
-              <CloneCard key={`${s.id}:${c.path}`} repo={repo} server={s} clone={c} onReplace={(nc) => onReplace(s.id, nc)} />
-            ))}
-            {images.map(({ s, d }) => (
-              <ImageCard key={`${s.id}:${d.kind}:${d.project ?? d.containers[0]?.name ?? d.path}`} server={s} dep={d} />
-            ))}
-            {!pending && found.length === 0 && (
-              <Card className="border-dashed">
-                <EmptyState icon={<Rocket />} title="Pas encore déployé" action={<Button variant="primary" onClick={onClone}>Cloner sur un serveur</Button>}>
-                  Aucun clone de {repo.name} sur {empty.join(", ") || "tes serveurs"}.
-                </EmptyState>
-              </Card>
-            )}
-            {found.length > 0 && empty.length > 0 && <p className="text-xs text-faint">Rien trouvé sur {empty.join(", ")}.</p>}
-          </div>
-        )}
-        <GhDeploymentsBlock repo={repo} slot={insights.deployments} onReload={() => onReloadInsight("deployments")} />
-      </Fold>
-      <CiSection repo={repo} slot={insights.ci} onReload={() => onReloadInsight("ci")} />
-      <PullsSection repo={repo} slot={insights.pulls} onReload={() => onReloadInsight("pulls")} />
-      <IssuesSection repo={repo} slot={insights.issues} onReload={() => onReloadInsight("issues")} />
-      <AlertsSection repo={repo} slot={insights.alerts} onReload={() => onReloadInsight("alerts")} />
+          </Fold>
+          <GhDeploymentsSection repo={repo} slot={insights.deployments} onReload={() => onReloadInsight("deployments")} />
+        </div>
+        <div className="flex min-w-0 flex-col gap-5 min-[2200px]:grid min-[2200px]:grid-cols-2 min-[2200px]:items-start">
+          <CiSection repo={repo} slot={insights.ci} onReload={() => onReloadInsight("ci")} />
+          <PullsSection repo={repo} slot={insights.pulls} onReload={() => onReloadInsight("pulls")} />
+          <IssuesSection repo={repo} slot={insights.issues} onReload={() => onReloadInsight("issues")} />
+          <AlertsSection repo={repo} slot={insights.alerts} onReload={() => onReloadInsight("alerts")} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** En-tête d'une carte de déploiement : serveur, chemin, et un élément à droite. */
+function CardHead({ server, label, path, right }: { server: ServerView; label?: ReactNode; path?: string | null; right?: ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2 px-3 pt-2.5">
+      <Avatar name={server.name} color={server.color} size={22} />
+      <span className="shrink-0 text-[13px] font-medium">{server.name}</span>
+      {label && <span className="shrink-0 text-xs text-muted">{label}</span>}
+      {path && (
+        <span className="min-w-0 truncate font-mono text-xs text-muted select-text" title={path}>
+          {path}
+        </span>
+      )}
+      {right && <span className="ml-auto flex min-w-0 shrink-0 items-center">{right}</span>}
     </div>
   );
 }
 
 function CloneCard({ repo, server, clone: c, onReplace }: { repo: GithubRepo; server: ServerView; clone: GithubClone; onReplace: (c: GithubClone) => void }) {
   const { notify, ask } = useAppPick("notify", "ask");
-  const [busy, setBusy] = useState<"pull" | "fetch" | null>(null);
+  const [busy, setBusy] = useState<"pull" | "fetch" | "remote" | null>(null);
   const behind = c.aheadBehind?.[1] ?? 0;
-  const run = async (kind: "pull" | "fetch", ok: string) => {
+  const run = async (kind: "pull" | "fetch" | "remote", ok: string) => {
     setBusy(kind);
     try {
-      if (kind === "pull") await api.githubPull(server.id, repo.owner, repo.name, c.path);
-      onReplace(await api.githubCloneState(server.id, repo.owner, repo.name, c.path, kind === "fetch"));
+      if (kind === "remote") onReplace(await api.githubSetRemote(server.id, repo.owner, repo.name, c.path));
+      else {
+        if (kind === "pull") await api.githubPull(server.id, repo.owner, repo.name, c.path);
+        onReplace(await api.githubCloneState(server.id, repo.owner, repo.name, c.path, kind === "fetch"));
+      }
       notify(ok, "success");
     } catch (e) {
       notify(errorMessage(e), "error");
@@ -796,48 +862,64 @@ function CloneCard({ repo, server, clone: c, onReplace }: { repo: GithubRepo; se
       (c.dirty ? ` Attention, ${c.dirty} fichier(s) modifié(s) sur le serveur peuvent la bloquer.` : "");
     if (await ask({ title: `Mettre à jour ${repo.name} ?`, body, confirmLabel: "Faire le pull" })) await run("pull", `${repo.name} mis à jour sur ${server.name}.`);
   };
+  const oldName = c.oldRemote ? oldRemoteName(c.oldRemote) : null;
+  const setRemote = async () => {
+    const url = `https://github.com/${repo.owner}/${repo.name}.git`;
+    const body = `git remote set-url origin ${url} dans ${c.path} sur ${server.name}. Seule l'URL change : ni les fichiers ni l'historique.`;
+    if (await ask({ title: "Mettre à jour l'URL du remote ?", body, confirmLabel: "Mettre à jour" })) await run("remote", `Remote de ${c.path} mis à jour sur ${server.name}.`);
+  };
   return (
     <Card padded={false}>
-      <div className="flex items-start gap-3 px-4 pt-3.5">
-        <Avatar name={server.name} color={server.color} size={30} />
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium">{server.name}</div>
-          <div className="truncate font-mono text-xs text-muted select-text" title={c.path}>
-            {c.path}
-          </div>
-        </div>
-        <Badge title="Branche du clone">
-          <GitBranch size={10} />
-          {c.branch}
-        </Badge>
+      <CardHead
+        server={server}
+        path={c.path}
+        right={
+          <span className="flex max-w-40 min-w-0 items-center gap-1 font-mono text-[11px] text-muted" title={`Branche du clone : ${c.branch}`}>
+            <GitBranch size={11} className="shrink-0" aria-hidden />
+            <span className="truncate">{c.branch}</span>
+          </span>
+        }
+      />
+      <div className="flex min-w-0 items-center gap-1.5 px-3 pt-1.5 text-xs text-muted">
+        <GitCommitHorizontal size={13} className="shrink-0 text-faint" aria-hidden />
+        <span className="shrink-0 font-mono text-fg/80">{c.commit || "—"}</span>
+        <span className="truncate select-text" title={c.subject}>
+          {c.subject}
+        </span>
+        <span className="ml-auto shrink-0 pl-2 text-faint">{agoOf(c.commitDate)}</span>
       </div>
-      <div className="flex flex-wrap gap-1.5 px-4 pt-3" title="Avance et retard datent du dernier fetch : « Comparer » interroge GitHub.">
+      <div className="flex flex-wrap gap-1.5 px-3 pt-2" title="Avance et retard datent du dernier fetch : « Comparer » interroge GitHub.">
         {cloneSync(c).map((x) => (
           <Badge key={x.label} tone={x.tone}>
             {x.label}
           </Badge>
         ))}
       </div>
-      <div className="flex min-w-0 items-center gap-1.5 px-4 pt-2 pb-3 text-xs text-muted">
-        <GitCommitHorizontal size={13} className="shrink-0 text-faint" />
-        <span className="shrink-0 font-mono text-fg/80">{c.commit || "—"}</span>
-        <span className="truncate select-text">{c.subject}</span>
-        <span className="ml-auto shrink-0 pl-2 text-faint">{agoOf(c.commitDate)}</span>
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 border-t border-border px-3 py-2">
+      {oldName && (
+        <div className="mx-3 mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-warn/10 px-2.5 py-1 text-xs text-warn" title={`origin pointe vers ${c.oldRemote} ; GitHub redirige vers ${repo.fullName}`}>
+          <TriangleAlert size={12} className="shrink-0" aria-hidden />
+          <span className="min-w-0">
+            Remote encore sur l'ancien nom <span className="font-mono">{oldName}</span>
+          </span>
+          <Button size="sm" variant="ghost" className="ml-auto" loading={busy === "remote"} disabled={!!busy} onClick={() => void setRemote()}>
+            Mettre à jour l'URL du remote
+          </Button>
+        </div>
+      )}
+      <div className="mt-2 flex items-center gap-1.5 border-t border-border px-2 py-1.5">
         <Button size="sm" variant={behind ? "primary" : "outline"} icon={<GitPullRequestArrow size={13} />} loading={busy === "pull"} disabled={!!busy} onClick={() => void pull()}>
           Pull
         </Button>
-        <Button size="sm" icon={<RefreshCw size={13} />} loading={busy === "fetch"} disabled={!!busy} title="git fetch, puis recalcule l'avance et le retard" onClick={() => void run("fetch", "Comparaison avec GitHub à jour.")}>
+        <Button size="sm" variant="ghost" icon={<RefreshCw size={13} />} loading={busy === "fetch"} disabled={!!busy} title="git fetch, puis recalcule l'avance et le retard" onClick={() => void run("fetch", "Comparaison avec GitHub à jour.")}>
           Comparer
         </Button>
         <span className="flex-1" />
-        <Button size="sm" variant="ghost" icon={<SquareTerminal size={13} />} onClick={() => openTerminal(server.id, repo.name, c.path)}>
-          Terminal ici
-        </Button>
-        <Button size="sm" variant="ghost" icon={<FolderOpen size={13} />} onClick={() => openFiles(server.id, c.path)}>
-          Fichiers
-        </Button>
+        <IconButton size="sm" title="Terminal dans ce dossier" onClick={() => openTerminal(server.id, repo.name, c.path)}>
+          <SquareTerminal size={14} />
+        </IconButton>
+        <IconButton size="sm" title="Ouvrir dans Fichiers" onClick={() => openFiles(server.id, c.path)}>
+          <FolderOpen size={14} />
+        </IconButton>
       </div>
     </Card>
   );
@@ -849,48 +931,45 @@ function ImageCard({ server, dep }: { server: ServerView; dep: GithubDeployment 
   const title = dep.project ?? dep.containers[0]?.name ?? "Conteneur";
   return (
     <Card padded={false} className={probable ? "border-dashed" : undefined}>
-      <div className="flex items-start gap-3 px-4 pt-3.5">
-        <Avatar name={server.name} color={server.color} size={30} />
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium">
-            {server.name} <span className="font-normal text-muted">· {probable ? "projet compose" : "images Docker"} {title}</span>
-          </div>
-          {dep.path && (
-            <div className="truncate font-mono text-xs text-muted select-text" title={dep.path}>
-              {dep.path}
-            </div>
-          )}
-        </div>
-        <Badge tone={probable ? "warn" : "ok"} title={probable ? "Déduit du nom du dossier, sans preuve" : "L'image ou son label désigne ce dépôt"}>
-          {probable ? "probable" : "certain"}
-        </Badge>
-      </div>
-      {probable && <p className="px-4 pt-2 text-xs text-muted">Dossier compose au même nom que le dépôt : à vérifier.</p>}
-      <ul className="flex flex-col gap-1.5 px-4 py-3">
+      <CardHead
+        server={server}
+        label={`${probable ? "compose" : "images"} ${title}`}
+        path={dep.path}
+        right={
+          <Badge tone={probable ? "warn" : "ok"} title={probable ? "Dossier compose au même nom que le dépôt, sans preuve : à vérifier" : "L'image ou son label désigne ce dépôt"}>
+            {probable ? "probable" : "certain"}
+          </Badge>
+        }
+      />
+      <ul className="flex flex-col px-3 py-1.5">
         {dep.containers.map((c) => (
-          <li key={c.name} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <li key={c.name} className="flex h-7 min-w-0 items-center gap-2 text-xs">
             <Badge tone={containerTone(c.state)}>{c.state}</Badge>
-            <span className="font-medium text-fg">{c.name}</span>
+            <span className="shrink-0 font-medium text-fg">{c.name}</span>
             <span className="min-w-0 truncate font-mono text-muted select-text" title={c.image}>
               {c.image.replace(/^ghcr\.io\//i, "")}
             </span>
-            {c.sha && <Badge title={`Étiquette = SHA de commit ${c.sha}`}>commit {c.sha}</Badge>}
+            {c.sha && (
+              <span className="shrink-0 font-mono text-[11px] text-faint" title={`Étiquette = SHA de commit ${c.sha}`}>
+                {c.sha}
+              </span>
+            )}
             <span className="ml-auto shrink-0 text-faint" title="Création du conteneur">
               {agoOf(c.created)}
             </span>
           </li>
         ))}
-        {dep.containers.length === 0 && <li className="text-xs text-faint">Aucun conteneur.</li>}
+        {dep.containers.length === 0 && <li className="flex h-7 items-center text-xs text-faint">Aucun conteneur.</li>}
       </ul>
-      <div className="flex flex-wrap items-center gap-1.5 border-t border-border px-3 py-2">
-        <Button size="sm" icon={<Container size={13} />} onClick={() => navigate("docker", dep.project ? "compose" : "containers", server.id)}>
+      <div className="flex items-center gap-1.5 border-t border-border px-2 py-1.5">
+        <Button size="sm" variant="ghost" icon={<Container size={13} />} onClick={() => navigate("docker", dep.project ? "compose" : "containers", server.id)}>
           Voir dans Docker
         </Button>
         <span className="flex-1" />
         {dep.path && (
-          <Button size="sm" variant="ghost" icon={<FolderOpen size={13} />} onClick={() => openFiles(server.id, dep.path!)}>
-            Fichiers
-          </Button>
+          <IconButton size="sm" title="Ouvrir dans Fichiers" onClick={() => openFiles(server.id, dep.path!)}>
+            <FolderOpen size={14} />
+          </IconButton>
         )}
       </div>
     </Card>
