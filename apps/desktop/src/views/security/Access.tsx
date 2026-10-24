@@ -46,7 +46,7 @@ export default function Access({ serverId, onCount }: { serverId: string; onCoun
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2 text-[13px] text-muted">
-        Comptes pouvant se connecter (root et utilisateurs avec un shell) et clés SSH autorisées.
+        Comptes avec un shell (root compris) et leurs clés SSH autorisées.
         <IconButton title="Actualiser" className="ml-auto" onClick={() => void load()}>
           <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
         </IconButton>
@@ -61,7 +61,7 @@ export default function Access({ serverId, onCount }: { serverId: string; onCoun
                 <ShieldCheck size={11} className="mr-1" /> {u.uid === 0 ? "root" : "sudo"}
               </Badge>
             )}
-            <span className="text-xs text-muted">
+            <span className="min-w-0 truncate text-xs text-muted">
               {u.home} · {u.shell} · dernière connexion : {u.lastLogin || "inconnue"}
             </span>
             <Button size="sm" className="ml-auto" icon={<Plus size={13} />} onClick={() => setAdding(u.name)}>
@@ -73,13 +73,16 @@ export default function Access({ serverId, onCount }: { serverId: string; onCoun
           ) : (
             <ul className="divide-y divide-border/50">
               {u.keys.map((k) => (
-                <li key={k.line} className="flex items-center gap-3 px-4 py-2 text-[13px]">
+                <li key={k.line} className="flex items-center gap-3 px-4 py-1.5 text-[13px]">
                   <KeyRound size={14} className={k.current ? "text-accent" : "text-muted"} />
                   <span className="w-28 font-mono text-xs">{k.algorithm}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{k.comment || <span className="text-muted">(sans commentaire)</span>}</span>
-                    <span className="block truncate font-mono text-[11px] text-muted">{k.fingerprint}</span>
-                    {k.options && <span className="block truncate font-mono text-[11px] text-warn">{k.options}</span>}
+                  {/* Commentaire, empreinte et options en colonnes quand la place le permet. */}
+                  <span className="flex min-w-0 flex-1 flex-col @4xl:flex-row @4xl:items-center @4xl:gap-4">
+                    <span className="truncate @4xl:flex-1">{k.comment || <span className="text-muted">(sans commentaire)</span>}</span>
+                    <span className="truncate font-mono text-[11px] text-muted @4xl:flex-[1.4]" title={k.fingerprint}>
+                      {k.fingerprint}
+                    </span>
+                    {k.options && <span className="truncate font-mono text-[11px] text-warn @4xl:flex-1" title={k.options}>{k.options}</span>}
                   </span>
                   {k.current && <Badge tone="accent">clé de Zenytt</Badge>}
                   {!k.current && (

@@ -55,7 +55,7 @@ export default function Firewall({ serverId, onCount, onAudit }: { serverId: str
   const exposed = state.exposures.filter((e) => e.status === "open");
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex min-w-0 flex-col gap-4">
       <div className="flex items-center gap-2 text-[13px]">
         <BrickWall size={15} className="text-muted" />
         {state.kind === "none" ? (
@@ -78,86 +78,97 @@ export default function Firewall({ serverId, onCount, onAudit }: { serverId: str
         </IconButton>
       </div>
 
-      <section className="rounded-xl border border-border bg-panel">
-        <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-          <Globe size={14} />
-          <span className="text-[13px] font-semibold">Ports en écoute</span>
-          <span className="text-xs text-muted">· {exposed.length} joignable(s) depuis Internet</span>
-        </header>
-        <table className="w-full text-[13px]">
-          <tbody>
-            {state.exposures.map((e) => (
-              <tr key={`${e.proto}${e.port}${e.public}`} className="border-t border-border/50 align-top first:border-t-0">
-                <td className="w-24 px-4 py-2 font-mono text-xs">
-                  {e.port}/{e.proto}
-                </td>
-                <td className="w-24 px-2 py-2">
-                  <Badge tone={STATUS[e.status].tone}>{STATUS[e.status].label}</Badge>
-                </td>
-                <td className="w-44 px-2 py-2 text-xs">{e.owner || <span className="text-muted">inconnu</span>}</td>
-                <td className={`px-2 py-2 text-xs ${e.docker && e.status === "open" && state.active ? "text-warn" : "text-muted"}`}>{e.note}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-
-      {state.kind === "ufw" && (
-        <section className="rounded-xl border border-border bg-panel">
+      {/* Ports et règles côte à côte sur grand écran, empilés sinon. */}
+      <div className="grid min-w-0 items-start gap-4 @6xl:grid-cols-2">
+        <section className="min-w-0 overflow-hidden rounded-xl border border-border bg-panel">
           <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-            <Lock size={14} />
-            <span className="text-[13px] font-semibold">Règles ufw</span>
-            {state.sshPorts.length > 0 && <span className="text-xs text-muted">· SSH sur le port {state.sshPorts.join(", ")} (règles protégées)</span>}
+            <Globe size={14} />
+            <span className="text-[13px] font-semibold">Ports en écoute</span>
+            <span className="text-xs text-muted">· {exposed.length} joignable(s) depuis Internet</span>
           </header>
-          {state.rules.length === 0 ? (
-            <p className="px-4 py-3 text-[13px] text-muted">Aucune règle.</p>
-          ) : (
-            <ul className="divide-y divide-border/50">
-              {state.rules.map((r) => (
-                <li key={r.num} className="flex items-center gap-3 px-4 py-1.5 text-[13px]">
-                  <span className="w-8 text-xs text-muted">#{r.num}</span>
-                  <span className="w-56 font-mono text-xs">{r.to}</span>
-                  <Badge tone={r.action.startsWith("ALLOW") || r.action.startsWith("LIMIT") ? "ok" : "danger"}>{r.action}</Badge>
-                  <span className="text-xs text-muted">depuis {r.from}</span>
-                  <IconButton
-                    className="ml-auto"
-                    title="Supprimer la règle"
-                    onClick={async () => {
-                      if (await ask({ title: `Supprimer la règle #${r.num} ?`, code: `${r.to}  ${r.action}  ${r.from}`, confirmLabel: "Supprimer", danger: true }))
-                        void run(() => api.fwDelete(serverId, r.num), `Règle #${r.num} supprimée`);
-                    }}
-                  >
-                    <Trash2 size={14} />
-                  </IconButton>
-                </li>
+          <table className="w-full table-fixed text-[13px]">
+            <thead className="border-b border-border bg-subtle text-left text-xs text-muted">
+              <tr>
+                <th className="w-24 px-4 py-1.5 font-medium">Port</th>
+                <th className="w-24 px-2 py-1.5 font-medium">État</th>
+                <th className="w-44 px-2 py-1.5 font-medium">Processus</th>
+                <th className="px-2 py-1.5 font-medium">Détail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.exposures.map((e) => (
+                <tr key={`${e.proto}${e.port}${e.public}`} className="border-t border-border/50 align-top first:border-t-0">
+                  <td className="px-4 py-1.5 font-mono text-xs">
+                    {e.port}/{e.proto}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <Badge tone={STATUS[e.status].tone}>{STATUS[e.status].label}</Badge>
+                  </td>
+                  <td className="truncate px-2 py-1.5 text-xs" title={e.owner || undefined}>{e.owner || <span className="text-muted">inconnu</span>}</td>
+                  <td className={`px-2 py-1.5 text-xs ${e.docker && e.status === "open" && state.active ? "text-warn" : "text-muted"}`}>{e.note}</td>
+                </tr>
               ))}
-            </ul>
-          )}
-          <form
-            className="flex items-center gap-2 border-t border-border px-4 py-2.5"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const p = Number(port);
-              if (!Number.isInteger(p) || p < 1 || p > 65535) return notify("Port invalide.", "error");
-              void run(() => api.fwAllow(serverId, p, proto), `Port ${p}/${proto} ouvert`).then(() => setPort(""));
-            }}
-          >
-            <span className="text-[13px]">Ouvrir un port :</span>
-            <Input className="!w-24 font-mono" placeholder="8080" value={port} onChange={(e) => setPort(e.target.value)} />
-            <Select aria-label="Protocole" value={proto} onChange={setProto} options={[{ value: "tcp", label: "tcp" }, { value: "udp", label: "udp" }]} />
-            <Button size="sm" icon={<Plus size={13} />} type="submit" disabled={!port}>
-              Autoriser
-            </Button>
-          </form>
+            </tbody>
+          </table>
         </section>
-      )}
 
-      {state.kind === "firewalld" && state.raw && (
-        <section className="rounded-xl border border-border bg-panel p-4">
-          <h2 className="mb-2 text-[13px] font-semibold">Configuration firewalld (lecture seule)</h2>
-          <pre className="overflow-auto rounded-md bg-bg p-3 font-mono text-xs whitespace-pre-wrap">{state.raw}</pre>
-        </section>
-      )}
+        {state.kind === "ufw" && (
+          <section className="min-w-0 overflow-hidden rounded-xl border border-border bg-panel">
+            <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+              <Lock size={14} />
+              <span className="text-[13px] font-semibold">Règles ufw</span>
+              {state.sshPorts.length > 0 && <span className="truncate text-xs text-muted">· SSH sur le port {state.sshPorts.join(", ")} (règles protégées)</span>}
+            </header>
+            {state.rules.length === 0 ? (
+              <p className="px-4 py-3 text-[13px] text-muted">Aucune règle.</p>
+            ) : (
+              <ul className="divide-y divide-border/50">
+                {state.rules.map((r) => (
+                  <li key={r.num} className="grid grid-cols-[2.5rem_minmax(0,1.4fr)_6.5rem_minmax(0,1fr)_2rem] items-center gap-3 py-1 pr-2 pl-4 text-[13px]">
+                    <span className="text-xs text-muted tabular-nums">#{r.num}</span>
+                    <span className="truncate font-mono text-xs" title={r.to}>{r.to}</span>
+                    <Badge tone={r.action.startsWith("ALLOW") || r.action.startsWith("LIMIT") ? "ok" : "danger"}>{r.action}</Badge>
+                    <span className="truncate text-xs text-muted" title={r.from}>depuis {r.from}</span>
+                    <IconButton
+                      size="sm"
+                      title="Supprimer la règle"
+                      onClick={async () => {
+                        if (await ask({ title: `Supprimer la règle #${r.num} ?`, code: `${r.to}  ${r.action}  ${r.from}`, confirmLabel: "Supprimer", danger: true }))
+                          void run(() => api.fwDelete(serverId, r.num), `Règle #${r.num} supprimée`);
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </IconButton>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form
+              className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-2.5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const p = Number(port);
+                if (!Number.isInteger(p) || p < 1 || p > 65535) return notify("Port invalide.", "error");
+                void run(() => api.fwAllow(serverId, p, proto), `Port ${p}/${proto} ouvert`).then(() => setPort(""));
+              }}
+            >
+              <span className="text-[13px]">Ouvrir un port :</span>
+              <Input className="!w-24 font-mono" placeholder="8080" value={port} onChange={(e) => setPort(e.target.value)} />
+              <Select aria-label="Protocole" value={proto} onChange={setProto} options={[{ value: "tcp", label: "tcp" }, { value: "udp", label: "udp" }]} />
+              <Button size="sm" icon={<Plus size={13} />} type="submit" disabled={!port}>
+                Autoriser
+              </Button>
+            </form>
+          </section>
+        )}
+
+        {state.kind === "firewalld" && state.raw && (
+          <section className="min-w-0 rounded-xl border border-border bg-panel p-4">
+            <h2 className="mb-2 text-[13px] font-semibold">Configuration firewalld (lecture seule)</h2>
+            <pre className="overflow-auto rounded-md bg-bg p-3 font-mono text-xs whitespace-pre-wrap">{state.raw}</pre>
+          </section>
+        )}
+      </div>
     </div>
   );
 }

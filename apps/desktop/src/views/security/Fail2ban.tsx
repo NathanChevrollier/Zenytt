@@ -153,7 +153,7 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
   const shownEvents = (events ?? []).map((e, i) => ({ ...e, unban: unbans.get(i) })).filter((e) => eventFilter === "all" || (eventFilter === "ban" ? e.kind === "ban" || e.kind === "restore" || e.kind === "unban" : e.kind === "found"));
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex min-w-0 flex-col gap-4">
       <div className="flex items-center gap-2 text-[13px] text-muted">
         fail2ban {state.version} · {jails.length} jail(s) actif(s)
         <Button size="sm" className="ml-auto" icon={<Settings2 size={13} />} onClick={() => setSettingsOpen(true)}>
@@ -211,159 +211,166 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
         </div>
       )}
 
-      {jails.map((j) => (
-        <section key={j.name} className="rounded-xl border border-border bg-panel">
-          <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
-            <span className="font-medium">{jailLabel(j.name)}</span>
-            <Badge tone={j.currentlyBanned ? "danger" : "ok"}>{j.currentlyBanned} bannie(s)</Badge>
-            <span className="ml-auto text-xs text-muted">
-              {j.name in MANUAL_JAILS
-                ? `${j.totalBanned} bannissement(s) manuel(s)`
-                : `Bannissement de ${banDurationText(j.bantime)} après ${j.maxretry} échec(s) en ${banDurationText(j.findtime)} · ${j.totalBanned} bannissement(s) depuis le démarrage · ${j.currentlyFailed} échec(s) en cours`}
-            </span>
-          </header>
-          {j.banned.length === 0 ? (
-            <p className="px-4 py-3 text-[13px] text-muted">Aucune adresse bannie.</p>
-          ) : (
-            <ul className="divide-y divide-border/50">
-              {j.banned.map((ip) => (
-                <li key={ip} className="flex items-center gap-3 px-4 py-2 text-[13px]">
-                  <button type="button" className="shrink-0 font-mono hover:text-accent" title="Détails et tentatives" onClick={() => setDetail(ip)}>
-                    {ip}
-                  </button>
-                  {ip === myIp && <Badge tone="danger">ton IP</Badge>}
-                  <IpTags ip={ip} compact recidivist={recidOf.get(ip)} />
-                  <BanEnd until={banEnd(j, ip)} />
-                  <span className="ml-auto flex shrink-0 items-center gap-1">
-                    <Button size="sm" onClick={() => void unban(j.name, ip)}>
-                      Débloquer
-                    </Button>
-                    <MenuButton size="sm" title="Plus d'actions" items={() => ipMenu(j.name, ip)} />
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      ))}
-
-      {topAttackers.length > 0 && (
-        <section className="flex flex-col gap-2 rounded-lg border border-border bg-panel p-4">
-          <h2 className="font-medium">Les plus insistants</h2>
-          <p className="text-xs text-muted">Tentatives repérées par fail2ban dans son journal récent.</p>
-          <ul className="flex flex-col gap-1">
-            {topAttackers.map(([ip, n]) => (
-              <li key={ip} className="flex items-center gap-3 text-[13px]">
-                <span className="w-12 shrink-0 text-right font-semibold tabular-nums">{n}</span>
-                <button type="button" className="shrink-0 font-mono hover:text-accent" onClick={() => setDetail(ip)}>
-                  {ip}
-                </button>
-                <IpTags ip={ip} compact recidivist={recidOf.get(ip)} />
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <section className="flex flex-col gap-3 rounded-lg border border-border bg-panel p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="font-medium">Journal</h2>
-          <Segmented
-            size="sm"
-            className="ml-auto"
-            label="Événements affichés"
-            value={eventFilter}
-            onChange={setEventFilter}
-            options={[
-              { value: "ban", label: "Bannissements" },
-              { value: "found", label: "Tentatives" },
-              { value: "all", label: "Tout" },
-            ]}
-          />
-        </div>
-        {events === null ? (
-          <Loading rows={3} />
-        ) : shownEvents.length === 0 ? (
-          <p className="text-[13px] text-muted">Rien dans le journal récent de fail2ban.</p>
-        ) : (
-          <div className="max-h-[28rem] overflow-auto rounded-lg border border-border">
-            {groupByDay([...shownEvents].reverse().slice(0, 300)).map((g) => (
-              <section key={g.day}>
-                <h3 className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-subtle px-3 py-1.5 text-xs font-semibold">
-                  {g.day}
-                  <span className="font-normal text-faint">
-                    {g.items.length} événement{g.items.length > 1 ? "s" : ""}
-                  </span>
-                </h3>
-                <ul className="divide-y divide-line">
-                  {g.items.map((e, i) => (
-                    <li key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-hover-soft">
-                      <span className="w-16 shrink-0 font-mono text-[12px] text-muted tabular-nums" title={e.time}>
-                        {timeOf(e.time)}
-                      </span>
-                      <span className="w-40 shrink-0">
-                        <EventKind kind={e.kind} unban={e.unban} />
-                      </span>
-                      <button type="button" className="shrink-0 font-mono text-[12.5px] hover:text-accent" onClick={() => setDetail(e.ip)}>
-                        {e.ip}
+      {/* Grand écran : jails et journal à gauche, adresses insistantes et exceptions à droite. */}
+      <div className="grid min-w-0 items-start gap-4 @5xl:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+        <div className="flex min-w-0 flex-col gap-4">
+          {jails.map((j) => (
+            <section key={j.name} className="rounded-xl border border-border bg-panel">
+              <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
+                <span className="font-medium">{jailLabel(j.name)}</span>
+                <Badge tone={j.currentlyBanned ? "danger" : "ok"}>{j.currentlyBanned} bannie(s)</Badge>
+                <span className="ml-auto text-xs text-muted">
+                  {j.name in MANUAL_JAILS
+                    ? `${j.totalBanned} bannissement(s) manuel(s)`
+                    : `Bannissement de ${banDurationText(j.bantime)} après ${j.maxretry} échec(s) en ${banDurationText(j.findtime)} · ${j.totalBanned} bannissement(s) depuis le démarrage · ${j.currentlyFailed} échec(s) en cours`}
+                </span>
+              </header>
+              {j.banned.length === 0 ? (
+                <p className="px-4 py-3 text-[13px] text-muted">Aucune adresse bannie.</p>
+              ) : (
+                <ul className="divide-y divide-border/50">
+                  {j.banned.map((ip) => (
+                    <li key={ip} className="flex items-center gap-3 px-4 py-2 text-[13px]">
+                      <button type="button" className="shrink-0 font-mono hover:text-accent" title="Détails et tentatives" onClick={() => setDetail(ip)}>
+                        {ip}
                       </button>
-                      <IpTags ip={e.ip} compact />
-                      <span className="ml-auto shrink-0 text-muted">{jailLabel(e.jail)}</span>
+                      {ip === myIp && <Badge tone="danger">ton IP</Badge>}
+                      <IpTags ip={ip} compact recidivist={recidOf.get(ip)} />
+                      <BanEnd until={banEnd(j, ip)} />
+                      <span className="ml-auto flex shrink-0 items-center gap-1">
+                        <Button size="sm" onClick={() => void unban(j.name, ip)}>
+                          Débloquer
+                        </Button>
+                        <MenuButton size="sm" title="Plus d'actions" items={() => ipMenu(j.name, ip)} />
+                      </span>
                     </li>
                   ))}
                 </ul>
-              </section>
-            ))}
-          </div>
-        )}
-      </section>
+              )}
+            </section>
+          ))}
 
-      <section className="flex flex-col gap-3 rounded-lg border border-border bg-panel p-4">
-        <div>
-          <h2 className="font-medium">Adresses jamais bannies</h2>
-          <p className="text-[13px] text-muted">
-            Appliquées à tous les jails. Zenytt les écrit dans son propre fichier ({"/etc/fail2ban/jail.d/zz-zenytt-ignore.local"}), teste la configuration puis recharge fail2ban ; tes fichiers ne sont pas modifiés.
-          </p>
+          <section className="flex flex-col gap-3 rounded-lg border border-border bg-panel p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-medium">Journal</h2>
+              <Segmented
+                size="sm"
+                className="ml-auto"
+                label="Événements affichés"
+                value={eventFilter}
+                onChange={setEventFilter}
+                options={[
+                  { value: "ban", label: "Bannissements" },
+                  { value: "found", label: "Tentatives" },
+                  { value: "all", label: "Tout" },
+                ]}
+              />
+            </div>
+            {events === null ? (
+              <Loading rows={3} />
+            ) : shownEvents.length === 0 ? (
+              <p className="text-[13px] text-muted">Rien dans le journal récent de fail2ban.</p>
+            ) : (
+              <div className="max-h-[28rem] overflow-auto rounded-lg border border-border">
+                {groupByDay([...shownEvents].reverse().slice(0, 300)).map((g) => (
+                  <section key={g.day}>
+                    <h3 className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-subtle px-3 py-1.5 text-xs font-semibold">
+                      {g.day}
+                      <span className="font-normal text-faint">
+                        {g.items.length} événement{g.items.length > 1 ? "s" : ""}
+                      </span>
+                    </h3>
+                    <ul className="divide-y divide-line">
+                      {g.items.map((e, i) => (
+                        <li key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-hover-soft">
+                          <span className="w-16 shrink-0 font-mono text-[12px] text-muted tabular-nums" title={e.time}>
+                            {timeOf(e.time)}
+                          </span>
+                          <span className="w-40 shrink-0">
+                            <EventKind kind={e.kind} unban={e.unban} />
+                          </span>
+                          <button type="button" className="shrink-0 font-mono text-[12.5px] hover:text-accent" onClick={() => setDetail(e.ip)}>
+                            {e.ip}
+                          </button>
+                          <IpTags ip={e.ip} compact />
+                          <span className="ml-auto shrink-0 text-muted">{jailLabel(e.jail)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
-        <ul className="flex flex-wrap gap-2">
-          {LOOPBACK.filter((a) => state.jails.some((j) => j.ignoreip.includes(a))).map((a) => (
-            <li key={a} className="rounded-full border border-border px-3 py-1 font-mono text-xs text-muted">
-              {a}
-            </li>
-          ))}
-          {ignored.map((a) => (
-            <li key={a} className="flex items-center gap-1 rounded-full border border-accent/40 py-1 pr-1 pl-3 font-mono text-xs">
-              {a}
-              {a === myIp && <span className="font-sans text-[10px] text-accent">(toi)</span>}
-              <button
-                className="rounded-full p-0.5 text-muted hover:text-danger"
-                title="Retirer"
-                onClick={async () => {
-                  if (await ask({ title: `Retirer ${a} des exceptions ?`, body: "Elle pourra de nouveau être bannie.", confirmLabel: "Retirer", danger: true }))
-                    void saveIgnore(
-                      ignored.filter((x) => x !== a),
-                      `${a} retirée des exceptions`,
-                    );
-                }}
-              >
-                <Trash2 size={12} />
-              </button>
-            </li>
-          ))}
-        </ul>
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            add(draft);
-          }}
-        >
-          <Input className="!w-72 font-mono" placeholder="IP ou réseau (ex. 203.0.113.4 ou 10.0.0.0/8)" value={draft} onChange={(e) => setDraft(e.target.value)} />
-          <Button size="sm" icon={<Plus size={13} />} type="submit" loading={saving} disabled={!draft.trim()}>
-            Ajouter
-          </Button>
-        </form>
-      </section>
+        <div className="flex min-w-0 flex-col gap-4">
+          {topAttackers.length > 0 && (
+            <section className="flex flex-col gap-2 rounded-lg border border-border bg-panel p-4">
+              <h2 className="font-medium" title="Tentatives repérées par fail2ban dans son journal récent">
+                Les plus insistants
+              </h2>
+              <ul className="flex flex-col gap-1">
+                {topAttackers.map(([ip, n]) => (
+                  <li key={ip} className="flex items-center gap-3 text-[13px]">
+                    <span className="w-12 shrink-0 text-right font-semibold tabular-nums">{n}</span>
+                    <button type="button" className="shrink-0 font-mono hover:text-accent" onClick={() => setDetail(ip)}>
+                      {ip}
+                    </button>
+                    <IpTags ip={ip} compact recidivist={recidOf.get(ip)} />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          <section className="flex flex-col gap-3 rounded-lg border border-border bg-panel p-4">
+            <div>
+              <h2 className="font-medium">Adresses jamais bannies</h2>
+              <p className="text-xs text-muted" title="Écrites dans /etc/fail2ban/jail.d/zz-zenytt-ignore.local (configuration testée puis rechargée) ; tes fichiers ne sont pas modifiés.">
+                Pour tous les jails, dans un fichier propre à Zenytt.
+              </p>
+            </div>
+            <ul className="flex flex-wrap gap-2">
+              {LOOPBACK.filter((a) => state.jails.some((j) => j.ignoreip.includes(a))).map((a) => (
+                <li key={a} className="rounded-full border border-border px-3 py-1 font-mono text-xs text-muted">
+                  {a}
+                </li>
+              ))}
+              {ignored.map((a) => (
+                <li key={a} className="flex items-center gap-1 rounded-full border border-accent/40 py-1 pr-1 pl-3 font-mono text-xs">
+                  {a}
+                  {a === myIp && <span className="font-sans text-[10px] text-accent">(toi)</span>}
+                  <button
+                    className="rounded-full p-0.5 text-muted hover:text-danger"
+                    title="Retirer"
+                    onClick={async () => {
+                      if (await ask({ title: `Retirer ${a} des exceptions ?`, body: "Elle pourra de nouveau être bannie.", confirmLabel: "Retirer", danger: true }))
+                        void saveIgnore(
+                          ignored.filter((x) => x !== a),
+                          `${a} retirée des exceptions`,
+                        );
+                    }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                add(draft);
+              }}
+            >
+              <Input className="min-w-0 flex-1 font-mono" placeholder="IP ou réseau (10.0.0.0/8)" value={draft} onChange={(e) => setDraft(e.target.value)} />
+              <Button size="sm" icon={<Plus size={13} />} type="submit" loading={saving} disabled={!draft.trim()}>
+                Ajouter
+              </Button>
+            </form>
+          </section>
+        </div>
+      </div>
 
       {detail && (
         <IpDrawer
