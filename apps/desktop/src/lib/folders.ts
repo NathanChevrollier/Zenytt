@@ -37,20 +37,41 @@ export function useItemFolders(kind: FolderKind, serverId: string) {
       return { ...f, [items]: { ...allItems, [serverId]: map }, [createdKey]: { ...allCreated, [serverId]: list } };
     });
 
-  const move = (keys: string[], folder: string | null) =>
-    update((map, list) => {
-      for (const k of keys) {
-        if (folder) map[k] = folder;
-        else delete map[k];
-      }
-      return [map, folder ? [...new Set([...list, folder])] : list];
-    });
+  // Un client n'existe que tant qu'un élément le porte : retiré du dernier, il disparaît des filtres.
+  const prune = kind === "sites" || kind === "compose";
+  const move = (keys: string[], folder: string | null) => update((map, list) => moveItems(map, list, keys, folder, prune));
   const create = (name: string) => update((map, list) => [map, [...new Set([...list, name])]]);
-  const rename = (from: string, to: string) =>
-    update((map, list) => [Object.fromEntries(Object.entries(map).map(([k, v]) => [k, v === from ? to : v])), [...new Set([...list.filter((x) => x !== from), to])]]);
-  const remove = (name: string) => update((map, list) => [Object.fromEntries(Object.entries(map).filter(([, v]) => v !== name)), list.filter((x) => x !== name)]);
+  const rename = (from: string, to: string) => update((map, list) => renameFolder(map, list, from, to));
+  const remove = (name: string) => update((map, list) => removeFolder(map, list, name));
 
   return { names, folderOf: (key: string) => assigned[key] ?? "", move, create, rename, remove };
+}
+
+type FolderState = [Record<string, string>, string[]];
+
+/** Range `keys` dans `folder` (ou les en sort si `null`/vide). `prune` oublie les dossiers devenus vides. */
+export function moveItems(map: Record<string, string>, list: string[], keys: string[], folder: string | null, prune = false): FolderState {
+  const next = { ...map };
+  const name = folder?.trim() ?? "";
+  for (const k of keys) {
+    if (name) next[k] = name;
+    else delete next[k];
+  }
+  const used = new Set(Object.values(next));
+  const names = name ? [...new Set([...list, name])] : list;
+  return [next, prune ? names.filter((n) => used.has(n)) : names];
+}
+
+/** Renomme un dossier pour tous ses éléments (fusionne s'il existe déjà un dossier `to`). */
+export function renameFolder(map: Record<string, string>, list: string[], from: string, to: string): FolderState {
+  const name = to.trim();
+  if (!name || name === from) return [map, list];
+  return [Object.fromEntries(Object.entries(map).map(([k, v]) => [k, v === from ? name : v])), [...new Set([...list.filter((x) => x !== from), name])]];
+}
+
+/** Supprime un dossier : ses éléments redeviennent « sans dossier ». */
+export function removeFolder(map: Record<string, string>, list: string[], name: string): FolderState {
+  return [Object.fromEntries(Object.entries(map).filter(([, v]) => v !== name)), list.filter((x) => x !== name)];
 }
 
 /** Clé de verrou d'un site (par domaine) ou d'un projet compose (par dossier). */

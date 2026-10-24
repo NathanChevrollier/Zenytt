@@ -70,7 +70,8 @@ export default function SystemView() {
       activeTab={tab}
       onTab={setRawTab}
     >
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-7 py-5">
+      {/* Pleine largeur : chaque onglet range ses blocs en colonnes selon la place (requêtes de conteneur). */}
+      <div className="@container flex w-full min-w-0 flex-col gap-5 px-7 py-5">
         {/* Toujours monté une fois connecté : l'attente du redémarrage survit à un détour par l'onglet Hébergeur. */}
         {ready ? (
           <SshTabs key={serverId} serverId={serverId} name={server.name} tab={tab} setTab={setRawTab} secTab={secTab} setSecTab={setSecTab} onBadges={setBadges} />
@@ -206,6 +207,8 @@ function SshTabs({
           error={infoError}
           reload={loadInfo}
           updates={updates}
+          updatesError={updatesError}
+          visible={tab === "overview"}
           onShowUpdates={showUpdates}
           security={summary && { ...summary, banned }}
           auditing={auditing}

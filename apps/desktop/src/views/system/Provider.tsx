@@ -133,86 +133,89 @@ export default function Provider({ serverId, serverName }: { serverId: string; s
   const [label, tone] = status ? STATE[status.state] : ["", "muted" as Tone];
 
   return (
-    <>
-      <Section title="Fournisseur" description="Pilote l'alimentation par l'API, même quand SSH ne répond plus">
-        <div role="radiogroup" aria-label="Fournisseur" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-          {KINDS.map((k) => {
-            const on = k.value === kind;
-            return (
-              <button
-                key={k.value}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                onClick={() => setKind(k.value)}
-                className={`flex min-w-0 items-center gap-3 rounded-xl border bg-panel px-3.5 py-3 text-left transition-colors ${FOCUS_RING} ${
-                  on ? "border-accent ring-1 ring-accent/50" : "border-border hover:border-border-strong"
-                }`}
-              >
-                <span
-                  aria-hidden
-                  className="flex size-9 shrink-0 items-center justify-center rounded-[28%] text-[11px] font-bold tracking-tight"
-                  style={{ background: `color-mix(in srgb, ${k.color} 16%, transparent)`, color: k.color }}
+    // Grand écran : choix et identifiants à gauche, état et alimentation à droite.
+    <div className="grid min-w-0 items-start gap-5 @5xl:grid-cols-2">
+      <div className="@container flex min-w-0 flex-col gap-5">
+        <Section title="Fournisseur" description="Pilote l'alimentation par l'API, même quand SSH ne répond plus">
+          <div role="radiogroup" aria-label="Fournisseur" className="grid grid-cols-2 gap-2 @3xl:grid-cols-4">
+            {KINDS.map((k) => {
+              const on = k.value === kind;
+              return (
+                <button
+                  key={k.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => setKind(k.value)}
+                  className={`flex min-w-0 items-center gap-3 rounded-xl border bg-panel px-3.5 py-3 text-left transition-colors ${FOCUS_RING} ${
+                    on ? "border-accent ring-1 ring-accent/50" : "border-border hover:border-border-strong"
+                  }`}
                 >
-                  {k.mark}
-                </span>
-                <span className="flex min-w-0 flex-col">
-                  <span className="truncate text-[13px] font-medium">{k.label}</span>
-                  <span className="truncate text-[11.5px] text-faint">{k.creds}</span>
-                </span>
-                {linkedKind === k.value && (
-                  <Badge tone="ok" className="ml-auto">
-                    lié
-                  </Badge>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </Section>
-
-      <Section title="Identifiants" description="Gardés dans le coffre, jamais réaffichés">
-        <Card className="flex flex-col gap-4">
-          <form
-            className="grid gap-3 md:grid-cols-2"
-            autoComplete="off"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (ref.trim()) void save();
-            }}
-          >
-            <Field label={ovh ? "Nom du service" : "Identifiant du serveur"} hint={ovh ? "Par exemple vps-1234.vps.ovh.net" : "Visible dans la console de l'hébergeur"}>
-              <Input value={ref} onChange={(e) => setRef(e.target.value)} placeholder={ovh ? "vps-1234.vps.ovh.net" : "123456"} />
-            </Field>
-            {ZONE[kind] && (
-              <Field label={ZONE[kind]![0]}>
-                <Input value={zone} onChange={(e) => setZone(e.target.value)} placeholder={ZONE[kind]![1]} />
-              </Field>
-            )}
-            <Secret label={ovh ? "Clé d'application" : "Jeton d'API"} stored={sameKind && view.hasToken} value={token} onChange={setToken} />
-            {ovh && (
-              <>
-                <Secret label="Secret d'application" stored={sameKind && view.hasSecret} value={secret} onChange={setSecret} />
-                <Secret label="Clé de consommateur" stored={sameKind && view.hasConsumer} value={consumer} onChange={setConsumer} />
-              </>
-            )}
-            <button type="submit" hidden />
-          </form>
-          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-            <Button variant="primary" loading={busy === "save"} disabled={!ref.trim()} onClick={() => void save()}>
-              Enregistrer
-            </Button>
-            <Button loading={busy === "status"} disabled={!ready(view)} onClick={() => void test()} title={ready(view) ? "Lit l'état du serveur chez l'hébergeur" : "Enregistre d'abord l'identifiant et les clés"}>
-              Tester la connexion
-            </Button>
-            {view.link && (
-              <Button variant="ghost" className="ml-auto" loading={busy === "unlink"} onClick={() => void unlink()}>
-                Délier
-              </Button>
-            )}
+                  <span
+                    aria-hidden
+                    className="flex size-9 shrink-0 items-center justify-center rounded-[28%] text-[11px] font-bold tracking-tight"
+                    style={{ background: `color-mix(in srgb, ${k.color} 16%, transparent)`, color: k.color }}
+                  >
+                    {k.mark}
+                  </span>
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate text-[13px] font-medium">{k.label}</span>
+                    <span className="truncate text-[11.5px] text-faint">{k.creds}</span>
+                  </span>
+                  {linkedKind === k.value && (
+                    <Badge tone="ok" className="ml-auto">
+                      lié
+                    </Badge>
+                  )}
+                </button>
+              );
+            })}
           </div>
-        </Card>
-      </Section>
+        </Section>
+
+        <Section title="Identifiants" description="Gardés dans le coffre, jamais réaffichés">
+          <Card className="flex flex-col gap-4">
+            <form
+              className="grid gap-3 @xl:grid-cols-2"
+              autoComplete="off"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (ref.trim()) void save();
+              }}
+            >
+              <Field label={ovh ? "Nom du service" : "Identifiant du serveur"} hint={ovh ? "Par exemple vps-1234.vps.ovh.net" : "Visible dans la console de l'hébergeur"}>
+                <Input value={ref} onChange={(e) => setRef(e.target.value)} placeholder={ovh ? "vps-1234.vps.ovh.net" : "123456"} />
+              </Field>
+              {ZONE[kind] && (
+                <Field label={ZONE[kind]![0]}>
+                  <Input value={zone} onChange={(e) => setZone(e.target.value)} placeholder={ZONE[kind]![1]} />
+                </Field>
+              )}
+              <Secret label={ovh ? "Clé d'application" : "Jeton d'API"} stored={sameKind && view.hasToken} value={token} onChange={setToken} />
+              {ovh && (
+                <>
+                  <Secret label="Secret d'application" stored={sameKind && view.hasSecret} value={secret} onChange={setSecret} />
+                  <Secret label="Clé de consommateur" stored={sameKind && view.hasConsumer} value={consumer} onChange={setConsumer} />
+                </>
+              )}
+              <button type="submit" hidden />
+            </form>
+            <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+              <Button variant="primary" loading={busy === "save"} disabled={!ref.trim()} onClick={() => void save()}>
+                Enregistrer
+              </Button>
+              <Button loading={busy === "status"} disabled={!ready(view)} onClick={() => void test()} title={ready(view) ? "Lit l'état du serveur chez l'hébergeur" : "Enregistre d'abord l'identifiant et les clés"}>
+                Tester la connexion
+              </Button>
+              {view.link && (
+                <Button variant="ghost" className="ml-auto" loading={busy === "unlink"} onClick={() => void unlink()}>
+                  Délier
+                </Button>
+              )}
+            </div>
+          </Card>
+        </Section>
+      </div>
 
       <Section
         title="Alimentation via l'hébergeur"
@@ -268,7 +271,7 @@ export default function Provider({ serverId, serverName }: { serverId: string; s
           </>
         )}
       </Section>
-    </>
+    </div>
   );
 }
 

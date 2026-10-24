@@ -1,6 +1,6 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
-  Circle, Columns2, FolderTree, History, LayoutGrid, PanelRight, Plus, Radio, Rows2, ScrollText, Search, Server, Share2, Square, SquareTerminal, Users, X,
+  Circle, Columns2, FolderTree, History, LayoutGrid, PanelLeft, PanelLeftClose, PanelLeftOpen, PanelRight, PanelTop, Plus, Radio, Rows2, ScrollText, Search, Server, Share2, Square, SquareTerminal, Users, X,
 } from "lucide-react";
 import TerminalPane from "../components/TerminalPane";
 import SnippetsPanel from "../components/SnippetsPanel";
@@ -13,10 +13,11 @@ import { usePanes } from "../lib/panes";
 import { paneActions, usePaneStatus } from "../lib/paneActions";
 import { ensureConnected, newTmuxName, useApp, useAppPick, type TermTab } from "../lib/store";
 import {
-  Badge, Button, Checkbox, EmptyState, ErrorState, Field, IconButton, Input, MenuButton, Modal, ResizeHandle, Skeleton, Textarea, ToolbarSep, useResizable, type MenuItem,
+  Badge, Button, Checkbox, EmptyState, ErrorState, Field, IconButton, Input, MenuButton, Modal, ResizeHandle, Skeleton, Textarea, ToolbarSep, useContextMenu, useResizable, type MenuItem,
 } from "../components/ui";
 import { display, matches, shortcutOf } from "../lib/shortcuts";
 import { focusedTerminal } from "../lib/focus";
+import { groupTabsByServer } from "../lib/terminal-tabs";
 
 const HistoryList = lazy(() => import("../components/HistoryPalette").then((m) => ({ default: m.HistoryList })));
 
@@ -47,7 +48,7 @@ function tabPaneIds(tab: TermTab): string[] {
 }
 
 export default function TerminalView({ visible }: { visible: boolean }) {
-  const { tabs, activeTab, setActiveTab, closeTab, openTab, openGridTab, openJoinTab, updateTab, activeServerId, servers, ask, notify, settings } = useAppPick("tabs", "activeTab", "setActiveTab", "closeTab", "openTab", "openGridTab", "openJoinTab", "updateTab", "activeServerId", "servers", "ask", "notify", "settings");
+  const { tabs, activeTab, setActiveTab, closeTab, openTab, openGridTab, openJoinTab, updateTab, activeServerId, servers, ask, notify, settings, setSettings } = useAppPick("tabs", "activeTab", "setActiveTab", "closeTab", "openTab", "openGridTab", "openJoinTab", "updateTab", "activeServerId", "servers", "ask", "notify", "settings", "setSettings");
   const [titles, setTitles] = useState<Record<string, string>>({});
   /** Dock latéral : un seul panneau à la fois (fichiers, fragments, historique, enregistrements). */
   const [dock, setDock] = useState<DockTab | null>(() => {
@@ -241,55 +242,56 @@ export default function TerminalView({ visible }: { visible: boolean }) {
   const act = paneActions(activePane);
   const runner = activePaneServer ?? current?.serverId ?? activeServerId;
 
+  const vertical = settings.terminalTabs === "vertical";
+  const ctx = useContextMenu();
+  /** Menu contextuel d'un terminal de la liste (onglet ou ligne de la colonne). */
+  const tabMenu = (t: TermTab): MenuItem[] => [
+    ...(t.join || t.grid
+      ? []
+      : ([
+          { label: `Nouveau terminal sur ${serverOf(t.serverId)?.name ?? "ce serveur"}`, icon: <Plus size={14} />, onClick: () => openTab(t.serverId) },
+          { label: "Sessions persistantes du serveur…", icon: <History size={14} />, onClick: () => setSessionsOf(t.serverId) },
+          "separator",
+        ] as MenuItem[])),
+    {
+      label: "Fermer les autres",
+      icon: <X size={14} />,
+      disabled: tabs.length < 2,
+      onClick: () => void (async () => {
+        for (const o of tabs) if (o.key !== t.key) await close(o);
+      })(),
+    },
+    { label: "Fermer", hint: display(shortcutOf("closeTab")), icon: <X size={14} />, onClick: () => void close(t) },
+  ];
+  /** Comportements communs aux deux présentations : clic, clic molette, clic droit, infobulle. */
+  const tabProps = (t: TermTab) => ({
+    "data-tab": t.key,
+    onClick: () => setActiveTab(t.key),
+    onAuxClick: (e: React.MouseEvent) => e.button === 1 && void close(t),
+    onContextMenu: (e: React.MouseEvent) => ctx.open(e, tabMenu(t)),
+    title: `${titles[t.key] ?? t.title} · clic molette pour fermer`,
+  });
+  const closeButton = (t: TermTab, active: boolean) => (
+    <button
+      type="button"
+      tabIndex={-1}
+      className={`flex size-5 shrink-0 items-center justify-center rounded hover:bg-hover-strong ${active ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        void close(t);
+      }}
+      aria-label={`Fermer le terminal ${t.title}`}
+      title={`Fermer (${display(shortcutOf("closeTab"))})`}
+    >
+      <X size={12} />
+    </button>
+  );
+  const newTabTitle = `Nouveau terminal (${display(shortcutOf("newTab"))})`;
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-[42px] shrink-0 items-center gap-1 border-b border-border bg-rail pr-2 pl-2">
-        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overflow-y-hidden" role="tablist" aria-label="Terminaux ouverts">
-          {tabs.map((t) => {
-            const s = serverOf(t.serverId);
-            const active = t.key === activeTab;
-            return (
-              <div
-                key={t.key}
-                role="tab"
-                aria-selected={active}
-                tabIndex={0}
-                onClick={() => setActiveTab(t.key)}
-                onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setActiveTab(t.key)}
-                onAuxClick={(e) => e.button === 1 && void close(t)}
-                title={`${titles[t.key] ?? t.title} · clic molette pour fermer`}
-                className={`group flex h-[30px] max-w-60 min-w-28 shrink-0 cursor-default items-center gap-2 rounded-lg pr-1 pl-3 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-                  active ? "bg-panel font-medium text-fg ring-1 ring-border-strong/70" : "text-muted hover:bg-hover hover:text-fg"
-                }`}
-              >
-                {t.join ? (
-                  <Share2 size={12} className="shrink-0 text-accent" />
-                ) : t.grid ? (
-                  <LayoutGrid size={12} className="shrink-0 text-accent" />
-                ) : (
-                  <span className="size-[7px] shrink-0 rounded-full" style={{ background: s?.color ?? "var(--color-accent)" }} />
-                )}
-                <span className="flex-1 truncate">{t.title}</span>
-                {t.tmux && <Badge tone="ok" className="h-4! px-1.5! text-[10px]!" title="Session persistante (tmux) : elle survit à la fermeture de Zenytt">tmux</Badge>}
-                <button
-                  type="button"
-                  className={`flex size-5 shrink-0 items-center justify-center rounded hover:bg-hover-strong ${active ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void close(t);
-                  }}
-                  aria-label={`Fermer l'onglet ${t.title}`}
-                  title={`Fermer (${display(shortcutOf("closeTab"))})`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            );
-          })}
-          <IconButton size="sm" title={`Nouveau terminal (${display(shortcutOf("newTab"))})`} disabled={!activeServerId} onClick={() => activeServerId && openTab(activeServerId)}>
-            <Plus size={15} />
-          </IconButton>
-        </div>
+      <div className="@container/termbar flex h-10 shrink-0 items-center gap-2 border-b border-border bg-rail pr-2 pl-3">
+        <TermContext tab={current} serverId={activePaneServer} />
         {/* Trois groupes : disposition · panneau latéral · partage et sessions. */}
         <div className="flex shrink-0 items-center gap-1">
           {broadcast.active && (
@@ -297,10 +299,17 @@ export default function TerminalView({ visible }: { visible: boolean }) {
               Arrêter la diffusion
             </Button>
           )}
+          <IconButton
+            size="sm"
+            title={vertical ? "Terminaux en onglets horizontaux" : "Terminaux en liste verticale"}
+            onClick={() => setSettings({ terminalTabs: vertical ? "horizontal" : "vertical" })}
+          >
+            {vertical ? <PanelTop size={15} /> : <PanelLeft size={15} />}
+          </IconButton>
           <MenuButton
             size="sm"
             variant={current?.split != null ? "subtle" : "ghost"}
-            label="Diviser"
+            label={<Lbl>Diviser</Lbl>}
             icon={current?.splitDir === "rows" ? <Rows2 size={14} /> : <Columns2 size={14} />}
             title="Diviser l'écran (même serveur ou un autre)"
             disabled={!current || !!current.grid || !!current.join}
@@ -308,11 +317,11 @@ export default function TerminalView({ visible }: { visible: boolean }) {
             items={splitItems}
           />
           <Button size="sm" variant="ghost" icon={<LayoutGrid size={14} />} disabled={servers.length < 2} onClick={() => setMultiPicker(true)} title="Un terminal par serveur, en grille">
-            Grille
+            <Lbl>Grille</Lbl>
           </Button>
           <ToolbarSep />
           <Button size="sm" variant={dock ? "subtle" : "ghost"} icon={<PanelRight size={14} />} aria-pressed={!!dock} onClick={() => setDock(dock ? null : "files")} title="Panneau latéral : fichiers, fragments, historique, enregistrements">
-            Panneau
+            <Lbl>Panneau</Lbl>
           </Button>
           <ToolbarSep />
           <IconButton size="sm" title={`Rechercher dans le terminal (${display(shortcutOf("termSearch"))})`} disabled={!act} onClick={() => act?.search()}>
@@ -324,7 +333,7 @@ export default function TerminalView({ visible }: { visible: boolean }) {
           <MenuButton
             size="sm"
             variant={sharedMode ? "subtle" : "ghost"}
-            label="Partage"
+            label={<Lbl>Partage</Lbl>}
             icon={<Share2 size={14} />}
             title="Partager, rejoindre, diffuser la saisie"
             items={() => [
@@ -340,12 +349,91 @@ export default function TerminalView({ visible }: { visible: boolean }) {
             ]}
           />
           <Button size="sm" variant="ghost" icon={<History size={14} />} disabled={!runner} onClick={() => runner && setSessionsOf(runner)} title="Sessions persistantes (tmux) du serveur">
-            Sessions
+            <Lbl>Sessions</Lbl>
           </Button>
         </div>
       </div>
 
+      {!vertical && tabs.length > 0 && (
+        <TabStrip
+          activeTab={activeTab}
+          trailing={
+            <IconButton size="sm" title={newTabTitle} disabled={!activeServerId} onClick={() => activeServerId && openTab(activeServerId)}>
+              <Plus size={15} />
+            </IconButton>
+          }
+        >
+          {tabs.map((t) => {
+            const active = t.key === activeTab;
+            return (
+              <div
+                key={t.key}
+                role="tab"
+                aria-selected={active}
+                tabIndex={0}
+                {...tabProps(t)}
+                onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setActiveTab(t.key)}
+                className={`group flex h-[26px] max-w-60 min-w-28 shrink-0 cursor-default items-center gap-2 rounded-md pr-1 pl-2.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                  active ? "bg-panel font-medium text-fg ring-1 ring-border-strong/70" : "text-muted hover:bg-hover hover:text-fg"
+                }`}
+              >
+                <TabIcon tab={t} />
+                <span className="flex-1 truncate">{t.title}</span>
+                <TabFlags tab={t} />
+                {closeButton(t, active)}
+              </div>
+            );
+          })}
+        </TabStrip>
+      )}
+
       <div className="flex min-h-0 flex-1">
+        {vertical && tabs.length > 0 && (
+          <TabList
+            tabs={tabs}
+            onActivate={setActiveTab}
+            onNew={activeServerId ? () => openTab(activeServerId) : undefined}
+            newTitle={newTabTitle}
+            renderRow={(t, grouped) => {
+              const active = t.key === activeTab;
+              const s = serverOf(t.serverId);
+              const sub = t.join ? "partagé avec moi" : t.grid ? `${t.grid.length} serveurs` : grouped ? `${s?.username}@${s?.host}` : `${s?.name ?? "?"} · ${s?.username}@${s?.host}`;
+              return (
+                <div
+                  key={t.key}
+                  role="option"
+                  aria-selected={active}
+                  tabIndex={active ? 0 : -1}
+                  {...tabProps(t)}
+                  className={`group relative flex cursor-default items-center gap-2 rounded-md py-1 pr-1 pl-3 outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                    active ? "bg-accent/12 text-fg" : "text-muted hover:bg-hover hover:text-fg"
+                  }`}
+                >
+                  <span className="absolute top-1.5 bottom-1.5 left-1 w-[3px] rounded-full" style={{ background: t.join || t.grid ? "var(--color-accent)" : (s?.color ?? "var(--color-accent)") }} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className={`truncate text-[12.5px] ${active ? "font-medium" : ""}`}>{t.title}</span>
+                    <span className="truncate font-mono text-[10.5px] text-faint">{sub}</span>
+                  </span>
+                  <TabFlags tab={t} />
+                  {closeButton(t, active)}
+                </div>
+              );
+            }}
+            renderRail={(t) => (
+              <button
+                key={t.key}
+                type="button"
+                role="option"
+                aria-selected={t.key === activeTab}
+                tabIndex={t.key === activeTab ? 0 : -1}
+                {...tabProps(t)}
+                className={`relative flex size-8 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent ${t.key === activeTab ? "bg-accent/12" : "hover:bg-hover"}`}
+              >
+                <TabIcon tab={t} />
+              </button>
+            )}
+          />
+        )}
         <div className="relative min-w-0 flex-1">
           {tabs.length === 0 && (
             <EmptyState
@@ -392,7 +480,8 @@ export default function TerminalView({ visible }: { visible: boolean }) {
                 ) : (
                   <>
                     <div className="flex min-h-0 min-w-0 flex-1 flex-col" style={t.split != null ? { flex: `${splitRatios[t.key] ?? 0.5} 1 0%` } : undefined}>
-                      <PaneHeader serverId={t.serverId} />
+                      {/* Seul, le terminal est décrit dans la barre d'outils ; divisé, chaque moitié garde son en-tête. */}
+                      {t.split != null && <PaneHeader serverId={t.serverId} />}
                       <div className="min-h-0 flex-1">
                         <TerminalPane
                           serverId={t.serverId}
@@ -514,6 +603,7 @@ export default function TerminalView({ visible }: { visible: boolean }) {
         />
       )}
 
+      {ctx.menu}
       {broadcastPicker && <BroadcastPicker onClose={() => setBroadcastPicker(false)} />}
       {sessionsOf && (
         <SessionsModal
@@ -533,7 +623,200 @@ export default function TerminalView({ visible }: { visible: boolean }) {
   );
 }
 
-/** Nom, couleur et `utilisateur@hôte` du serveur, en tête de chaque terminal (seul, divisé ou en grille). */
+/** Contexte du terminal affiché, à gauche de la barre d'outils : serveur du panneau actif, grille ou partage reçu. */
+function TermContext({ tab, serverId }: { tab: TermTab | undefined; serverId: string | undefined }) {
+  const s = useApp((st) => st.servers.find((x) => x.id === serverId));
+  if (!tab) return <div className="flex-1" />;
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2 text-[12.5px]">
+      {tab.join ? (
+        <>
+          <Share2 size={13} className="shrink-0 text-accent" />
+          <span className="truncate font-medium">Terminal partagé avec moi</span>
+        </>
+      ) : (
+        <>
+          {tab.grid && (
+            <span className="flex shrink-0 items-center gap-1.5 text-muted">
+              <LayoutGrid size={13} className="text-accent" />
+              Grille de {tab.grid.length}
+              <span className="text-faint">·</span>
+            </span>
+          )}
+          <span className="size-[7px] shrink-0 rounded-full" style={{ background: s?.color ?? "var(--color-accent)" }} />
+          <span className="shrink-0 font-medium">{s?.name ?? "?"}</span>
+          <span className="truncate font-mono text-[11.5px] text-muted">
+            {s?.username}@{s?.host}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Pastille du serveur, ou icône d'une grille / d'un partage reçu. */
+function TabIcon({ tab }: { tab: TermTab }) {
+  const color = useApp((st) => st.servers.find((x) => x.id === tab.serverId)?.color);
+  if (tab.join) return <Share2 size={12} className="shrink-0 text-accent" />;
+  if (tab.grid) return <LayoutGrid size={12} className="shrink-0 text-accent" />;
+  return <span className="size-[7px] shrink-0 rounded-full" style={{ background: color ?? "var(--color-accent)" }} />;
+}
+
+/** Indicateurs d'un terminal : enregistrement, partage en cours, session tmux. */
+function TabFlags({ tab }: { tab: TermTab }) {
+  const ids = tabPaneIds(tab);
+  const recording = usePaneStatus((s) => ids.some((id) => id in s.recording));
+  const shared = usePaneStatus((s) => ids.some((id) => id in s.shared));
+  return (
+    <>
+      {recording && <span className="size-2 shrink-0 animate-pulse rounded-full bg-danger" title="Enregistrement en cours" />}
+      {shared && <Share2 size={11} className="shrink-0 text-accent" aria-label="Partagé" />}
+      {tab.tmux && <Badge tone="ok" className="h-4! px-1.5! text-[10px]!" title="Session persistante (tmux) : elle survit à la fermeture de Zenytt">tmux</Badge>}
+    </>
+  );
+}
+
+/** Rangée d'onglets sous la barre d'outils : défilement horizontal (molette comprise) avec bords estompés quand elle déborde. */
+function TabStrip({ activeTab, trailing, children }: { activeTab: string | null; trailing: React.ReactNode; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ l: false, r: false });
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const l = el.scrollLeft > 1;
+    const r = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setEdges((p) => (p.l === l && p.r === r ? p : { l, r }));
+  }, []);
+  // Après chaque rendu (onglet ouvert, fermé, renommé) et à chaque redimensionnement.
+  useEffect(measure);
+  useEffect(() => {
+    const ro = new ResizeObserver(measure);
+    if (ref.current) ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, [measure]);
+  useEffect(() => {
+    if (activeTab) ref.current?.querySelector(`[data-tab="${CSS.escape(activeTab)}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTab]);
+  const mask = `linear-gradient(to right, ${edges.l ? "transparent" : "#000"}, #000 28px, #000 calc(100% - 28px), ${edges.r ? "transparent" : "#000"})`;
+  return (
+    <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-subtle pr-1.5 pl-1.5">
+      <div
+        ref={ref}
+        role="tablist"
+        aria-label="Terminaux ouverts"
+        onScroll={measure}
+        onWheel={(e) => {
+          if (e.deltaY && !e.deltaX) e.currentTarget.scrollLeft += e.deltaY;
+        }}
+        className="flex min-w-0 items-center gap-0.5 overflow-x-auto overflow-y-hidden py-1 [&::-webkit-scrollbar]:hidden"
+        style={{ maskImage: mask, WebkitMaskImage: mask }}
+      >
+        {children}
+      </div>
+      {trailing}
+    </div>
+  );
+}
+
+/**
+ * Colonne des terminaux (présentation verticale) : redimensionnable, réductible en rail d'icônes,
+ * regroupée par serveur dès que plusieurs serveurs sont ouverts. ↑/↓ déplacent le focus, Entrée ouvre.
+ */
+function TabList({
+  tabs,
+  onActivate,
+  onNew,
+  newTitle,
+  renderRow,
+  renderRail,
+}: {
+  tabs: TermTab[];
+  onActivate: (key: string) => void;
+  onNew?: () => void;
+  newTitle: string;
+  renderRow: (t: TermTab, grouped: boolean) => React.ReactNode;
+  renderRail: (t: TermTab) => React.ReactNode;
+}) {
+  const servers = useApp((s) => s.servers);
+  const width = useResizable("terminal-tabs", 220, 160, 420, "right");
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("zenytt.terminal.tabsCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggle = () => {
+    setCollapsed(!collapsed);
+    try {
+      localStorage.setItem("zenytt.terminal.tabsCollapsed", collapsed ? "" : "1");
+    } catch {
+      /* préférence non retenue */
+    }
+  };
+  const groups = groupTabsByServer(tabs);
+  const grouped = groups.length > 1;
+  const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const rows = Array.from(e.currentTarget.querySelectorAll<HTMLElement>("[role=option]"));
+    const i = rows.indexOf(document.activeElement as HTMLElement);
+    const moves: Record<string, number> = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: rows.length - 1 };
+    if (e.key in moves) {
+      e.preventDefault();
+      rows[Math.max(0, Math.min(rows.length - 1, moves[e.key]))]?.focus();
+    } else if ((e.key === "Enter" || e.key === " ") && i >= 0) {
+      e.preventDefault();
+      onActivate(rows[i].dataset.tab!);
+    }
+  };
+  const groupName = (id: string) => (id === "grid" ? "Grilles" : id === "join" ? "Partagés avec moi" : (servers.find((s) => s.id === id)?.name ?? "Serveur supprimé"));
+
+  if (collapsed)
+    return (
+      <aside className="flex w-11 shrink-0 flex-col items-center gap-1 border-r border-border bg-panel py-1.5" aria-label="Terminaux ouverts">
+        <IconButton size="sm" title="Afficher la liste des terminaux" onClick={toggle}>
+          <PanelLeftOpen size={15} />
+        </IconButton>
+        <IconButton size="sm" title={newTitle} disabled={!onNew} onClick={onNew}>
+          <Plus size={15} />
+        </IconButton>
+        <div className="mx-2 my-0.5 h-px self-stretch bg-border" />
+        <div role="listbox" aria-label="Terminaux ouverts" className="scroll-thin flex min-h-0 flex-1 flex-col items-center gap-0.5 overflow-auto [&::-webkit-scrollbar]:hidden" onKeyDown={onKey}>
+          {tabs.map(renderRail)}
+        </div>
+      </aside>
+    );
+  return (
+    <>
+      <aside className="flex shrink-0 flex-col border-r border-border bg-panel" style={{ width: width.size }} aria-label="Terminaux ouverts">
+        <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5">
+          <Button size="sm" variant="ghost" icon={<Plus size={14} />} disabled={!onNew} onClick={onNew} title={newTitle}>
+            Nouveau terminal
+          </Button>
+          <span className="ml-auto text-[11px] text-faint tabular-nums">{tabs.length}</span>
+          <IconButton size="sm" title="Réduire la liste" onClick={toggle}>
+            <PanelLeftClose size={15} />
+          </IconButton>
+        </div>
+        <div role="listbox" aria-label="Terminaux ouverts" className="scroll-thin flex min-h-0 flex-1 flex-col gap-px overflow-auto p-1" onKeyDown={onKey}>
+          {groups.map((g) => (
+            <div key={g.id} role="group" aria-label={grouped ? groupName(g.id) : undefined} className="flex flex-col gap-px">
+              {grouped && (
+                <div className="flex items-center gap-1.5 px-2 pt-2 pb-0.5 text-[10.5px] font-semibold tracking-[0.08em] text-faint uppercase">
+                  <span className="truncate">{groupName(g.id)}</span>
+                  <span className="ml-auto tabular-nums">{g.tabs.length}</span>
+                </div>
+              )}
+              {g.tabs.map((t) => renderRow(t, grouped))}
+            </div>
+          ))}
+        </div>
+      </aside>
+      <ResizeHandle {...width.handle} />
+    </>
+  );
+}
+
+/** Nom, couleur et `utilisateur@hôte` du serveur, en tête de chaque moitié d'un terminal divisé et de chaque case d'une grille. */
 function PaneHeader({ serverId }: { serverId: string }) {
   const s = useApp((st) => st.servers.find((x) => x.id === serverId));
   return (
@@ -817,4 +1100,9 @@ function RecordingsPanel({ activePane }: { activePane: string | null }) {
       )}
     </div>
   );
+}
+
+/** Libellé des boutons de la barre : masqué quand elle est étroite (assistant ouvert, petite fenêtre), l'icône et l'infobulle restent. */
+function Lbl({ children }: { children: string }) {
+  return <span className="hidden @[52rem]/termbar:inline">{children}</span>;
 }

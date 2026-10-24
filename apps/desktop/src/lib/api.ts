@@ -587,6 +587,8 @@ export interface GithubStatus {
 }
 
 export interface GithubRepo {
+  /** Identifiant GitHub, stable quand le dépôt est renommé. */
+  id: number;
   fullName: string;
   name: string;
   owner: string;
@@ -610,6 +612,8 @@ export interface GithubClone {
   commit: string;
   commitDate: string;
   subject: string;
+  /** `origin` désigne encore l'ancien nom `owner/name` d'un dépôt renommé. */
+  oldRemote: string | null;
 }
 
 export interface GithubContainer {
@@ -1777,12 +1781,13 @@ export const api = {
   githubGhDeployments: (owner: string, repo: string) => invoke<GithubGhDeployment[]>("github_gh_deployments", { owner, repo }),
   githubRelease: (owner: string, repo: string) => invoke<GithubRelease | null>("github_release", { owner, repo }),
   githubClones: (serverId: string, owner: string, repo: string) => invoke<GithubClone[]>("github_clones", { serverId, owner, repo }),
-  githubServerDeployments: (serverId: string, repos: { owner: string; name: string }[]) =>
+  githubServerDeployments: (serverId: string, repos: { id?: number; owner: string; name: string }[]) =>
     invoke<GithubDeployment[]>("github_server_deployments", { serverId, repos }),
   githubCloneState: (serverId: string, owner: string, repo: string, path: string, fetch: boolean) =>
     invoke<GithubClone>("github_clone_state", { serverId, owner, repo, path, fetch }),
   githubClone: (serverId: string, owner: string, repo: string, folder: string) => invoke<string>("github_clone", { serverId, owner, repo, folder }),
   githubPull: (serverId: string, owner: string, repo: string, path: string) => invoke<string>("github_pull", { serverId, owner, repo, path }),
+  githubSetRemote: (serverId: string, owner: string, repo: string, path: string) => invoke<GithubClone>("github_set_remote", { serverId, owner, repo, path }),
   agentInfo: (serverId: string) => invoke<AgentInfo>("agent_info", { serverId }),
   agentHistory: (serverId: string, rangeSecs: number, points = 400) =>
     invoke<HistoryPoint[]>("agent_history", { serverId, rangeSecs, points }),

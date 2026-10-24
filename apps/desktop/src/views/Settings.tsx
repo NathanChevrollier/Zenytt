@@ -28,7 +28,7 @@ import type { ThemeSetting } from "../lib/theme";
 import { comboOf, display, SHORTCUTS, shortcutOf, type ShortcutId } from "../lib/shortcuts";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Badge, Button, Card, Checkbox, CodeBlock, DataTable, Field, IconButton, Input, Loading, Segmented, Select, Switch, type Column } from "../components/ui";
+import { Badge, Button, Checkbox, CodeBlock, DataTable, Field, IconButton, Input, Loading, MenuButton, Segmented, Select, Switch, type Column } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 import { checkForUpdate } from "../lib/updater";
 import SyncSettings from "../components/SyncSettings";
@@ -52,33 +52,50 @@ const NAV: { id: TabId; label: string; icon: LucideIcon; description: string }[]
   { id: "journal", label: "Journal d'actions", icon: History, description: "Chaque modification faite par Zenytt sur un serveur, et chaque lecture de l'IA via MCP." },
 ];
 
-/** Groupe de réglages : un titre, puis des lignes dans une même carte. */
-function Group({ title, description, children, wide }: { title?: string; description?: string; children: ReactNode; wide?: boolean }) {
+/**
+ * Colonne de lecture alignée à gauche ; au-delà de ~1400 px de contenu, les groupes se répartissent
+ * sur deux colonnes (CSS columns : pas de trou, un groupe n'est jamais coupé).
+ */
+function Flow({ children }: { children: ReactNode }) {
+  return <div className="max-w-[960px] columns-1 gap-x-12 @min-[1400px]:max-w-[1960px] @min-[1400px]:columns-2 [&>*]:mb-7 [&>*]:break-inside-avoid">{children}</div>;
+}
+
+/** Aide sur une ligne : le texte complet reste lisible au survol. */
+function Hint({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <section className="flex flex-col gap-2.5">
+    <p className={`truncate text-xs text-muted ${className}`} title={typeof children === "string" ? children : undefined}>
+      {children}
+    </p>
+  );
+}
+
+/** Groupe de réglages : un petit titre, puis des lignes séparées par un filet (pas de carte). */
+function Group({ title, description, children }: { title?: string; description?: string; children: ReactNode }) {
+  return (
+    <section className="flex min-w-0 flex-col">
       {(title || description) && (
-        <div>
-          {title && <h2 className="text-sm font-semibold">{title}</h2>}
-          {description && <p className="text-[13px] text-muted">{description}</p>}
+        <div className="mb-1">
+          {title && <h3 className="text-[13px] font-semibold">{title}</h3>}
+          {description && <Hint>{description}</Hint>}
         </div>
       )}
-      {wide ? <div className="flex flex-col gap-3">{children}</div> : <Card padded={false} className="divide-y divide-border">{children}</Card>}
+      <div className="divide-y divide-line border-y border-line">{children}</div>
     </section>
   );
 }
 
 /**
- * Réglage à valeur (liste, bouton…) : ce que l'on règle à gauche, la valeur en cours à droite.
- * Même disposition partout, pour qu'on sache d'un coup d'œil ce que l'on modifie.
+ * Réglage à valeur (liste, bouton…) : ce que l'on règle à gauche, la valeur en cours à droite, sur
+ * une grille commune pour que les contrôles restent alignés et proches de leur libellé.
  */
-function Setting({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
+function Setting({ title, description, children }: { title: ReactNode; description?: ReactNode; children: ReactNode }) {
   return (
-    <div className="flex items-center gap-4 px-4 py-3.5">
-      <div className="min-w-0 flex-1">
+    <div className="grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-6 py-2">
+      <div className="min-w-0">
         <div className="text-[13px] font-medium">{title}</div>
-        {description && <p className="mt-0.5 text-xs leading-relaxed text-muted">{description}</p>}
+        {description && <Hint className="mt-0.5">{description}</Hint>}
       </div>
-      <div className="flex shrink-0 items-center gap-2">{children}</div>
+      <div className="flex items-center justify-end gap-2">{children}</div>
     </div>
   );
 }
@@ -98,7 +115,7 @@ export default function SettingsView() {
   return (
     <PageLayout title="Réglages" subtitle="Préférences de l'app, verrouillage, assistant, synchronisation et journal des actions." guide="settings" scroll={false}>
       <div className="flex min-h-0 flex-1">
-        <nav className="flex w-56 max-lg:w-44 shrink-0 flex-col gap-0.5 overflow-auto border-r border-border bg-panel p-2" aria-label="Rubriques des réglages">
+        <nav className="flex w-52 max-lg:w-44 shrink-0 flex-col gap-0.5 overflow-auto border-r border-border bg-panel p-2" aria-label="Rubriques des réglages">
           {NAV.map((n) => {
             const on = n.id === current.id;
             const Icon = n.icon;
@@ -116,23 +133,30 @@ export default function SettingsView() {
             );
           })}
         </nav>
-        <div className="min-w-0 flex-1 overflow-auto">
-          <div className={`mx-auto flex flex-col gap-6 px-8 py-6 ${current.id === "journal" ? "max-w-6xl" : "max-w-3xl"}`}>
-            <header>
-              <h2 className="text-lg font-semibold tracking-tight">{current.label}</h2>
-              <p className="text-[13px] text-muted">{current.description}</p>
+        {/* Contenu collé à la navigation, aligné à gauche : la largeur en plus sert aux colonnes. */}
+        <div className="@container min-w-0 flex-1 overflow-auto">
+          <div className={`flex flex-col gap-5 px-6 py-5 ${current.id === "journal" ? "h-full min-h-0" : ""}`}>
+            <header className="flex min-w-0 items-baseline gap-3">
+              <h2 className="shrink-0 text-base font-semibold tracking-tight">{current.label}</h2>
+              <p className="truncate text-[13px] text-muted" title={current.description}>
+                {current.description}
+              </p>
             </header>
             {current.id === "general" && <General />}
             {current.id === "terminal" && <TerminalPrefs />}
             {current.id === "shortcuts" && <Shortcuts />}
             {current.id === "lock" && <AppLock />}
-            {current.id === "ai" && <AiSettingsPanel onOpenAccess={() => setTab("mcp")} />}
+            {current.id === "ai" && (
+              <div className="max-w-[960px]">
+                <AiSettingsPanel onOpenAccess={() => setTab("mcp")} />
+              </div>
+            )}
             {current.id === "mcp" && <AiAccess />}
             {current.id === "sync" && (
-              <>
+              <Flow>
                 <SyncSettings />
                 <ExportImport />
-              </>
+              </Flow>
             )}
             {current.id === "maintenance" && <Maintenance />}
             {current.id === "journal" && <Journal />}
@@ -158,7 +182,7 @@ function General() {
     }
   };
   return (
-    <>
+    <Flow>
       <Group title="Démarrage et fermeture">
         <Toggle
           title="Lancer Zenytt à l'ouverture de ma session"
@@ -215,7 +239,7 @@ function General() {
         </Setting>
       </Group>
       <Group title="Onglets de la barre latérale" description="Décoche ce dont tu ne te sers pas : l'onglet disparaît de la barre latérale, sans rien désactiver (la palette Ctrl+K y mène toujours). Accueil, Aide et Réglages restent affichés.">
-        <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 px-4 py-3.5">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-x-4 gap-y-2 py-3">
           {SECTIONS.filter((s) => !ALWAYS_VISIBLE.includes(s.id)).map((s) => {
             const hidden = settings.hiddenSections ?? [];
             const Icon = s.icon;
@@ -249,7 +273,7 @@ function General() {
           onChange={(showHiddenFiles) => setSettings({ showHiddenFiles })}
         />
       </Group>
-    </>
+    </Flow>
   );
 }
 
@@ -259,8 +283,8 @@ function TerminalPrefs() {
   const size = settings.terminalFontSize;
   const setSize = (n: number) => setSettings({ terminalFontSize: Math.min(28, Math.max(9, n)) });
   return (
-    <>
-      <Group>
+    <Flow>
+      <Group title="Sessions et affichage">
         <Toggle
           title="Sessions persistantes (tmux)"
           description="Les nouveaux terminaux tournent dans une session tmux : ils survivent aux coupures réseau et à la fermeture de Zenytt, et se rattachent automatiquement."
@@ -287,6 +311,17 @@ function TerminalPrefs() {
             ]}
           />
         </Setting>
+        <Setting title="Liste des terminaux" description="Onglets en ligne au-dessus du terminal, ou colonne à gauche regroupée par serveur (pratique avec beaucoup de terminaux).">
+          <Select
+            className="w-52"
+            value={settings.terminalTabs ?? "horizontal"}
+            onChange={(terminalTabs) => setSettings({ terminalTabs })}
+            options={[
+              { value: "horizontal", label: "Onglets horizontaux" },
+              { value: "vertical", label: "Liste verticale" },
+            ]}
+          />
+        </Setting>
         <Toggle
           title="Monitoring sous le terminal"
           description="CPU, mémoire, disque, charge et réseau du serveur du terminal actif, rafraîchis toutes les 3 secondes."
@@ -301,10 +336,13 @@ function TerminalPrefs() {
           </Setting>
         )}
       </Group>
-      <div className="rounded-lg border border-border bg-term p-3 font-mono text-fg" style={{ fontSize: size }}>
-        <span className="text-ok">debian@prod-01</span>:<span className="text-accent">~</span>$ docker compose ps
-      </div>
-    </>
+      <section className="flex min-w-0 flex-col gap-1">
+        <h3 className="text-[13px] font-semibold">Aperçu</h3>
+        <div className="truncate rounded-lg border border-border bg-term p-3 font-mono text-fg" style={{ fontSize: size }}>
+          <span className="text-ok">debian@prod-01</span>:<span className="text-accent">~</span>$ docker compose ps
+        </div>
+      </section>
+    </Flow>
   );
 }
 
@@ -312,7 +350,8 @@ function Maintenance() {
   const { notify } = useAppPick("notify");
   const [checking, setChecking] = useState(false);
   return (
-    <Group>
+    <Flow>
+    <Group title="Mises à jour et journaux">
       <Setting title="Mises à jour" description="Zenytt vérifie au démarrage si une nouvelle version est publiée sur GitHub. Les mises à jour sont signées : une version modifiée est refusée.">
         <Button
           size="sm"
@@ -330,21 +369,18 @@ function Maintenance() {
           Ouvrir le dossier
         </Button>
       </Setting>
+    </Group>
+    <Group title="À propos">
       <Setting title="Soutenir Zenytt" description="Zenytt est gratuit et développé sur mon temps libre. S'il te rend service, un don sur GitHub Sponsors aide à le faire avancer.">
         <Button size="sm" icon={<Heart size={14} />} onClick={() => void openUrl(SPONSORS_URL)}>
           Soutenir
         </Button>
       </Setting>
       <Setting title="Licence et confidentialité" description="Zenytt n'envoie aucune télémétrie : tes données restent sur ton ordinateur. © 2026 Nathan Chevrollier, licence PolyForm Shield 1.0.0.">
-        <div className="flex flex-wrap justify-end gap-2">
-          {LEGAL_DOCS.map(([label, path]) => (
-            <Button key={path} size="sm" onClick={() => void openUrl(`${REPO_BLOB}/${path}`)}>
-              {label}
-            </Button>
-          ))}
-        </div>
+        <MenuButton size="sm" label="Documents" items={LEGAL_DOCS.map(([label, path]) => ({ label, onClick: () => void openUrl(`${REPO_BLOB}/${path}`) }))} />
       </Setting>
     </Group>
+    </Flow>
   );
 }
 
@@ -449,8 +485,7 @@ function Journal() {
   ];
 
   return (
-    <div className="flex flex-col gap-3">
-      <p className="text-xs text-muted">Fichier local, jamais envoyé ailleurs.</p>
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <label className="relative w-64">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />
@@ -469,7 +504,9 @@ function Journal() {
         />
         <Select className="w-48" aria-label="Période" value={period} onChange={setPeriod} options={PERIODS.map((p) => ({ value: p.value, label: p.label }))} />
         <Checkbox className="text-xs" checked={failedOnly} onChange={setFailedOnly} label="Échecs seulement" />
-        <span className="ml-auto text-xs text-muted tabular-nums">{rows.length} entrée(s)</span>
+        <span className="ml-auto text-xs text-muted tabular-nums" title="Fichier local, jamais envoyé ailleurs.">
+          {rows.length} entrée(s)
+        </span>
         <IconButton title="Actualiser" onClick={() => void load()}>
           <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
         </IconButton>
@@ -480,9 +517,10 @@ function Journal() {
       {entries === null ? (
         <Loading rows={8} />
       ) : (
-        <Card padded={false} className="h-[min(620px,calc(100vh-300px))] overflow-hidden">
+        // La table prend toute la hauteur restante de la page plutôt qu'une hauteur fixe.
+        <div className="min-h-[320px] flex-1 overflow-hidden rounded-lg border border-border bg-panel">
           <DataTable className="h-full" rows={rows} rowKey={(e) => `${e.t}${e.action}${e.detail}`} columns={columns} rowHeight={34} initialSort={{ key: "t", dir: "desc" }} empty="Aucune action enregistrée." />
-        </Card>
+        </div>
       )}
     </div>
   );
@@ -496,10 +534,10 @@ function AiAccess() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-6">
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-semibold">Ce que l'IA peut faire</h2>
-        <ul className="flex flex-col gap-1 text-sm text-muted">
+    <Flow>
+      <section className="flex flex-col gap-1">
+        <h3 className="text-[13px] font-semibold">Ce que l'IA peut faire</h3>
+        <ul className="flex flex-col gap-1 text-[13px] text-muted">
           <li>• <strong className="text-fg">Lire uniquement</strong> : état, métriques, alertes, conteneurs, logs, sites, configuration nginx, audit, sauvegardes.</li>
           <li>• <strong className="text-fg">Aucune action</strong> : aucun outil ne peut modifier un serveur ni exécuter une commande libre.</li>
           <li>• Les mots de passe, jetons et clés sont masqués avant l'envoi ; clés privées et fichiers sensibles restent illisibles.</li>
@@ -507,16 +545,9 @@ function AiAccess() {
         </ul>
       </section>
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-semibold">Serveurs accessibles par l'IA</h2>
-        <p className="text-xs text-muted">Désactivé par défaut. Les données lues sont envoyées au fournisseur du modèle que tu utilises.</p>
-        <Card padded={false} className="divide-y divide-border">
+      <Group title="Serveurs accessibles par l'IA" description="Désactivé par défaut. Les données lues sont envoyées au fournisseur du modèle que tu utilises.">
           {servers.map((s) => (
-            <div key={s.id} className="flex items-center gap-3 px-4 py-2.5">
-              <span className="min-w-0 flex-1">
-                <span className="block text-[13px] font-medium">{s.name}</span>
-                <span className="block truncate font-mono text-xs text-muted">{s.host}</span>
-              </span>
+            <Setting key={s.id} title={s.name} description={<span className="font-mono">{s.host}</span>}>
               <Switch
                 label={`Accès IA pour ${s.name}`}
                 checked={!!s.aiAccess}
@@ -529,15 +560,14 @@ function AiAccess() {
                   }
                 }}
               />
-            </div>
+            </Setting>
           ))}
-          {servers.length === 0 && <p className="p-4 text-sm text-muted">Aucun serveur.</p>}
-        </Card>
-      </section>
+          {servers.length === 0 && <p className="py-2 text-[13px] text-muted">Aucun serveur.</p>}
+      </Group>
 
       {config && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold">Brancher Claude</h2>
+          <h3 className="text-[13px] font-semibold">Brancher Claude</h3>
           <Field label="Claude Code (dans un terminal)">
             <CodeBlock code={config.claudeCode} />
           </Field>
@@ -547,7 +577,7 @@ function AiAccess() {
           <p className="text-xs text-muted">Le serveur MCP est l'app Zenytt elle-même, lancée avec l'option --mcp (sans fenêtre). Réinstalle la config si tu déplaces Zenytt.</p>
         </section>
       )}
-    </div>
+    </Flow>
   );
 }
 
@@ -594,33 +624,35 @@ function AppLock() {
   };
 
   return (
-    <Card className="flex flex-col gap-4">
-      <div>
-        <span className="flex items-center gap-2 text-[13px] font-medium">
-          <Lock size={14} /> Verrouillage de Zenytt {configured ? <Badge tone="ok">activé</Badge> : <Badge>désactivé</Badge>}
-        </span>
-        <span className="mt-0.5 block text-xs leading-relaxed text-muted">
-          Zenytt ouvert donne accès à tous tes serveurs. Un mot de passe masque l'interface quand tu t'absentes ; connexions et terminaux continuent en arrière-plan. Seule son empreinte est conservée, dans le {VAULT}.
-        </span>
-      </div>
-      {configured && !editing && (
-        <>
-          <Field label="Verrouillage automatique">
-            <Select className="w-80" value={settings.lockMinutes} onChange={(lockMinutes) => setSettings({ lockMinutes })} options={LOCK_DELAYS.map((d) => ({ value: d.minutes, label: d.label }))} />
-          </Field>
-          <div className="flex gap-2">
+    <Flow>
+    <Group title="Verrouillage de Zenytt">
+      <Setting
+        title={
+          <span className="flex items-center gap-2">
+            <Lock size={14} /> Mot de passe {configured ? <Badge tone="ok">activé</Badge> : <Badge>désactivé</Badge>}
+          </span>
+        }
+        description={`Zenytt ouvert donne accès à tous tes serveurs. Un mot de passe masque l'interface quand tu t'absentes ; connexions et terminaux continuent en arrière-plan. Seule son empreinte est conservée, dans le ${VAULT}.`}
+      >
+        {configured && !editing && (
+          <>
             <Button size="sm" onClick={() => setEditing(true)}>
-              Changer le mot de passe
+              Changer
             </Button>
             <Button size="sm" variant="danger" onClick={() => void remove()}>
               Désactiver
             </Button>
-          </div>
-        </>
+          </>
+        )}
+      </Setting>
+      {configured && !editing && (
+        <Setting title="Verrouillage automatique">
+          <Select className="w-80" value={settings.lockMinutes} onChange={(lockMinutes) => setSettings({ lockMinutes })} options={LOCK_DELAYS.map((d) => ({ value: d.minutes, label: d.label }))} />
+        </Setting>
       )}
       {(!configured || editing) && (
         <form
-          className="flex flex-col gap-2"
+          className="flex flex-col gap-2 py-3"
           onSubmit={(e) => {
             e.preventDefault();
             void save();
@@ -646,7 +678,8 @@ function AppLock() {
           </div>
         </form>
       )}
-    </Card>
+    </Group>
+    </Flow>
   );
 }
 
@@ -690,15 +723,24 @@ function ExportImport() {
   };
 
   return (
-    <Card className="flex flex-col gap-3">
-      <div>
-        <span className="text-[13px] font-medium">Exporter / importer mes réglages</span>
-        <span className="mt-0.5 block text-xs leading-relaxed text-muted">
-          Serveurs, bureaux à distance, identifiants, clés d'hôte approuvées, snippets et tunnels, pour changer de PC ou garder une copie. L'import complète la configuration actuelle sans rien supprimer.
-        </span>
-      </div>
-      {exporting ? (
-        <div className="flex flex-col gap-2">
+    <Group title="Fichier de réglages">
+      <Setting
+        title="Exporter / importer mes réglages"
+        description="Serveurs, bureaux à distance, identifiants, clés d'hôte approuvées, snippets et tunnels, pour changer de PC ou garder une copie. L'import complète la configuration actuelle sans rien supprimer."
+      >
+        {!exporting && (
+          <>
+            <Button size="sm" onClick={() => setExporting(true)}>
+              Exporter…
+            </Button>
+            <Button size="sm" onClick={() => void doImport()}>
+              Importer…
+            </Button>
+          </>
+        )}
+      </Setting>
+      {exporting && (
+        <div className="flex flex-col gap-2 py-3">
           <Field label="Mot de passe de chiffrement" hint="Recommandé ; obligatoire avec les secrets (8 caractères minimum).">
             <Input className="max-w-80" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} />
           </Field>
@@ -717,17 +759,8 @@ function ExportImport() {
             </Button>
           </div>
         </div>
-      ) : (
-        <div className="flex gap-2">
-          <Button size="sm" onClick={() => setExporting(true)}>
-            Exporter…
-          </Button>
-          <Button size="sm" onClick={() => void doImport()}>
-            Importer…
-          </Button>
-        </div>
       )}
-    </Card>
+    </Group>
   );
 }
 
@@ -756,18 +789,19 @@ function Shortcuts() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center">
-        <span className="flex-1 text-xs text-muted">Échap pour annuler la saisie. Ctrl ou Alt obligatoire (ou une touche F1–F12), pour ne pas gêner la frappe.</span>
+      <div className="flex max-w-[960px] items-center gap-3 @min-[1400px]:max-w-[1960px]">
+        <Hint className="flex-1">Échap pour annuler la saisie. Ctrl ou Alt obligatoire (ou une touche F1–F12), pour ne pas gêner la frappe.</Hint>
         {settings.shortcuts && Object.keys(settings.shortcuts).length > 0 && (
           <Button size="sm" onClick={() => setSettings({ shortcuts: {} })}>
             Tout réinitialiser
           </Button>
         )}
       </div>
-      <Card padded={false} className="divide-y divide-border">
+      {/* Liste découpée en colonnes sur grand écran ; chaque ligne garde la même hauteur. */}
+      <div className="max-w-[960px] columns-1 gap-x-12 @min-[1400px]:max-w-[1960px] @min-[1400px]:columns-2">
         {(Object.keys(SHORTCUTS) as ShortcutId[]).map((id) => (
-          <div key={id} className="flex items-center gap-3 px-4 py-2 text-[13px]">
-            <span className="flex-1">{SHORTCUTS[id].label}</span>
+          <div key={id} className="flex h-10 break-inside-avoid items-center gap-3 border-b border-line text-[13px]">
+            <span className="min-w-0 flex-1 truncate">{SHORTCUTS[id].label}</span>
             <button
               className={`min-w-36 rounded-md border px-2 py-1 font-mono text-xs ${recording === id ? "border-accent text-accent" : "border-border hover:bg-hover"}`}
               onClick={() => setRecording(recording === id ? null : id)}
@@ -776,7 +810,7 @@ function Shortcuts() {
             </button>
           </div>
         ))}
-      </Card>
+      </div>
     </div>
   );
 }

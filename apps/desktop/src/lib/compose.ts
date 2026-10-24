@@ -86,3 +86,11 @@ export function projectNameFromPath(path: string): string {
     .slice(0, 40)
     .replace(/-+$/, "");
 }
+
+const SIZE_UNITS: Record<string, number> = { b: 1, kb: 1e3, mb: 1e6, gb: 1e9, tb: 1e12, kib: 1024, mib: 1024 ** 2, gib: 1024 ** 3, tib: 1024 ** 4 };
+
+/** Mémoire utilisée lue dans `docker stats` (« 12.5MiB / 1.9GiB » → octets de la partie gauche), 0 si illisible. */
+export function memBytes(memUsage: string): number {
+  const m = /^\s*([\d.]+)\s*([a-z]+)/i.exec(memUsage);
+  return m ? Number(m[1]) * (SIZE_UNITS[m[2].toLowerCase()] ?? 0) : 0;
+}

@@ -117,7 +117,7 @@ export default function AssistantPanel() {
   const configured = config && (config.hasKey || config.provider === "openai");
 
   return (
-    <aside className="flex w-[420px] max-w-[45vw] shrink-0 flex-col border-l border-border bg-panel relative z-30">
+    <aside className="relative z-30 flex w-[420px] shrink-0 flex-col border-l border-border bg-panel max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:max-w-[calc(100%-3rem)] max-xl:shadow-2xl xl:max-w-[34vw]">
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Sparkles size={15} className="text-accent" />
         <span className="text-sm font-medium">Assistant</span>
