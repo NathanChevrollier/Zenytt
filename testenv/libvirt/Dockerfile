@@ -16,8 +16,11 @@ RUN printf '%s\n' 'unix_sock_group = "libvirt"' 'unix_sock_rw_perms = "0770"' 'a
 # on le désactive, ce qui ne change rien au pilotage testé ici.
 RUN printf '%s\n' 'cgroup_controllers = [ ]' >> /etc/libvirt/qemu.conf
 # Image CirrOS (15 Mo) : démarre même en émulation.
-RUN curl -fsSL -o /var/lib/libvirt/images/cirros.qcow2 \
-      https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img
+# Site officiel parfois lent : plusieurs essais, puis la copie publiée sur GitHub.
+RUN for u in https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img \
+             https://github.com/cirros-dev/cirros/releases/download/0.6.2/cirros-0.6.2-x86_64-disk.img; do \
+      curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 300 -o /var/lib/libvirt/images/cirros.qcow2 "$u" && exit 0; \
+    done; exit 1
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 EXPOSE 22

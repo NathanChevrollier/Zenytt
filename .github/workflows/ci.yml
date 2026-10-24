@@ -230,13 +230,15 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Les images se construisent pendant que les exemples compilent.
       - name: Démarrage des faux VPS (en arrière-plan)
-        run: nohup docker compose -f testenv/docker-compose.yml up -d --build > compose.log 2>&1 &
+        # Le code de sortie est gardé : un échec de construction arrête le job au lieu d'attendre SSH pour rien.
+        run: nohup sh -c 'docker compose -f testenv/docker-compose.yml up -d --build > compose.log 2>&1; echo $? > compose.rc' > /dev/null 2>&1 &
       - name: Compilation des exemples
         run: cargo build -p zenytt-core --examples
       - name: Attente de SSH
         run: |
-          while pgrep -f "docker compose -f testenv" > /dev/null; do sleep 2; done
+          while [ ! -f compose.rc ]; do sleep 2; done
           cat compose.log
+          [ "$(cat compose.rc)" = 0 ] || { echo "::error::construction des faux VPS en échec"; exit 1; }
           for port in 2222 2223 2224 2225 2226; do
             for i in $(seq 1 90); do
               (echo > /dev/tcp/127.0.0.1/$port) 2>/dev/null && head -c 4 < /dev/tcp/127.0.0.1/$port | grep -q SSH && break
