@@ -131,7 +131,7 @@ export function StatTile({
     <Tag
       type={onClick ? "button" : undefined}
       onClick={onClick}
-      className={`flex min-w-0 flex-col gap-1.5 rounded-xl border bg-panel px-4 py-3 text-left ${border} ${onClick ? `transition-colors hover:border-border-strong ${FOCUS_RING}` : ""}`}
+      className={`@container flex min-w-0 flex-col gap-1.5 rounded-xl border bg-panel px-4 py-3 text-left ${border} ${onClick ? `transition-colors hover:border-border-strong ${FOCUS_RING}` : ""}`}
     >
       <div className="flex items-center justify-between gap-2 text-xs text-muted">
         <span className="truncate">{label}</span>
@@ -139,7 +139,12 @@ export function StatTile({
       </div>
       <div className="flex items-end justify-between gap-2">
         <span className="truncate text-2xl leading-tight font-semibold tracking-tight tabular-nums">{value}</span>
-        {trend && <Sparkline values={trend} tone={tone ?? "accent"} max={trendMax} />}
+        {/* Tuile étroite (six par rangée) : la valeur passe avant la tendance. */}
+        {trend && (
+          <span className="hidden @min-[13rem]:block">
+            <Sparkline values={trend} tone={tone ?? "accent"} max={trendMax} />
+          </span>
+        )}
       </div>
       {hint && <div className="truncate text-[11.5px] text-faint">{hint}</div>}
     </Tag>

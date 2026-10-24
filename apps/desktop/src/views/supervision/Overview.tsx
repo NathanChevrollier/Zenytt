@@ -200,7 +200,7 @@ export default function Overview({
             <StatTile
               label="Mémoire"
               value={m ? pct(memPct) : "…"}
-              hint={m ? `${formatBytes(m.memUsed)} / ${formatBytes(m.memTotal)}${m.swapTotal ? ` · swap ${pct(swapPct)}` : ""}` : undefined}
+              hint={m ? `${formatBytes(m.memUsed)} / ${formatBytes(m.memTotal)}${m.swapUsed ? ` · swap ${pct(swapPct)}` : ""}` : undefined}
               tone={m ? meterTone(memPct) : undefined}
               flag={m ? flag(memPct, memRule) : undefined}
               trend={trend((x) => ratio(x.memUsed, x.memTotal))}
@@ -216,7 +216,7 @@ export default function Overview({
             <StatTile
               label="Charge 1 min"
               value={m ? m.load[0].toFixed(2) : "…"}
-              hint={m ? `${Math.round(loadPct)} % de ${m.cpuCount} cœur${m.cpuCount > 1 ? "s" : ""} · 5 min ${m.load[1].toFixed(2)} · 15 min ${m.load[2].toFixed(2)}` : undefined}
+              hint={m ? `${Math.round(loadPct)} % de ${m.cpuCount} cœur${m.cpuCount > 1 ? "s" : ""}` : undefined}
               tone={m ? (loadPct >= 200 ? "danger" : loadPct >= 100 ? "warn" : "accent") : undefined}
               trend={trend((x) => x.load[0])}
             />
@@ -234,7 +234,7 @@ export default function Overview({
             <Chart title="Réseau" note={<Legend items={["↓ réception", "↑ émission"]} />}>
               <TimeChart times={times} series={netSeries} format={rate} height={150} />
             </Chart>
-            <Chart title="Charge" note={m ? (loadRule != null ? `seuil d'alerte ${loadRule}` : `ligne = ${m.cpuCount} cœur${m.cpuCount > 1 ? "s" : ""}`) : undefined}>
+            <Chart title="Charge" note={m ? `5 min ${m.load[1].toFixed(2)} · 15 min ${m.load[2].toFixed(2)} · ${loadRule != null ? `seuil d'alerte ${loadRule}` : `ligne = ${m.cpuCount} cœur${m.cpuCount > 1 ? "s" : ""}`}` : undefined}>
               <TimeChart times={times} series={loadSeries} format={(v) => v.toFixed(2)} height={150} threshold={loadRule ?? m?.cpuCount} />
             </Chart>
           </div>
@@ -302,7 +302,7 @@ export default function Overview({
           </div>
         </section>
 
-        <aside aria-label="À traiter et alimentation" className="flex min-w-0 flex-col gap-4">
+        <aside aria-label="À traiter et alimentation" className="grid min-w-0 items-start gap-4 @3xl:grid-cols-2 @min-[1100px]:grid-cols-1">
           {rail}
         </aside>
       </div>

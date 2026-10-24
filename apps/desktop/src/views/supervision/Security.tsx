@@ -148,7 +148,7 @@ function Jump({ onClick, children }: { onClick: () => void; children: ReactNode 
 
 function Block({ id, ref, title, children }: { id: string; ref: React.RefObject<HTMLElement | null>; title: string; children: ReactNode }) {
   return (
-    <section id={`sec-${id}`} ref={ref} aria-label={title} className="flex min-w-0 scroll-mt-4 flex-col gap-3">
+    <section id={`sec-${id}`} ref={ref} aria-label={title} className="@container flex min-w-0 scroll-mt-4 flex-col gap-3">
       <h2 className="text-sm font-semibold">{title}</h2>
       {children}
     </section>

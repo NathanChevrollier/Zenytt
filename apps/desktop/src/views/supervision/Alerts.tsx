@@ -147,7 +147,7 @@ export default function AlertsDrawer({ serverId, agent, reload, onClose }: { ser
       <div className="flex flex-col gap-4">
         {st.configError && <ErrorState message={st.configError} />}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section className="rounded-xl border border-border bg-panel p-4">
+        <section className="rounded-xl border border-border bg-panel p-4 lg:col-span-2">
           <h3 className="mb-1 text-[13px] font-semibold">Règles d'alerte</h3>
           <p className="mb-3 text-xs text-muted">Une alerte part quand le seuil est dépassé pendant toute la durée indiquée, puis un message « résolu » quand ça redescend.</p>
           <div className="flex flex-col gap-2">
@@ -235,7 +235,7 @@ export default function AlertsDrawer({ serverId, agent, reload, onClose }: { ser
           </div>
         </section>
 
-        <section className="rounded-xl border border-border bg-panel p-4">
+        <section className="rounded-xl border border-border bg-panel p-4 lg:col-span-2">
           <h3 className="mb-3 text-[13px] font-semibold">Journal des alertes</h3>
           {st.recentEvents.length === 0 ? (
             <p className="text-sm text-muted">Aucune alerte pour l'instant.</p>

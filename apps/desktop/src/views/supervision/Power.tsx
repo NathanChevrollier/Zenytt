@@ -124,6 +124,11 @@ export function PowerCard({ name, power, provider, onConfigure }: { name: string
       <div className="flex items-center gap-2 border-t border-border px-4 pt-2.5 text-[11.5px] text-muted">
         <span className="truncate">Par l'hébergeur{kind ? ` · ${kind}` : ""}</span>
         {ready && (
+          <button type="button" className="text-accent hover:underline" onClick={onConfigure}>
+            Configurer
+          </button>
+        )}
+        {ready && (
           <span className="ml-auto flex items-center gap-1.5" aria-live="polite">
             {status ? (
               <Badge tone={tone} title={status.state === "unknown" ? status.raw : undefined}>
@@ -170,9 +175,6 @@ export function PowerCard({ name, power, provider, onConfigure }: { name: string
             </Button>
             <Button size="sm" variant="danger" loading={busy === "powerOff"} disabled={status?.state === "off"} onClick={() => void act("powerOff")}>
               Éteindre…
-            </Button>
-            <Button size="sm" variant="ghost" className="ml-auto" onClick={onConfigure}>
-              Configurer
             </Button>
           </div>
         </>
