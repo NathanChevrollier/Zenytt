@@ -243,7 +243,7 @@ export default function TerminalView({ visible }: { visible: boolean }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-[42px] shrink-0 items-center gap-1 border-b border-border bg-rail pr-2 pl-2">
+      <div className="@container/termbar flex h-[42px] shrink-0 items-center gap-1 border-b border-border bg-rail pr-2 pl-2">
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overflow-y-hidden" role="tablist" aria-label="Terminaux ouverts">
           {tabs.map((t) => {
             const s = serverOf(t.serverId);
@@ -300,7 +300,7 @@ export default function TerminalView({ visible }: { visible: boolean }) {
           <MenuButton
             size="sm"
             variant={current?.split != null ? "subtle" : "ghost"}
-            label="Diviser"
+            label={<Lbl>Diviser</Lbl>}
             icon={current?.splitDir === "rows" ? <Rows2 size={14} /> : <Columns2 size={14} />}
             title="Diviser l'écran (même serveur ou un autre)"
             disabled={!current || !!current.grid || !!current.join}
@@ -308,11 +308,11 @@ export default function TerminalView({ visible }: { visible: boolean }) {
             items={splitItems}
           />
           <Button size="sm" variant="ghost" icon={<LayoutGrid size={14} />} disabled={servers.length < 2} onClick={() => setMultiPicker(true)} title="Un terminal par serveur, en grille">
-            Grille
+            <Lbl>Grille</Lbl>
           </Button>
           <ToolbarSep />
           <Button size="sm" variant={dock ? "subtle" : "ghost"} icon={<PanelRight size={14} />} aria-pressed={!!dock} onClick={() => setDock(dock ? null : "files")} title="Panneau latéral : fichiers, fragments, historique, enregistrements">
-            Panneau
+            <Lbl>Panneau</Lbl>
           </Button>
           <ToolbarSep />
           <IconButton size="sm" title={`Rechercher dans le terminal (${display(shortcutOf("termSearch"))})`} disabled={!act} onClick={() => act?.search()}>
@@ -324,7 +324,7 @@ export default function TerminalView({ visible }: { visible: boolean }) {
           <MenuButton
             size="sm"
             variant={sharedMode ? "subtle" : "ghost"}
-            label="Partage"
+            label={<Lbl>Partage</Lbl>}
             icon={<Share2 size={14} />}
             title="Partager, rejoindre, diffuser la saisie"
             items={() => [
@@ -340,7 +340,7 @@ export default function TerminalView({ visible }: { visible: boolean }) {
             ]}
           />
           <Button size="sm" variant="ghost" icon={<History size={14} />} disabled={!runner} onClick={() => runner && setSessionsOf(runner)} title="Sessions persistantes (tmux) du serveur">
-            Sessions
+            <Lbl>Sessions</Lbl>
           </Button>
         </div>
       </div>
@@ -817,4 +817,9 @@ function RecordingsPanel({ activePane }: { activePane: string | null }) {
       )}
     </div>
   );
+}
+
+/** Libellé des boutons de la barre : masqué quand elle est étroite (assistant ouvert, petite fenêtre), l'icône et l'infobulle restent. */
+function Lbl({ children }: { children: string }) {
+  return <span className="hidden @[52rem]/termbar:inline">{children}</span>;
 }
