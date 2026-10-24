@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composeChoices, composeFileIn, containerKey, isComposeFile, projectCounts, projectDir, projectNameFromPath } from "./compose";
+import { composeChoices, composeFileIn, containerKey, isComposeFile, memBytes, projectCounts, projectDir, projectNameFromPath } from "./compose";
 import type { ComposeFileInfo, ComposeFileState } from "./api";
 
 const info = (state: ComposeFileState, hasBuild = false): ComposeFileInfo => ({ file: "/opt/app/docker-compose.yml", project: "app", hasBuild, ports: [], busyPorts: [], state });
@@ -52,5 +52,17 @@ describe("nom de projet depuis le dossier", () => {
   it("donne le dossier du fichier compose", () => {
     expect(projectDir({ configFiles: "/opt/app/docker-compose.yml,/opt/app/override.yml" })).toBe("/opt/app");
     expect(projectDir({ configFiles: "/compose.yml" })).toBe("/");
+  });
+});
+
+describe("memBytes", () => {
+  it("lit la partie utilisée de docker stats", () => {
+    expect(memBytes("12.5MiB / 1.9GiB")).toBe(12.5 * 1024 ** 2);
+    expect(memBytes("512kB / 2GB")).toBe(512_000);
+    expect(memBytes("1GiB / 4GiB")).toBe(1024 ** 3);
+  });
+  it("renvoie 0 si illisible", () => {
+    expect(memBytes("--")).toBe(0);
+    expect(memBytes("")).toBe(0);
   });
 });
