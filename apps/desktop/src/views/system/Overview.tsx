@@ -1,10 +1,10 @@
 // Vue d'ensemble en tableau de bord : fiche du serveur (nom d'hôte et fuseau modifiables sur place),
-// ressources, mises à jour et sécurité en résumé, points à traiter et alimentation (redémarrer, programmer, éteindre), avec l'attente du retour après un redémarrage.
+// ressources, audit de sécurité (score, constats à corriger ou ignorer), mises à jour en résumé et alimentation (redémarrer, programmer, éteindre), avec l'attente du retour après un redémarrage.
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { CalendarClock, Check, Clock, Cpu, Globe, Loader2, MemoryStick, Pencil, PowerOff, RotateCw, Server, ShieldCheck, X } from "lucide-react";
+import { CalendarClock, Check, Clock, Cpu, Globe, Loader2, MemoryStick, Pencil, PowerOff, RotateCw, Server, X } from "lucide-react";
 import { api, diskCounts, errorMessage, formatBytes, formatDuration, type Metrics, type SystemInfo, type SystemUpdate } from "../../lib/api";
-import { formatAt, scoreVerdict, updateGroup, validHostname } from "../../lib/system";
-import { ScoreGauge, type SecTab } from "./Security";
+import { formatAt, updateGroup, validHostname } from "../../lib/system";
+import { AuditChecks, AuditFindings, type AuditProps } from "./Audit";
 import { useApp } from "../../lib/store";
 import { usePolling } from "../../lib/poll";
 import { Button, Card, CRIT_AT, ErrorState, Eyebrow, Field, IconButton, Input, Loading, Meter, Modal, ResultBanner, Segmented, StatusDot, WARN_AT, type Tone } from "../../components/ui";
@@ -23,9 +23,7 @@ export default function Overview({
   updatesError,
   visible,
   onShowUpdates,
-  security,
-  auditing,
-  onShowSecurity,
+  audit,
 }: {
   serverId: string;
   name: string;
@@ -37,9 +35,7 @@ export default function Overview({
   /** Onglet affiché : les ressources ne sont relues que dans ce cas. */
   visible: boolean;
   onShowUpdates: () => void;
-  security: { score: number; problems: unknown[]; serious: number; banned: number | null } | null;
-  auditing: boolean;
-  onShowSecurity: (sub?: SecTab) => void;
+  audit: AuditProps;
 }) {
   const { notify, refreshServers } = useApp.getState();
   const [zones, setZones] = useState<string[]>([]);
@@ -197,64 +193,66 @@ export default function Overview({
 
         <Resources serverId={serverId} visible={visible} />
 
-        <div className="grid gap-4 @2xl:grid-cols-2">
-          <Tile
-            title="Mises à jour"
-            hint={info.packageManager ?? undefined}
-            action={
-              <Button size="sm" disabled={!updates} onClick={onShowUpdates}>
-                {updates?.length ? "Voir la liste" : "Ouvrir"}
-              </Button>
-            }
-          >
-            {!updates ? (
-              updatesError ? (
-                <Status tone="danger" title="Liste indisponible" detail={updatesError} />
-              ) : (
-                <Status tone="muted" title="Vérification…" spin />
-              )
-            ) : updates.length === 0 ? (
-              <Status tone="ok" title="Système à jour" detail="Aucun paquet en attente" />
-            ) : (
-              <Status
-                tone={kernelUpdates ? "warn" : "accent"}
-                title={`${updates.length} mise${updates.length > 1 ? "s" : ""} à jour disponible${updates.length > 1 ? "s" : ""}`}
-                detail={kernelUpdates ? `Dont ${kernelUpdates} noyau ou démarrage : redémarrage à prévoir` : "Paquets du système"}
-              />
-            )}
-          </Tile>
-          <SecurityTile security={security} auditing={auditing} onOpen={onShowSecurity} />
-        </div>
+        <AuditFindings {...audit} />
       </div>
 
-      <section aria-label="Alimentation" className={`flex min-w-0 flex-col @5xl:col-start-2 ${callouts ? "@5xl:row-start-2" : "@5xl:row-span-2 @5xl:row-start-1"}`}>
-        {waitStart ? (
-          <Waiting name={name} start={waitStart} onStop={stopWaiting} />
-        ) : (
-          <Card padded={false} className="flex h-full flex-col">
-            <h2 className="flex items-baseline gap-2 border-b border-border px-4 py-2.5 text-[13px] font-semibold">
-              Alimentation <span className="truncate text-xs font-normal text-muted">coupe sessions et services</span>
-            </h2>
-            <div className="divide-y divide-border">
-              <PowerRow icon={<RotateCw size={15} />} title="Redémarrer" text="Zenytt attend le retour puis se reconnecte.">
-                <Button size="sm" onClick={() => setModal("reboot")}>
-                  Redémarrer…
-                </Button>
-              </PowerRow>
-              <PowerRow icon={<CalendarClock size={15} />} title="Programmer" text="Différé, annulable jusqu'à l'heure prévue.">
-                <Button size="sm" onClick={() => setModal("schedule")}>
-                  Programmer…
-                </Button>
-              </PowerRow>
-              <PowerRow icon={<PowerOff size={15} className="text-danger" />} title="Éteindre" text="Rallumage depuis l'hébergeur seulement.">
-                <Button size="sm" variant="danger" onClick={() => setModal("poweroff")}>
-                  Éteindre…
-                </Button>
-              </PowerRow>
-            </div>
-          </Card>
-        )}
-      </section>
+      <div className={`flex min-w-0 flex-col gap-4 @5xl:col-start-2 ${callouts ? "@5xl:row-start-2" : "@5xl:row-span-2 @5xl:row-start-1"}`}>
+        <section aria-label="Alimentation" className="flex min-w-0 flex-col">
+          {waitStart ? (
+            <Waiting name={name} start={waitStart} onStop={stopWaiting} />
+          ) : (
+            <Card padded={false} className="flex flex-col">
+              <h2 className="flex items-baseline gap-2 border-b border-border px-4 py-2.5 text-[13px] font-semibold">
+                Alimentation <span className="truncate text-xs font-normal text-muted">coupe sessions et services</span>
+              </h2>
+              <div className="divide-y divide-border">
+                <PowerRow icon={<RotateCw size={15} />} title="Redémarrer" text="Zenytt attend le retour puis se reconnecte.">
+                  <Button size="sm" onClick={() => setModal("reboot")}>
+                    Redémarrer…
+                  </Button>
+                </PowerRow>
+                <PowerRow icon={<CalendarClock size={15} />} title="Programmer" text="Différé, annulable jusqu'à l'heure prévue.">
+                  <Button size="sm" onClick={() => setModal("schedule")}>
+                    Programmer…
+                  </Button>
+                </PowerRow>
+                <PowerRow icon={<PowerOff size={15} className="text-danger" />} title="Éteindre" text="Rallumage depuis l'hébergeur seulement.">
+                  <Button size="sm" variant="danger" onClick={() => setModal("poweroff")}>
+                    Éteindre…
+                  </Button>
+                </PowerRow>
+              </div>
+            </Card>
+          )}
+        </section>
+        <Tile
+          title="Mises à jour"
+          hint={info.packageManager ?? undefined}
+          action={
+            <Button size="sm" disabled={!updates} onClick={onShowUpdates}>
+              {updates?.length ? "Voir la liste" : "Ouvrir"}
+            </Button>
+          }
+        >
+          {!updates ? (
+            updatesError ? (
+              <Status tone="danger" title="Liste indisponible" detail={updatesError} />
+            ) : (
+              <Status tone="muted" title="Vérification…" spin />
+            )
+          ) : updates.length === 0 ? (
+            <Status tone="ok" title="Système à jour" detail="Aucun paquet en attente" />
+          ) : (
+            <Status
+              tone={kernelUpdates ? "warn" : "accent"}
+              title={`${updates.length} mise${updates.length > 1 ? "s" : ""} à jour disponible${updates.length > 1 ? "s" : ""}`}
+              detail={kernelUpdates ? `Dont ${kernelUpdates} noyau ou démarrage : redémarrage à prévoir` : "Paquets du système"}
+            />
+          )}
+        </Tile>
+        {/* Hauteur nulle + grow : la liste comble la colonne sans l'allonger, et défile au besoin. */}
+        <AuditChecks {...audit} className="max-h-72 @5xl:h-0 @5xl:max-h-none @5xl:min-h-40 @5xl:grow" />
+      </div>
 
       {modal && <PowerModal mode={modal} name={name} onClose={() => setModal(null)} onConfirm={(k, d) => void doPower(k, d)} />}
     </div>
@@ -262,9 +260,9 @@ export default function Overview({
 }
 
 /** Tuile d'état compacte : titre et action sur une ligne, puis l'indicateur. */
-function Tile({ title, hint, action, tone, children }: { title: string; hint?: string; action?: ReactNode; tone?: "danger"; children: ReactNode }) {
+function Tile({ title, hint, action, children }: { title: string; hint?: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <Card padded={false} tone={tone} className="flex h-full min-w-0 flex-col">
+    <Card padded={false} className="flex min-w-0 flex-col">
       <div className="flex min-h-11 items-center gap-2 border-b border-border px-4 py-2">
         <h2 className="text-[13px] font-semibold">{title}</h2>
         {hint && <span className="truncate text-xs text-faint">{hint}</span>}
@@ -289,43 +287,6 @@ function Status({ tone, title, detail, spin }: { tone: Tone; title: ReactNode; d
         )}
       </div>
     </div>
-  );
-}
-
-function SecurityTile({ security, auditing, onOpen }: { security: { score: number; problems: unknown[]; serious: number; banned: number | null } | null; auditing: boolean; onOpen: (sub?: SecTab) => void }) {
-  const n = security?.problems.length ?? 0;
-  return (
-    <Tile
-      title="Sécurité"
-      tone={security?.serious ? "danger" : undefined}
-      action={
-        <Button size="sm" icon={<ShieldCheck size={13} />} onClick={() => onOpen("audit")}>
-          {n ? "Voir l'audit" : "Ouvrir"}
-        </Button>
-      }
-    >
-      {!security ? (
-        auditing ? <Status tone="muted" title="Audit en cours…" detail="Lecture seule" spin /> : <Status tone="muted" title="Audit indisponible" detail="Relance-le depuis l'onglet Sécurité" />
-      ) : (
-        <>
-          <ScoreGauge score={security.score} small />
-          <div className="min-w-0">
-            <div className="text-[13px] font-medium">{scoreVerdict(security.score)}</div>
-            <div className="text-xs text-muted">
-              {n ? `${n} point${n > 1 ? "s" : ""} à traiter${security.serious ? `, dont ${security.serious} prioritaire${security.serious > 1 ? "s" : ""}` : ""}` : "Aucun problème détecté"}
-              {security.banned != null && (
-                <>
-                  {" · "}
-                  <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-fg" onClick={() => onOpen("fail2ban")}>
-                    {security.banned} IP bannie{security.banned > 1 ? "s" : ""}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        </>
-      )}
-    </Tile>
   );
 }
 

@@ -107,7 +107,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
     const list: Action[] = SECTIONS.filter((s) => hasShell(server) || !needsShell(s.id)).map((s) => ({ group: "Navigation", id: `go:${s.id}`, label: `Aller à ${s.label}`, icon: <s.icon size={15} />, run: () => setSection(s.id) }));
     // La sécurité vit dans Système : ses sous-parties restent trouvables par leur nom.
     if (hasShell(server))
-      for (const [tab, label] of [["security", "Sécurité"], ["security/firewall", "Pare-feu"], ["security/fail2ban", "fail2ban"], ["security/access", "Accès SSH"]])
+      for (const [tab, label] of [["security", "Audit de sécurité"], ["software", "Logiciels et mises à jour"], ["security/firewall", "Pare-feu"], ["security/fail2ban", "fail2ban"], ["security/access", "Accès SSH"]])
         list.push({ group: "Navigation", id: `go:system:${tab}`, label: `Aller à Système › ${label}`, icon: <ShieldCheck size={15} />, run: () => navigate("system", tab) });
     // Les fiches d'aide sont cherchables ici : « tmux », « compose », « restic »… mènent droit au mode d'emploi.
     for (const g of GUIDES) {

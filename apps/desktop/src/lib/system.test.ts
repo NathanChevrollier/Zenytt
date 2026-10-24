@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ContainerImage, Finding } from "./api";
-import { auditSummary, formatAt, scoreVerdict, sortImages, sortUpdates, splitTab, updateGroup, validHostname } from "./system";
+import { auditSummary, formatAt, resolveSystemTab, scoreVerdict, sortImages, sortUpdates, splitTab, updateGroup, validHostname } from "./system";
 
 const img = (container: string, project: string | null, service: string | null = null) => ({ container, project, service }) as ContainerImage;
 
@@ -49,5 +49,15 @@ describe("système", () => {
   it("onglet et sous-onglet", () => {
     expect(splitTab("security/fail2ban")).toEqual(["security", "fail2ban"]);
     expect(splitTab("updates")).toEqual(["updates", null]);
+  });
+
+  it("anciens onglets et liens", () => {
+    expect(resolveSystemTab("updates").tab).toBe("software");
+    expect(resolveSystemTab("inventory").tab).toBe("software");
+    expect(resolveSystemTab("security")).toEqual({ tab: "overview", sub: null, audit: true });
+    expect(resolveSystemTab("security/audit")).toEqual({ tab: "overview", sub: null, audit: true });
+    expect(resolveSystemTab("security/fail2ban")).toEqual({ tab: "security", sub: "fail2ban", audit: false });
+    expect(resolveSystemTab("provider").tab).toBe("provider");
+    expect(resolveSystemTab("n'importe quoi").tab).toBe("overview");
   });
 });

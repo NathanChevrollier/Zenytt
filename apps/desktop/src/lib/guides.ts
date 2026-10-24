@@ -470,7 +470,7 @@ export const GUIDES: Guide[] = [
       "L'audit est en lecture seule : rien n'est modifié sans ton accord explicite.",
       "Avant de toucher à SSH ou au pare-feu, Zenytt garde une connexion de contrôle ouverte ; si la modification te coupe l'accès, elle est annulée automatiquement.",
       "Une alerte qui ne te concerne pas peut être ignorée : elle passe dans les archivées, avec la raison.",
-      "Tout se trouve dans Système › Sécurité : audit, pare-feu (règles), fail2ban (prisons, bannissements en cours) et accès SSH. Le correctif « mises à jour en attente » renvoie vers l'onglet Mises à jour.",
+      "L'audit (score et constats) est dans Système › Vue d'ensemble ; Système › Sécurité regroupe pare-feu (règles), fail2ban (prisons, bannissements en cours) et accès SSH. Le correctif « mises à jour en attente » renvoie vers l'onglet Logiciels.",
       "fail2ban → Réglages : durée de bannissement, nombre d'échecs et fenêtre par défaut ou par jail, bannissement progressif, jails à activer (recidive, nginx…). Zenytt les écrit dans son propre fichier, teste la configuration et la restaure si fail2ban la refuse.",
     ],
     requirements: ["un mot de passe sudo pour appliquer les corrections", "ufw ou firewalld, fail2ban"],

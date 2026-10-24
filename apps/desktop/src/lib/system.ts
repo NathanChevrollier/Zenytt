@@ -55,3 +55,17 @@ export function splitTab(tab: string): [string, string | null] {
   const i = tab.indexOf("/");
   return i < 0 ? [tab, null] : [tab.slice(0, i), tab.slice(i + 1)];
 }
+
+export type SystemTab = "overview" | "security" | "software" | "provider";
+
+/**
+ * Onglet demandé (lien, palette, aide, ancienne version) → onglet actuel. « updates » et « inventory »
+ * sont devenus « software » ; l'audit vit dans la vue d'ensemble : « security » seul ou « security/audit »
+ * y mènent (`audit`), « security/firewall » ouvre toujours Sécurité sur son sous-onglet.
+ */
+export function resolveSystemTab(raw: string): { tab: SystemTab; sub: string | null; audit: boolean } {
+  const [main, sub] = splitTab(raw);
+  if (main === "updates" || main === "inventory" || main === "software") return { tab: "software", sub: null, audit: false };
+  if (main === "security") return sub && sub !== "audit" ? { tab: "security", sub, audit: false } : { tab: "overview", sub: null, audit: true };
+  return { tab: main === "provider" ? "provider" : "overview", sub: null, audit: false };
+}
