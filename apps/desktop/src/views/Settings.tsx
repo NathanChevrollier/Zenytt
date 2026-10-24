@@ -311,6 +311,17 @@ function TerminalPrefs() {
             ]}
           />
         </Setting>
+        <Setting title="Liste des terminaux" description="Onglets en ligne au-dessus du terminal, ou colonne à gauche regroupée par serveur (pratique avec beaucoup de terminaux).">
+          <Select
+            className="w-52"
+            value={settings.terminalTabs ?? "horizontal"}
+            onChange={(terminalTabs) => setSettings({ terminalTabs })}
+            options={[
+              { value: "horizontal", label: "Onglets horizontaux" },
+              { value: "vertical", label: "Liste verticale" },
+            ]}
+          />
+        </Setting>
         <Toggle
           title="Monitoring sous le terminal"
           description="CPU, mémoire, disque, charge et réseau du serveur du terminal actif, rafraîchis toutes les 3 secondes."

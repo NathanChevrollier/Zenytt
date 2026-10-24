@@ -84,6 +84,8 @@ export interface Settings {
   terminalRightClick: "menu" | "paste";
   /** Petit monitoring (CPU, RAM, disque, réseau) sous le terminal. */
   terminalStatusBar: boolean;
+  /** Liste des terminaux ouverts : onglets en ligne (par défaut) ou colonne à gauche. */
+  terminalTabs?: "horizontal" | "vertical";
   /** Actualisation automatique des pages (Docker, sites, fichiers…), en secondes (0 : manuelle). */
   autoRefreshSecs: number;
   /** Afficher les fichiers et dossiers dont le nom commence par un point. */
