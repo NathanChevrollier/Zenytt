@@ -6,6 +6,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 use zenytt_core::backup::{self, BackupConfig, DbSource, Destination, Node, Snapshot, Status};
+use zenytt_core::backup_health::{self, Fix, Health, SourceKind};
 use zenytt_core::docker::{self, Access};
 use zenytt_core::ssh::shell_quote;
 
@@ -44,15 +45,13 @@ pub async fn backup_overview(store: State<'_, Store>, sessions: State<'_, Sessio
             }
             if let Ok(list) = docker::containers(&conn, access, s).await {
                 for c in list {
-                    let img = c.image.to_lowercase();
-                    let kind = if img.contains("mysql") || img.contains("mariadb") {
-                        "mysql"
-                    } else if img.contains("postgres") || img.contains("postgis") || img.contains("timescale") {
-                        "postgres"
-                    } else {
-                        continue;
-                    };
-                    databases.push(DbSource { container: c.name, kind: kind.into() });
+                    let Some(kind) = backup_health::db_kind_of_image(&c.image) else { continue };
+                    databases.push(DbSource {
+                        container: c.name,
+                        kind: kind.into(),
+                        project: c.compose_project,
+                        service: c.compose_service,
+                    });
                 }
             }
         }
@@ -220,6 +219,70 @@ pub async fn backup_stage_download(
 pub async fn backup_check(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String) -> Result<String, String> {
     let (conn, sudo) = admin(&store, &sessions, &server_id).await?;
     backup::check(&conn, sudo.as_deref()).await.map_err(err)
+}
+
+/// Diagnostic : état de chaque source et cause de la dernière erreur (un seul script borné).
+#[tauri::command]
+pub async fn backup_health(store: State<'_, Store>, sessions: State<'_, Sessions>, server_id: String) -> Result<Health, String> {
+    let (conn, sudo) = admin(&store, &sessions, &server_id).await?;
+    backup_health::health(&conn, sudo.as_deref()).await.map_err(err)
+}
+
+/// Corrections proposées par le diagnostic : déverrouiller le dépôt, réactiver la planification,
+/// relier une source à son nouveau conteneur/volume, retirer une source disparue.
+#[tauri::command]
+pub async fn backup_apply_fix(
+    audit: State<'_, AuditLog>,
+    store: State<'_, Store>,
+    sessions: State<'_, Sessions>,
+    server_id: String,
+    fix: Fix,
+) -> Result<String, String> {
+    let (action, detail) = match &fix {
+        Fix::Unlock => ("backup.unlock", "restic unlock".to_string()),
+        Fix::EnableSchedule => ("backup.enable_schedule", "zenytt-backup.timer".to_string()),
+        Fix::Relink { from, to, .. } => ("backup.relink_source", format!("{from} → {to}")),
+        Fix::RemoveSource { name, .. } => ("backup.remove_source", name.clone()),
+        _ => return Err("correction non prise en charge ici".into()),
+    };
+    let r = async {
+        let (conn, sudo) = admin(&store, &sessions, &server_id).await?;
+        let s = sudo.as_deref();
+        match &fix {
+            Fix::Unlock => return backup_health::unlock(&conn, s).await.map_err(err),
+            Fix::EnableSchedule => return backup_health::enable_schedule(&conn, s).await.map(|_| String::new()).map_err(err),
+            _ => {}
+        }
+        let cfg = backup::status(&conn, s).await.map_err(err)?.config.ok_or("aucune sauvegarde configurée")?;
+        // La cible d'un rattachement doit exister (et être du même type de base).
+        let mut labels = (None, None);
+        if let Fix::Relink { source, from, to } = &fix {
+            let (access, _) = docker::access(&conn, s).await.map_err(err)?;
+            match source {
+                SourceKind::Database => {
+                    let kind = cfg.databases.iter().find(|d| &d.container == from).map(|d| d.kind.clone()).unwrap_or_default();
+                    let list = docker::containers(&conn, access, s).await.map_err(err)?;
+                    let target = list.into_iter().find(|c| &c.name == to).ok_or(format!("conteneur {to} introuvable"))?;
+                    if backup_health::db_kind_of_image(&target.image) != Some(kind.as_str()) {
+                        return Err(format!("{to} n'est pas un serveur {kind}"));
+                    }
+                    labels = (target.compose_project, target.compose_service);
+                }
+                SourceKind::Volume => {
+                    let out = docker::run(&conn, access, s, "volume ls -q").await.map_err(err)?;
+                    if !out.stdout.lines().any(|v| v.trim() == to) {
+                        return Err(format!("volume {to} introuvable"));
+                    }
+                }
+                SourceKind::Path => return Err("un dossier ne se relie pas".into()),
+            }
+        }
+        let next = backup_health::edit_sources(&cfg, &fix, labels).map_err(err)?;
+        backup::write_config(&conn, s, &next).await.map_err(err)?;
+        Ok(String::new())
+    }
+    .await;
+    track(&audit, &store, &server_id, action, &detail, r)
 }
 
 /// Installe restic sur le serveur (paquet de la distribution, sinon binaire officiel vérifié).

@@ -34,6 +34,12 @@ pub struct DbSource {
     pub container: String,
     /// `mysql` (MySQL/MariaDB) ou `postgres`.
     pub kind: String,
+    /// Projet et service compose du conteneur au moment de la configuration : permettent de le
+    /// retrouver s'il est recréé sous un autre nom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -65,11 +71,11 @@ impl Default for BackupConfig {
     }
 }
 
-fn safe_path(p: &str) -> bool {
+pub(crate) fn safe_path(p: &str) -> bool {
     p.starts_with('/') && !p.contains("..") && p.len() < 400 && p.chars().all(|c| c.is_ascii_alphanumeric() || "/._-@".contains(c))
 }
 
-fn safe_name(s: &str) -> bool {
+pub(crate) fn safe_name(s: &str) -> bool {
     !s.is_empty() && s.len() <= 128 && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
 }
 
@@ -90,7 +96,11 @@ impl BackupConfig {
         if let Some(v) = self.volumes.iter().find(|v| !safe_name(v)) {
             return bad(format!("volume invalide : {v}"));
         }
-        if let Some(d) = self.databases.iter().find(|d| !safe_name(&d.container) || !matches!(d.kind.as_str(), "mysql" | "postgres")) {
+        if let Some(d) = self.databases.iter().find(|d| {
+            !safe_name(&d.container)
+                || !matches!(d.kind.as_str(), "mysql" | "postgres")
+                || [&d.project, &d.service].iter().any(|x| x.as_deref().is_some_and(|x| !safe_name(x)))
+        }) {
             return bad(format!("base invalide : {} ({})", d.container, d.kind));
         }
         match &self.destination {
@@ -148,14 +158,19 @@ set -a; . /etc/zenytt-backup/env; set +a
 STATE=/var/lib/zenytt-backup; STAGE=$STATE/stage
 mkdir -p "$STATE"; chmod 755 "$STATE"
 START=$(date +%s)
+ERR=$STATE/err.txt
+# `step` dit quelle étape a échoué (dump:<conteneur>, volume:<nom>, repo, backup:<code>, forget, check…).
 finish() {
-  local msg; msg=$(printf '%s' "$2" | tr '\n\r' '  ' | sed 's/\\/\\\\/g; s/"/\\"/g')
-  printf '{"startedAt":%s,"finishedAt":%s,"ok":%s,"message":"%s"}\n' "$START" "$(date +%s)" "$1" "$msg" > "$STATE/last.json"
+  local msg; msg=$(printf '%s' "$2" | tr '\n\r\t' '   ' | tr -d '\000-\037' | cut -c1-600 | sed 's/\\/\\\\/g; s/"/\\"/g')
+  printf '{"startedAt":%s,"finishedAt":%s,"ok":%s,"step":"%s","message":"%s"}\n' "$START" "$(date +%s)" "$1" "${3:-}" "$msg" > "$STATE/last.json"
   chmod 644 "$STATE/last.json"
 }
-fail() { finish false "$1"; echo "ÉCHEC : $1" >&2; rm -rf "$STAGE"; exit 1; }
-trap 'fail "sauvegarde interrompue"' INT TERM
-rm -rf "$STAGE"; mkdir -p "$STAGE/db"; chmod 700 "$STAGE"
+fail() { finish false "$1" "${2:-}"; echo "ÉCHEC : $1" >&2; rm -rf "$STAGE"; exit 1; }
+# Fin de la sortie d'erreur de la dernière commande : la cause réelle, gardée dans last.json.
+why() { tail -n 3 "$ERR" 2>/dev/null | tr '\n' ' ' | cut -c1-400; }
+trap 'fail "sauvegarde interrompue" interrupted' INT TERM
+command -v restic >/dev/null 2>&1 || fail "restic n'est pas installé" restic
+rm -rf "$STAGE"; mkdir -p "$STAGE/db" "$STATE/dbs"; chmod 700 "$STAGE" "$STATE/dbs"
 PATHS=("$STAGE")
 echo "Sauvegarde Zenytt — $(date)"
 "#,
@@ -164,32 +179,41 @@ echo "Sauvegarde Zenytt — $(date)"
         let c = &db.container;
         if db.kind == "mysql" {
             s.push_str(&format!(
-                "echo \"Dump MySQL/MariaDB : {c}\"\ndocker exec {c} sh -c 'D=$(command -v mysqldump || command -v mariadb-dump); export MYSQL_PWD=\"${{MYSQL_ROOT_PASSWORD:-$MARIADB_ROOT_PASSWORD}}\"; exec \"$D\" --all-databases --single-transaction --routines --events -uroot' > \"$STAGE/db/{c}.sql\" || fail \"dump de {c}\"\n"
+                "echo \"Dump MySQL/MariaDB : {c}\"\ndocker exec {c} sh -c 'D=$(command -v mysqldump || command -v mariadb-dump); export MYSQL_PWD=\"${{MYSQL_ROOT_PASSWORD:-$MARIADB_ROOT_PASSWORD}}\"; exec \"$D\" --all-databases --single-transaction --routines --events -uroot' > \"$STAGE/db/{c}.sql\" 2>\"$ERR\" || fail \"dump de {c} : $(why)\" dump:{c}\n"
             ));
         } else {
             s.push_str(&format!(
-                "echo \"Dump PostgreSQL : {c}\"\ndocker exec {c} sh -c 'exec pg_dumpall -U \"${{POSTGRES_USER:-postgres}}\"' > \"$STAGE/db/{c}.sql\" || fail \"dump de {c}\"\n"
+                "echo \"Dump PostgreSQL : {c}\"\ndocker exec {c} sh -c 'exec pg_dumpall -U \"${{POSTGRES_USER:-postgres}}\"' > \"$STAGE/db/{c}.sql\" 2>\"$ERR\" || fail \"dump de {c} : $(why)\" dump:{c}\n"
             ));
         }
+        // Bases présentes dans ce dump : comparées plus tard aux bases actuelles (base supprimée ?).
+        s.push_str(&format!("grep -a '^CREATE DATABASE' \"$STAGE/db/{c}.sql\" | cut -c1-200 > \"$STATE/dbs/{c}.txt\"\n"));
     }
     for v in &cfg.volumes {
         s.push_str(&format!(
-            "VP=$(docker volume inspect -f '{{{{.Mountpoint}}}}' {v}) || fail \"volume {v} introuvable\"\nPATHS+=(\"$VP\")\n"
+            "VP=$(docker volume inspect -f '{{{{.Mountpoint}}}}' {v} 2>\"$ERR\") || fail \"volume {v} introuvable : $(why)\" volume:{v}\nPATHS+=(\"$VP\")\n"
         ));
     }
     for p in &cfg.paths {
-        s.push_str(&format!("[ -e {p} ] && PATHS+=({p})\n"));
+        s.push_str(&format!("if [ -e {p} ]; then PATHS+=({p}); else echo \"Dossier absent, ignoré : {p}\"; fi\n"));
     }
     s.push_str(&format!(
-        r#"restic cat config >/dev/null 2>&1 || restic init >/dev/null || fail "initialisation du dépôt impossible"
+        r#"# Dépôt absent : on le crée. Toute autre erreur (mot de passe, réseau, droits) est remontée telle quelle.
+if ! restic cat config >/dev/null 2>"$ERR"; then
+  if grep -qiE 'Is there a repository|no such file|does not exist' "$ERR"; then
+    restic init >/dev/null 2>"$ERR" || fail "initialisation du dépôt impossible : $(why)" repo
+  else
+    fail "dépôt inaccessible : $(why)" repo
+  fi
+fi
 restic backup --tag zenytt --host "$(hostname)" "${{PATHS[@]}}" 2>&1 | tee "$STATE/last-output.txt" | tail -n 5
 RC=${{PIPESTATUS[0]}}
 # 3 = sauvegarde faite mais quelques fichiers illisibles : ce n'est pas un échec.
-[ "$RC" = 0 ] || [ "$RC" = 3 ] || fail "$(tail -n 3 "$STATE/last-output.txt")"
-restic forget --tag zenytt --prune --keep-daily {} --keep-weekly {} --keep-monthly {} >/dev/null 2>&1 || fail "rétention (forget/prune) impossible"
-if [ "$(date +%u)" = 7 ]; then restic check --read-data-subset=5% >/dev/null 2>&1 || fail "vérification du dépôt en échec"; fi
+[ "$RC" = 0 ] || [ "$RC" = 3 ] || fail "$(tail -n 3 "$STATE/last-output.txt")" "backup:$RC"
+restic forget --tag zenytt --prune --keep-daily {} --keep-weekly {} --keep-monthly {} >/dev/null 2>"$ERR" || fail "rétention (forget/prune) impossible : $(why)" forget
+if [ "$(date +%u)" = 7 ]; then restic check --read-data-subset=5% >/dev/null 2>"$ERR" || fail "vérification du dépôt en échec : $(why)" check; fi
 rm -rf "$STAGE"
-finish true "$(grep -m1 '^snapshot' "$STATE/last-output.txt")"
+finish true "$(grep -m1 '^snapshot' "$STATE/last-output.txt")" done
 echo "Terminé."
 "#,
         cfg.keep_daily.max(1),
@@ -200,7 +224,7 @@ echo "Terminé."
 }
 
 fn systemd_units(schedule: &str) -> (String, String) {
-    let service = format!("[Unit]\nDescription=Sauvegarde Zenytt (restic)\nAfter=network-online.target docker.service\n\n[Service]\nType=oneshot\nExecStart={SCRIPT_PATH}\nNice=10\nIOSchedulingClass=idle\n");
+    let service = format!("[Unit]\nDescription=Sauvegarde Zenytt (restic)\nAfter=network-online.target docker.service\n\n[Service]\nType=oneshot\nExecStart={SCRIPT_PATH}\nTimeoutStartSec=6h\nNice=10\nIOSchedulingClass=idle\n");
     let timer = format!("[Unit]\nDescription=Sauvegarde Zenytt quotidienne\n\n[Timer]\nOnCalendar=*-*-* {schedule}:00\nPersistent=true\nRandomizedDelaySec=10m\n\n[Install]\nWantedBy=timers.target\n");
     (service, timer)
 }
@@ -262,6 +286,19 @@ pub async fn install_restic(conn: &Connection, sudo: Option<&str>) -> Result<Str
     .await
 }
 
+async fn write_root(conn: &Connection, sudo: Option<&str>, path: &str, mode: &str, content: String) -> Result<()> {
+    conn.write_file_sudo(path, &content, sudo).await?;
+    conn.exec_sudo(&format!("chmod {mode} {path} && chown root:root {path}"), sudo, None).await?.into_result()?;
+    Ok(())
+}
+
+/// Réécrit la configuration et le script de sauvegarde (sans toucher aux secrets ni à la planification).
+pub async fn write_config(conn: &Connection, sudo: Option<&str>, cfg: &BackupConfig) -> Result<()> {
+    cfg.validate()?;
+    write_root(conn, sudo, CONFIG_PATH, "600", serde_json::to_string_pretty(cfg).map_err(|e| Error::Other(e.to_string()))?).await?;
+    write_root(conn, sudo, SCRIPT_PATH, "700", run_script(cfg)).await
+}
+
 /// Installe restic si besoin puis écrit la configuration, les secrets, le script et la planification.
 pub async fn install(conn: &Connection, sudo: Option<&str>, cfg: &BackupConfig, env: &str) -> Result<String> {
     crate::ssh::long(async move {
@@ -272,17 +309,12 @@ pub async fn install(conn: &Connection, sudo: Option<&str>, cfg: &BackupConfig, 
         if let Destination::Local { path } = &cfg.destination {
             conn.exec_sudo(&format!("install -d -m 700 {}", shell_quote(path)), sudo, None).await?.into_result()?;
         }
-        let write = |path: &'static str, mode: &'static str, content: String| async move {
-            conn.write_file_sudo(path, &content, sudo).await?;
-            conn.exec_sudo(&format!("chmod {mode} {path} && chown root:root {path}"), sudo, None).await?.into_result()?;
-            Ok::<_, Error>(())
-        };
+        let write = |path: &'static str, mode: &'static str, content: String| write_root(conn, sudo, path, mode, content);
         // Le fichier est créé vide en 0600 AVANT d'y écrire les secrets.
         conn.exec_sudo(&format!("install -m 600 /dev/null {ENV_PATH}.new"), sudo, None).await?.into_result()?;
         conn.write_file_sudo(&format!("{ENV_PATH}.new"), env, sudo).await?;
         conn.exec_sudo(&format!("mv -f {ENV_PATH}.new {ENV_PATH} && chmod 600 {ENV_PATH}"), sudo, None).await?.into_result()?;
-        write(CONFIG_PATH, "600", serde_json::to_string_pretty(cfg).map_err(|e| Error::Other(e.to_string()))?).await?;
-        write(SCRIPT_PATH, "700", run_script(cfg)).await?;
+        write_config(conn, sudo, cfg).await?;
 
         let (service, timer) = systemd_units(&cfg.schedule);
         let systemd = conn.exec("test -d /run/systemd/system", None).await?.success();
@@ -320,6 +352,9 @@ pub struct LastRun {
     pub finished_at: i64,
     pub ok: bool,
     pub message: String,
+    /// Étape en échec (absente des fichiers écrits par les anciens scripts).
+    #[serde(default)]
+    pub step: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -655,7 +690,7 @@ mod tests {
         let mut c = BackupConfig { schedule: "25:00".into(), ..Default::default() };
         assert!(c.validate().is_err());
         c.schedule = "03:30".into();
-        c.databases.push(DbSource { container: "db; rm -rf /".into(), kind: "mysql".into() });
+        c.databases.push(DbSource { container: "db; rm -rf /".into(), kind: "mysql".into(), project: None, service: None });
         assert!(c.validate().is_err());
     }
 
@@ -683,8 +718,13 @@ mod tests {
         let c = BackupConfig {
             volumes: vec!["mypage_data".into()],
             databases: vec![
-                DbSource { container: "nexus-mysql".into(), kind: "mysql".into() },
-                DbSource { container: "pg".into(), kind: "postgres".into() },
+                DbSource { container: "nexus-mysql".into(), kind: "mysql".into(), project: None, service: None },
+                DbSource {
+                    container: "pg".into(),
+                    kind: "postgres".into(),
+                    project: Some("infra".into()),
+                    service: Some("postgres".into()),
+                },
             ],
             ..Default::default()
         };
@@ -695,6 +735,11 @@ mod tests {
         assert!(s.contains("docker volume inspect -f '{{.Mountpoint}}' mypage_data"));
         assert!(s.contains("--keep-daily 7 --keep-weekly 4 --keep-monthly 6"));
         assert!(!s.contains("RESTIC_PASSWORD='"), "aucun secret dans le script");
+        assert!(s.contains("2>\"$ERR\" || fail \"dump de nexus-mysql : $(why)\" dump:nexus-mysql"), "cause du dump gardée");
+        assert!(s.contains("$STATE/dbs/pg.txt"));
+        assert!(s.contains("fail \"dépôt inaccessible : $(why)\" repo"));
+        assert!(s.contains("\"backup:$RC\""));
+        assert!(c.validate().is_ok());
     }
 
     #[test]
