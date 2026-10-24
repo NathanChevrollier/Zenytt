@@ -84,6 +84,9 @@ export function otherDeployments(list: GithubDeployment[] | undefined, fullName:
   return (list ?? []).filter((d) => d.kind !== "clone" && d.repo.toLowerCase() === key);
 }
 
+/** Nom seul de l'ancien `owner/name` resté dans `origin` d'un clone (« helm » pour « nathanchevrollier/helm »). */
+export const oldRemoteName = (old: string) => old.slice(old.indexOf("/") + 1) || old;
+
 /** Ton de la pastille d'un état de conteneur Docker. */
 export function containerTone(state: string): SyncTone {
   return state === "running" ? "ok" : state === "restarting" || state === "paused" ? "warn" : "muted";

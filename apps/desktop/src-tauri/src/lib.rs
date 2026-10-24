@@ -422,6 +422,7 @@ pub fn run() {
             github::github_clone_state,
             github::github_clone,
             github::github_pull,
+            github::github_set_remote,
         ]))
         .run(tauri::generate_context!())
         .expect("erreur au lancement de l'application Tauri");
