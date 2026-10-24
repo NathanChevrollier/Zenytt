@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GithubDeployment, GithubRepo } from "./api";
 import {
-  agoOf, alertCounts, browseRepos, certainDeployments, ciState, clonePath, cloneSync, containerTone, deployStateTone, filterRepos, githubError, insightError, labelColor, otherDeployments, repoPageUrl, repoUrl, runDuration, urgentAlerts, validFolder, validToken,
+  agoOf, alertCounts, browseRepos, certainDeployments, ciState, clonePath, cloneSync, containerTone, deployStateTone, filterRepos, githubError, insightError, labelColor, oldRemoteName, otherDeployments, repoPageUrl, repoUrl, runDuration, urgentAlerts, validFolder, validToken,
 } from "./github";
 
 describe("déploiements", () => {
@@ -12,6 +12,10 @@ describe("déploiements", () => {
     expect(otherDeployments(list, "Octo/App").map((d) => d.kind)).toEqual(["image", "compose-dir"]);
     expect(certainDeployments(undefined, "a/b")).toEqual([]);
   });
+  it("nom de l'ancien remote d'un dépôt renommé", () => {
+    expect(oldRemoteName("nathanchevrollier/helm")).toBe("helm");
+    expect(oldRemoteName("helm")).toBe("helm");
+  });
   it("tons d'état et erreur de permission", () => {
     expect(containerTone("running")).toBe("ok");
     expect(containerTone("exited")).toBe("muted");
@@ -21,6 +25,7 @@ describe("déploiements", () => {
 });
 
 const repo = (fullName: string, extra: Partial<GithubRepo> = {}): GithubRepo => ({
+  id: 0,
   fullName,
   name: fullName.split("/")[1],
   owner: fullName.split("/")[0],

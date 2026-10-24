@@ -20,6 +20,8 @@ const MAX_PAGES: u32 = 5;
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Repo {
+    /// Identifiant GitHub : stable quand le dépôt est renommé ou transféré.
+    pub id: u64,
     pub full_name: String,
     pub name: String,
     pub owner: String,
@@ -40,6 +42,8 @@ struct RawOwner {
 
 #[derive(Deserialize)]
 struct RawRepo {
+    #[serde(default)]
+    id: u64,
     full_name: String,
     name: String,
     owner: RawOwner,
@@ -65,6 +69,7 @@ pub fn parse_repos(json: &str) -> Result<Vec<Repo>> {
         .into_iter()
         .filter(|r| valid_repo(&r.owner.login, &r.name))
         .map(|r| Repo {
+            id: r.id,
             full_name: r.full_name,
             name: r.name,
             owner: r.owner.login,
@@ -125,7 +130,13 @@ fn get(agent: &ureq::Agent, token: &str, url: &str) -> Result<String> {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).http_status_as_error(false).build().into()
+    // SameHost : un dépôt renommé répond 301 vers api.github.com/repositories/{id}, qui demande aussi le jeton.
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(20)))
+        .http_status_as_error(false)
+        .redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)
+        .build()
+        .into()
 }
 
 /// Identifiant du compte propriétaire du jeton (sert aussi à vérifier qu'il fonctionne).
@@ -563,6 +574,107 @@ pub async fn latest_release(token: &str, owner: &str, repo: &str) -> Result<Opti
     }
 }
 
+// ---- Dépôts renommés ou transférés ---------------------------------------------------------
+
+/// Dépôt désigné par une URL ou une image, tel que GitHub le connaît aujourd'hui : `(id, propriétaire, nom)`.
+pub type Resolved = (u64, String, String);
+/// `(ancien propriétaire, ancien nom)` en minuscules, et dépôt actuel `(propriétaire, nom)` tel que listé par le compte.
+pub type Rename = ((String, String), (String, String));
+/// Résolutions au plus par examen : chacune coûte une requête à l'API.
+pub const MAX_RESOLVE: usize = 20;
+
+/// Lit `GET /repos/{owner}/{name}` (après la redirection d'un renommage).
+pub fn parse_repo_ref(json: &str) -> Option<Resolved> {
+    let r: RawRepo = serde_json::from_str(json).ok()?;
+    (r.id != 0 && valid_repo(&r.owner.login, &r.name)).then_some((r.id, r.owner.login, r.name))
+}
+
+/// Ce que GitHub sait aujourd'hui de `owner/name` : il suit lui-même l'ancien nom d'un dépôt renommé ou transféré.
+/// `None` : introuvable ou non accordé au jeton.
+pub async fn resolve_repo(token: &str, owner: &str, name: &str) -> Result<Option<Resolved>> {
+    if !valid_repo(owner, name) {
+        return Err(Error::Other("nom de dépôt invalide".into()));
+    }
+    match fetch(token, format!("{API}/repos/{owner}/{name}")).await {
+        Ok(t) => Ok(parse_repo_ref(&t)),
+        Err(Error::Other(m)) if m.starts_with("introuvable (404)") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// `(propriétaire, nom)` en minuscules désignés par la sortie d'un examen (`scan_command` ou `server_scan_command`) qui ne
+/// sont pas des dépôts de `repos` : URL `origin` d'un clone, label source ou image GHCR d'un conteneur. Ce sont les
+/// candidats à un renommage, sans doublon et plafonnés à `MAX_RESOLVE`.
+pub fn unknown_remotes(out: &str, repos: &[(String, String)]) -> Vec<(String, String)> {
+    let known = |o: &str, n: &str| repos.iter().any(|(ro, rn)| ro.eq_ignore_ascii_case(o) && rn.eq_ignore_ascii_case(n));
+    let mut found: Vec<(String, String)> = Vec::new();
+    let mut add = |r: (String, String)| {
+        if !known(&r.0, &r.1) && !found.contains(&r) && found.len() < MAX_RESOLVE {
+            found.push(r);
+        }
+    };
+    for line in out.lines() {
+        let f: Vec<&str> = line.splitn(8, '\t').collect();
+        match f.as_slice() {
+            ["G", _, url] | [_, url] => parse_remote(url).into_iter().for_each(&mut add),
+            ["C", _, image, _, _, _, _, source] => {
+                if let Some(r) = parse_remote(source) {
+                    add(r);
+                } else if let Some((o, p, _)) = parse_ghcr(image) {
+                    // Image d'un dépôt du compte (`app-web` pour `app`) : rien à résoudre.
+                    if !repos.iter().any(|(ro, rn)| ro.eq_ignore_ascii_case(&o) && package_matches(&p, rn)) {
+                        add((o, p));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Anciens noms qui mènent à un dépôt du compte. `repos` : `(id s'il est connu, propriétaire, nom)` ; l'identifiant prime
+/// sur le nom. Un nom qui se résout vers lui-même n'est pas un renommage (dépôt d'un tiers, simplement hors du compte).
+pub fn link_renames(resolved: &[((String, String), Option<Resolved>)], repos: &[(Option<u64>, String, String)]) -> Vec<Rename> {
+    resolved
+        .iter()
+        .filter_map(|((oo, on), r)| {
+            let (id, o, n) = r.as_ref()?;
+            if o.eq_ignore_ascii_case(oo) && n.eq_ignore_ascii_case(on) {
+                return None;
+            }
+            let hit = repos
+                .iter()
+                .find(|(rid, _, _)| *rid == Some(*id))
+                .or_else(|| repos.iter().find(|(_, ro, rn)| ro.eq_ignore_ascii_case(o) && rn.eq_ignore_ascii_case(n)))?;
+            Some(((oo.to_ascii_lowercase(), on.to_ascii_lowercase()), (hit.1.clone(), hit.2.clone())))
+        })
+        .collect()
+}
+
+/// Ancien nom `owner/name` par lequel l'URL `url` désigne `owner/repo`, s'il passe par un renommage.
+pub fn renamed_from(url: &str, owner: &str, repo: &str, renames: &[Rename]) -> Option<String> {
+    let old = parse_remote(url)?;
+    renames
+        .iter()
+        .find(|(from, (o, n))| *from == old && o.eq_ignore_ascii_case(owner) && n.eq_ignore_ascii_case(repo))
+        .map(|((o, n), _)| format!("{o}/{n}"))
+}
+
+/// Remet `origin` sur le nom actuel du dépôt (`https://github.com/owner/repo.git`). Seulement dans un clone qui
+/// appartient au compte SSH : comme `status`, on ne modifie pas la config d'un dépôt d'un autre utilisateur.
+pub fn set_remote_command(dir: &str, owner: &str, repo: &str) -> Result<String> {
+    if !valid_path(dir) || !valid_repo(owner, repo) {
+        return Err(Error::Other("dépôt ou chemin invalide".into()));
+    }
+    let d = shell_quote(dir);
+    Ok(sh(&format!(
+        "if [ -O {d} ] && [ -O {d}/.git ]; then command git -c core.hooksPath=/dev/null -C {d} remote set-url origin {}; \
+else echo 'clone appartenant à un autre utilisateur : URL du remote non modifiée' >&2; exit 1; fi",
+        shell_quote(&format!("https://github.com/{owner}/{repo}.git"))
+    )))
+}
+
 // ---- Validation ----------------------------------------------------------------------------
 
 /// `^[A-Za-z0-9_.-]+$`, sans `.` ni `..`.
@@ -646,13 +758,19 @@ $t find /srv /opt /var/www \"$HOME\" -maxdepth 5 -name node_modules -prune -o -n
 while IFS= read -r g; do d=${g%/.git}; r=$(git -c safe.directory='*' -C \"$d\" remote get-url origin 2>/dev/null) && printf '%s\\t%s\\n' \"$d\" \"$r\"; done")
 }
 
-/// Chemins (sans doublon) des dépôts dont `origin` est `owner/repo`.
-pub fn parse_scan(out: &str, owner: &str, repo: &str) -> Vec<String> {
-    let mut found: Vec<String> = Vec::new();
+/// Chemins (sans doublon) des dépôts dont `origin` est `owner/repo`, directement ou par un ancien nom (`renames`) :
+/// `(chemin, ancien nom encore dans origin)`.
+pub fn parse_scan(out: &str, owner: &str, repo: &str, renames: &[Rename]) -> Vec<(String, Option<String>)> {
+    let mut found: Vec<(String, Option<String>)> = Vec::new();
     for line in out.lines() {
         let Some((path, url)) = line.split_once('\t') else { continue };
-        if valid_path(path) && same_repo(url, owner, repo) && !found.iter().any(|p| p == path) {
-            found.push(path.to_string());
+        if !valid_path(path) || found.iter().any(|(p, _)| p == path) {
+            continue;
+        }
+        if same_repo(url, owner, repo) {
+            found.push((path.to_string(), None));
+        } else if let Some(old) = renamed_from(url, owner, repo, renames) {
+            found.push((path.to_string(), Some(old)));
         }
     }
     found
@@ -671,6 +789,8 @@ pub struct Clone {
     pub commit: String,
     pub commit_date: String,
     pub subject: String,
+    /// `origin` désigne encore l'ancien nom `owner/name` d'un dépôt renommé (GitHub redirige, mais l'URL est périmée).
+    pub old_remote: Option<String>,
 }
 
 /// État de chaque dossier. Les chiffres d'avance/retard valent depuis le dernier `fetch`.
@@ -704,6 +824,7 @@ pub fn parse_details(out: &str) -> Vec<Clone> {
                 commit: f.next().unwrap_or_default().to_string(),
                 commit_date: f.next().unwrap_or_default().to_string(),
                 subject: f.next().unwrap_or_default().to_string(),
+                old_remote: None,
             })
         })
         .filter(|c| valid_path(&c.path))
@@ -841,23 +962,35 @@ struct Cont<'a> {
 
 /// Dépôt (parmi `repos`) auquel appartient le conteneur : label source identique au dépôt, sinon image GHCR du même
 /// propriétaire. En cas d'ambiguïté (`app` et `app-api`), le nom le plus long gagne.
-fn container_repo<'a>(c: &Cont, repos: &'a [(String, String)]) -> Option<&'a (String, String)> {
+/// Sinon, même règle sur l'ancien nom d'un dépôt renommé (`renames`).
+fn container_repo<'a>(c: &Cont, repos: &'a [(String, String)], renames: &'a [Rename]) -> Option<&'a (String, String)> {
     if let Some(r) = repos.iter().find(|(o, n)| same_repo(c.source, o, n)) {
         return Some(r);
     }
+    if let Some((_, r)) = renames.iter().find(|((o, n), _)| same_repo(c.source, o, n)) {
+        return Some(r);
+    }
     let (owner, pkg, _) = parse_ghcr(c.image)?;
-    repos.iter().filter(|(o, n)| o.eq_ignore_ascii_case(&owner) && package_matches(&pkg, n)).max_by_key(|(_, n)| n.len())
+    let by = |o: &str, n: &str| o.eq_ignore_ascii_case(&owner) && package_matches(&pkg, n);
+    repos
+        .iter()
+        .filter(|(o, n)| by(o, n))
+        .max_by_key(|(_, n)| n.len())
+        .or_else(|| renames.iter().filter(|((o, n), _)| by(o, n)).max_by_key(|((_, n), _)| n.len()).map(|(_, r)| r))
 }
 
-/// Lit la sortie de `server_scan_command` et la rattache aux dépôts `(propriétaire, nom)` du compte.
-pub fn parse_deployments(out: &str, repos: &[(String, String)]) -> Vec<Deployment> {
+/// Lit la sortie de `server_scan_command` et la rattache aux dépôts `(propriétaire, nom)` du compte, y compris par
+/// l'ancien nom d'un dépôt renommé (`renames`, voir `link_renames`).
+pub fn parse_deployments(out: &str, repos: &[(String, String)], renames: &[Rename]) -> Vec<Deployment> {
     let mut found: Vec<Deployment> = Vec::new();
     let mut conts: Vec<Cont> = Vec::new();
     for line in out.lines() {
         let f: Vec<&str> = line.splitn(8, '\t').collect();
         match f.as_slice() {
             ["G", path, url] if valid_path(path) => {
-                for (o, n) in repos.iter().filter(|(o, n)| same_repo(url, o, n)) {
+                let direct = repos.iter().filter(|(o, n)| same_repo(url, o, n));
+                let renamed = renames.iter().filter(|((o, n), _)| same_repo(url, o, n)).map(|(_, r)| r);
+                for (o, n) in direct.chain(renamed) {
                     let repo = format!("{o}/{n}");
                     if !found.iter().any(|d| d.kind == DeploymentKind::Clone && d.repo == repo && d.path.as_deref() == Some(path)) {
                         found.push(Deployment {
@@ -891,7 +1024,7 @@ pub fn parse_deployments(out: &str, repos: &[(String, String)]) -> Vec<Deploymen
     };
     // Images : un déploiement par (dépôt, projet compose), ou par conteneur hors compose.
     for c in &conts {
-        let Some((o, n)) = container_repo(c, repos) else { continue };
+        let Some((o, n)) = container_repo(c, repos, renames) else { continue };
         let repo = format!("{o}/{n}");
         let project = (!c.project.is_empty()).then(|| c.project.to_string());
         let path = valid_path(c.dir).then(|| c.dir.to_string());
@@ -971,7 +1104,7 @@ C\tapi\tghcr.io/nathanchevrollier/app-api:v1\trunning\t2026-01-02 03:04:05 +0000
 C\tzenytt-sync\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tzenytt-sync\t/opt/stacks/zenytt-sync\t\n\
 C\tfoo\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tscan_lib\t/opt/scan_lib\t\n\
 C\tfoo2\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tx\t/opt/stacks/mypage\t\nbad\n";
-        let d = parse_deployments(out, &repos());
+        let d = parse_deployments(out, &repos(), &[]);
         let of =
             |r: &str, k: DeploymentKind| d.iter().filter(|x| x.repo == format!("NathanChevrollier/{r}") && x.kind == k).collect::<Vec<_>>();
         assert_eq!(of("Zenytt", DeploymentKind::Clone).len(), 1);
@@ -994,6 +1127,75 @@ C\tfoo2\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tx\t/opt/stacks/mypage\
         assert_eq!(of("app", DeploymentKind::Image).len(), 0);
         assert_eq!(of("Zenytt", DeploymentKind::ComposeDir).len(), 0);
         assert!(server_scan_command().contains("docker ps -a --format"));
+    }
+
+    // Cas réel : dépôt renommé Helm -> Zenytt sur GitHub, clone du VPS resté sur l'ancienne URL.
+    #[test]
+    fn depot_renomme_rattache_par_id() {
+        let out = "G\t/var/www/html/Zenytt\thttps://github.com/NathanChevrollier/Helm.git\n\
+G\t/srv/app\thttps://github.com/NathanChevrollier/app.git\n\
+G\t/srv/tiers\thttps://github.com/octo/lib.git\n\
+G\t/srv/tiers2\tgit@github.com:octo/lib.git\n\
+C\thelm-web\tghcr.io/nathanchevrollier/helm-web:4f0aa05c1d2e\trunning\t2026-01-02 03:04:05 +0000 UTC\t\t\t\n\
+C\tmypage\tghcr.io/nathanchevrollier/mypage-web:1\trunning\t2026-01-02 03:04:05 +0000 UTC\t\t\t\n";
+        let unknown = unknown_remotes(out, &repos());
+        assert_eq!(
+            unknown,
+            vec![
+                ("nathanchevrollier".into(), "helm".into()),
+                ("octo".into(), "lib".into()),
+                ("nathanchevrollier".into(), "helm-web".into())
+            ],
+            "dépôts du compte et images de leurs paquets exclus, sans doublon"
+        );
+        let resolved = vec![
+            (unknown[0].clone(), Some((42, "NathanChevrollier".to_string(), "Zenytt".to_string()))),
+            (unknown[1].clone(), Some((7, "octo".to_string(), "lib".to_string()))),
+            (unknown[2].clone(), None),
+        ];
+        // L'identifiant prime : le compte liste encore « Zenytt-old » sous l'id 42 (liste pas encore actualisée).
+        let account =
+            vec![(Some(42), "NathanChevrollier".to_string(), "Zenytt-old".to_string()), (None, "octo".to_string(), "x".to_string())];
+        let r = link_renames(&resolved, &account);
+        assert_eq!(r, vec![(("nathanchevrollier".into(), "helm".into()), ("NathanChevrollier".into(), "Zenytt-old".into()))]);
+        // Sans id : rattaché par le nom actuel ; un dépôt tiers qui se résout vers lui-même n'est pas un renommage.
+        let r = link_renames(&resolved, &[(None, "NathanChevrollier".into(), "Zenytt".into()), (None, "octo".into(), "lib".into())]);
+        assert_eq!(r, vec![(("nathanchevrollier".into(), "helm".into()), ("NathanChevrollier".into(), "Zenytt".into()))]);
+
+        let d = parse_deployments(out, &repos(), &r);
+        let z: Vec<_> = d.iter().filter(|x| x.repo == "NathanChevrollier/Zenytt").collect();
+        assert_eq!(z.len(), 2, "clone et image helm-web rattachés à Zenytt");
+        assert!(z.iter().any(|x| x.kind == DeploymentKind::Clone && x.path.as_deref() == Some("/var/www/html/Zenytt")));
+        assert!(z.iter().any(|x| x.kind == DeploymentKind::Image && x.certain));
+        assert_eq!(parse_deployments(out, &repos(), &[]).iter().filter(|x| x.repo == "NathanChevrollier/Zenytt").count(), 0);
+
+        let scan =
+            "/var/www/html/Zenytt\thttps://github.com/NathanChevrollier/Helm.git\n/srv/z\thttps://github.com/nathanchevrollier/zenytt\n";
+        assert_eq!(
+            parse_scan(scan, "NathanChevrollier", "Zenytt", &r),
+            vec![("/var/www/html/Zenytt".into(), Some("nathanchevrollier/helm".into())), ("/srv/z".into(), None)]
+        );
+        assert_eq!(
+            renamed_from("git@github.com:NathanChevrollier/helm.git", "nathanchevrollier", "zenytt", &r).as_deref(),
+            Some("nathanchevrollier/helm")
+        );
+        assert_eq!(renamed_from("https://github.com/NathanChevrollier/Helm.git", "octo", "app", &r), None, "autre dépôt");
+    }
+
+    #[test]
+    fn lecture_d_un_depot_resolu_et_remote() {
+        let json = r#"{"id":42,"full_name":"NathanChevrollier/Zenytt","name":"Zenytt","owner":{"login":"NathanChevrollier"}}"#;
+        assert_eq!(parse_repo_ref(json), Some((42, "NathanChevrollier".into(), "Zenytt".into())));
+        assert_eq!(parse_repo_ref(r#"{"id":1,"full_name":"o/a b","name":"a b","owner":{"login":"o"}}"#), None);
+        assert_eq!(parse_repo_ref(r#"{"message":"Moved Permanently"}"#), None);
+        let c = set_remote_command("/var/www/html/it's", "NathanChevrollier", "Zenytt").unwrap();
+        assert!(
+            c.starts_with("sh -c '")
+                && c.contains("remote set-url origin")
+                && c.contains("https://github.com/NathanChevrollier/Zenytt.git")
+        );
+        assert!(c.contains("[ -O") && c.contains("core.hooksPath=/dev/null"), "seulement dans un clone du compte SSH, sans hook");
+        assert!(set_remote_command("/srv/../etc", "o", "r").is_err() && set_remote_command("/srv/a", "o;x", "r").is_err());
     }
 
     #[test]
@@ -1057,7 +1259,7 @@ C\tfoo2\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tx\t/opt/stacks/mypage\
     fn lecture_du_scan() {
         let out = "/srv/app\thttps://github.com/octo/app.git\n/home/u/app\tgit@github.com:octo/app.git\n\
 /srv/app\thttps://github.com/octo/app\n/opt/other\thttps://github.com/octo/other\n/srv/x\ngarbage\n/etc/../x\thttps://github.com/octo/app\n";
-        assert_eq!(parse_scan(out, "octo", "app"), vec!["/srv/app", "/home/u/app"]);
+        assert_eq!(parse_scan(out, "octo", "app", &[]), vec![("/srv/app".into(), None), ("/home/u/app".into(), None)]);
     }
 
     #[test]
@@ -1197,12 +1399,12 @@ C\tfoo2\tnode:20\trunning\t2026-01-02 03:04:05 +0000 UTC\tx\t/opt/stacks/mypage\
 
     #[test]
     fn lecture_des_depots() {
-        let json = r#"[{"full_name":"octo/app","name":"app","owner":{"login":"octo"},"private":true,"default_branch":"main",
+        let json = r#"[{"id":9,"full_name":"octo/app","name":"app","owner":{"login":"octo"},"private":true,"default_branch":"main",
 "pushed_at":"2026-01-01T00:00:00Z","open_issues_count":4,"description":null,"fork":false,"archived":false},
 {"full_name":"octo/bad name","name":"bad name","owner":{"login":"octo"}}]"#;
         let r = parse_repos(json).unwrap();
         assert_eq!(r.len(), 1);
-        assert!(r[0].private && r[0].open_issues == 4 && r[0].default_branch == "main");
+        assert!(r[0].id == 9 && r[0].private && r[0].open_issues == 4 && r[0].default_branch == "main");
         assert!(parse_repos("pas du json").is_err());
     }
 }
