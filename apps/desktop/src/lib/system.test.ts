@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ContainerImage, Finding } from "./api";
-import { auditSummary, formatAt, resolveSystemTab, scoreVerdict, sortImages, sortUpdates, splitTab, updateGroup, validHostname } from "./system";
+import { auditSummary, formatAt, resolveSupervisionLink, scoreVerdict, sortImages, sortUpdates, splitTab, updateGroup, validHostname } from "./system";
 
 const img = (container: string, project: string | null, service: string | null = null) => ({ container, project, service }) as ContainerImage;
 
@@ -51,13 +51,24 @@ describe("système", () => {
     expect(splitTab("updates")).toEqual(["updates", null]);
   });
 
-  it("anciens onglets et liens", () => {
-    expect(resolveSystemTab("updates").tab).toBe("software");
-    expect(resolveSystemTab("inventory").tab).toBe("software");
-    expect(resolveSystemTab("security")).toEqual({ tab: "overview", sub: null, audit: true });
-    expect(resolveSystemTab("security/audit")).toEqual({ tab: "overview", sub: null, audit: true });
-    expect(resolveSystemTab("security/fail2ban")).toEqual({ tab: "security", sub: "fail2ban", audit: false });
-    expect(resolveSystemTab("provider").tab).toBe("provider");
-    expect(resolveSystemTab("n'importe quoi").tab).toBe("overview");
+  it("anciens liens de Supervision, Système et Sécurité", () => {
+    const r = resolveSupervisionLink;
+    expect(r(undefined)).toEqual({ tab: "overview" });
+    expect(r("overview")).toEqual({ tab: "overview" });
+    expect(r("processes")).toEqual({ tab: "activity", drawer: "processes" });
+    expect(r("services")).toEqual({ tab: "activity" });
+    expect(r("schedule")).toEqual({ tab: "activity", section: "schedule" });
+    expect(r("agent")).toEqual({ tab: "overview", drawer: "alerts" });
+    expect(r("software")).toEqual({ tab: "security", section: "updates" });
+    expect(r("updates")).toEqual({ tab: "security", section: "updates" });
+    expect(r("inventory")).toEqual({ tab: "security", section: "updates" });
+    expect(r("provider")).toEqual({ tab: "overview", drawer: "provider" });
+    expect(r("security")).toEqual({ tab: "security" });
+    expect(r("security/audit")).toEqual({ tab: "security", drawer: "audit" });
+    expect(r("security/fail2ban")).toEqual({ tab: "security", section: "fail2ban" });
+    expect(r("security/firewall")).toEqual({ tab: "security", section: "firewall" });
+    expect(r("security/access")).toEqual({ tab: "security", section: "access" });
+    expect(r("activity")).toEqual({ tab: "activity" });
+    expect(r("n'importe quoi")).toEqual({ tab: "overview" });
   });
 });

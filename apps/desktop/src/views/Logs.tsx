@@ -6,6 +6,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { ArrowDown, BookmarkPlus, Download, Pause, Play, ScrollText, Search, Square, Trash2, X } from "lucide-react";
 import { api, errorMessage, type LogSource } from "../lib/api";
 import { useApp } from "../lib/store";
+import { useTabIntent } from "../lib/shell";
 import { Badge, Button, Checkbox, EmptyState, IconButton, Input, Loading, MenuButton, Segmented, ToolbarSep, type MenuItem } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 import ServerGate, { ServerContext } from "../components/ServerGate";
@@ -174,6 +175,16 @@ function Logs({ serverId }: { serverId: string }) {
     },
     [serverId, stop, notify],
   );
+
+  // Lien « Ouvrir dans Journaux » (journal d'un service, depuis Supervision) : `unit:<nom>` suit ce service.
+  const [wanted, setWanted] = useTabIntent<string>("logs", "");
+  useEffect(() => {
+    if (!wanted.startsWith("unit:")) return;
+    const src: LogSource = { kind: "unit", name: wanted.slice(5) };
+    setWanted("");
+    setChosen([src]);
+    void start([src]);
+  }, [wanted, setWanted, start]);
 
   // Sélection modifiée pendant le suivi : relance après une courte pause, le temps de cocher
   // plusieurs cases d'affilée sans relancer le flux à chaque clic.

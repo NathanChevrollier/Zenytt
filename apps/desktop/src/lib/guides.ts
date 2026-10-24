@@ -209,8 +209,11 @@ export const GUIDES: Guide[] = [
     title: "Supervision : ce que montrent les chiffres",
     topic: "exploitation",
     section: "monitoring",
-    summary: "Charge, mémoire, disques, réseau, processus et services, en direct ou sur 30 jours avec l'agent.",
+    summary: "Ressources en direct ou sur 30 jours avec l'agent, services, tâches planifiées, alimentation, sécurité et mises à jour : trois onglets.",
     how: [
+      "Vue d'ensemble : la fiche du serveur, six chiffres clés, les courbes de la période choisie (seuils d'alerte en pointillés), les disques, les processus les plus actifs, « À traiter » et l'alimentation (par SSH ou par l'hébergeur).",
+      "Activité : services systemd et tâches planifiées côte à côte ; un clic sur un service ouvre son journal, « Tous les processus » ouvre la liste complète.",
+      "Sécurité et mises à jour : score de l'audit, paquets et versions, fail2ban, pare-feu et accès SSH, sur une seule page.",
       "Sans agent : les chiffres sont lus à la demande pendant que Zenytt est ouvert, sans historique.",
       "Avec l'agent : 30 jours de moyennes par minute, et des alertes qui partent même PC éteint.",
       "La charge (« load ») se compare au nombre de cœurs : 2.00 sur 4 cœurs, c'est la moitié de la machine.",
@@ -222,6 +225,7 @@ export const GUIDES: Guide[] = [
     title: "Tâches planifiées (cron et timers)",
     topic: "exploitation",
     section: "monitoring",
+    tab: "schedule",
     summary: "Tout ce qui se déclenche tout seul sur le serveur : crontabs des utilisateurs, fichiers système de /etc/cron.d, et timers systemd.",
     how: [
       "Zenytt lit les crontabs de chaque utilisateur, /etc/crontab, /etc/cron.d, les dossiers cron.hourly/daily/weekly/monthly, et « systemctl list-timers ».",
@@ -408,8 +412,9 @@ export const GUIDES: Guide[] = [
     title: "Agent zenyttd : historique et alertes hors ligne",
     topic: "exploitation",
     section: "monitoring",
+    tab: "alerts",
     summary: "Sans agent, Zenytt montre l'état en direct quand il est ouvert. Avec l'agent, le serveur garde 30 jours d'historique et envoie les alertes même PC éteint.",
-    automatic: "Installation en un clic : Supervision → Alertes et agent → Installer. Zenytt envoie le binaire par SSH et crée le service.",
+    automatic: "Installation en un clic : Supervision › Vue d'ensemble › Alertes (« Régler… ») → Installer. Zenytt envoie le binaire par SSH et crée le service.",
     how: [
       "L'agent n'ouvre aucun port : il écoute sur un socket unix et Zenytt l'interroge à travers SSH.",
       "Il tourne sous un utilisateur dédié, avec un service systemd durci et 64 Mo de mémoire au maximum.",
@@ -425,7 +430,7 @@ export const GUIDES: Guide[] = [
     ],
     troubleshooting: [
       { symptom: "Le service ne démarre pas", answer: "Regarder la raison exacte dans le journal :", command: "journalctl -u zenyttd -n 30 --no-pager", sudo: true },
-      { symptom: "Aucune alerte ne part", answer: "Vérifier la destination (webhook, ntfy, Discord) depuis Supervision → Alertes et agent : un bouton envoie un message de test." },
+      { symptom: "Aucune alerte ne part", answer: "Vérifier la destination (webhook, ntfy, Discord) depuis Supervision › Vue d'ensemble › Alertes (« Régler… ») : un bouton envoie un message de test." },
     ],
   },
   {
@@ -463,14 +468,14 @@ export const GUIDES: Guide[] = [
     id: "security",
     title: "Audit de sécurité et corrections",
     topic: "securite",
-    section: "system",
+    section: "monitoring",
     tab: "security",
     summary: "État de SSH, du pare-feu, de fail2ban, des mises à jour, des ports exposés et des comptes privilégiés, avec des corrections guidées.",
     how: [
       "L'audit est en lecture seule : rien n'est modifié sans ton accord explicite.",
       "Avant de toucher à SSH ou au pare-feu, Zenytt garde une connexion de contrôle ouverte ; si la modification te coupe l'accès, elle est annulée automatiquement.",
       "Une alerte qui ne te concerne pas peut être ignorée : elle passe dans les archivées, avec la raison.",
-      "L'audit (score et constats) est dans Système › Vue d'ensemble ; Système › Sécurité regroupe pare-feu (règles), fail2ban (prisons, bannissements en cours) et accès SSH. Le correctif « mises à jour en attente » renvoie vers l'onglet Logiciels.",
+      "Tout est dans Supervision › Sécurité et mises à jour : le score en tête (« Voir les constats » ouvre la liste complète, à corriger ou ignorer), puis les mises à jour, fail2ban (prisons, bannissements en cours), le pare-feu (règles) et les accès SSH. Les constats prioritaires remontent aussi dans « À traiter » de la vue d'ensemble.",
       "fail2ban → Réglages : durée de bannissement, nombre d'échecs et fenêtre par défaut ou par jail, bannissement progressif, jails à activer (recidive, nginx…). Zenytt les écrit dans son propre fichier, teste la configuration et la restaure si fail2ban la refuse.",
     ],
     requirements: ["un mot de passe sudo pour appliquer les corrections", "ufw ou firewalld, fail2ban"],

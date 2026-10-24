@@ -1,12 +1,12 @@
 // Logiciels : versions installées des composants, paquets en attente (par famille, application en une
-// fois avec le journal) et fraîcheur des images des conteneurs en marche, sur un seul écran.
+// fois avec le journal) ; la fraîcheur des images des conteneurs tient en une ligne, détaillée dans un tiroir.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Download, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { api, errorMessage, type ContainerImage, type Inventory as InventoryData, type InventoryComponent, type SystemUpdate } from "../../lib/api";
 import { sortImages, sortUpdates, updateGroup, UPDATE_GROUP_LABEL, type UpdateGroup } from "../../lib/system";
 import { useCachedState } from "../../lib/cache";
 import { useApp } from "../../lib/store";
-import { Badge, Button, Card, CodeBlock, DataTable, ErrorState, FOCUS_RING, IconButton, Loading, ResultBanner, Section, type Column } from "../../components/ui";
+import { Badge, Button, Card, CodeBlock, DataTable, Drawer, ErrorState, FOCUS_RING, IconButton, Loading, ResultBanner, Section, type Column } from "../../components/ui";
 
 const mono = (s: string, cls = "") => <span className={`truncate font-mono text-xs ${cls}`}>{s || "—"}</span>;
 const GROUPS: UpdateGroup[] = ["kernel", "libs", "apps"];
@@ -25,6 +25,8 @@ export default function Software({
   packageManager,
   refresh,
   onApplied,
+  imagesOpen,
+  onImagesOpen,
 }: {
   serverId: string;
   updates: SystemUpdate[] | null;
@@ -34,6 +36,8 @@ export default function Software({
   /** Relit les index des paquets puis la liste. */
   refresh: () => Promise<void>;
   onApplied: () => void;
+  imagesOpen: boolean;
+  onImagesOpen: (open: boolean) => void;
 }) {
   const { ask, notify } = useApp.getState();
   const [inv, setInv] = useCachedState<InventoryData | null>(`inventory:${serverId}`, null);
@@ -231,7 +235,7 @@ export default function Software({
         <Card className="text-[13px] text-muted">Aucun conteneur en marche, ou Docker n'est pas accessible sur ce serveur.</Card>
       ) : (
         <Card padded={false} className="overflow-hidden">
-          <div className="flex max-h-[max(18rem,calc(100vh-15rem))] flex-col">
+          <div className="flex max-h-[calc(100vh-14rem)] flex-col">
             <DataTable
               className="min-h-0 flex-1"
               rows={sortImages(images)}
@@ -260,6 +264,28 @@ export default function Software({
         </Card>
       )}
     </Section>
+  );
+
+  const imagesSummary = (
+    <Card padded={false} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[13px]">
+      <span className="min-w-0 flex-1 truncate">
+        Images des conteneurs :{" "}
+        {!images ? (
+          <span className="text-muted">lecture…</span>
+        ) : images.length === 0 ? (
+          <span className="text-muted">aucun conteneur en marche</span>
+        ) : checked ? (
+          <>
+            <span className={outdated ? "text-warn" : ""}>{outdated} à mettre à jour</span> <span className="text-muted">sur {images.length}</span>
+          </>
+        ) : (
+          <span className="text-muted">{images.length}, non vérifiées</span>
+        )}
+      </span>
+      <Button size="sm" disabled={!images?.length} onClick={() => onImagesOpen(true)}>
+        Voir les images…
+      </Button>
+    </Card>
   );
 
   // Paquets : seulement s'il y en a (ou si la liste est en erreur) ; « système à jour » tient dans la barre.
@@ -366,7 +392,7 @@ export default function Software({
           <>
             <div className="flex min-w-0 flex-col gap-5">
               {components}
-              {imagesSection}
+              {imagesSummary}
             </div>
             <div ref={packagesRef} className="min-w-0 scroll-mt-4 @7xl:sticky @7xl:top-0">
               {packages}
@@ -375,10 +401,15 @@ export default function Software({
         ) : (
           <>
             {components}
-            {imagesSection}
+            {imagesSummary}
           </>
         )}
       </div>
+      {imagesOpen && (
+        <Drawer title="Images des conteneurs" subtitle="Conteneurs en marche, par projet compose" width={900} onClose={() => onImagesOpen(false)}>
+          {imagesSection}
+        </Drawer>
+      )}
     </div>
   );
 }

@@ -129,7 +129,7 @@ export default function HelpView() {
               </div>
               {section && (
                 <Button size="sm" className="shrink-0" icon={<ArrowRight size={13} />} onClick={() => navigate(section.id, selected.tab)}>
-                  Ouvrir {selected.tab === "security" ? "Système › Sécurité" : section.label}
+                  Ouvrir {selected.tab === "security" ? "Supervision › Sécurité" : section.label}
                 </Button>
               )}
             </header>

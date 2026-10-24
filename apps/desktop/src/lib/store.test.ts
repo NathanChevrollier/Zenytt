@@ -68,3 +68,13 @@ describe("ensureConnected", () => {
     expect(openDoctor).not.toHaveBeenCalled();
   });
 });
+
+describe("état enregistré d'une ancienne version", () => {
+  it("Système et Sécurité mènent à Supervision, et ne restent pas dans les onglets masqués", async () => {
+    await useApp.getState().hydrate(Promise.resolve({ v: 1, section: "system", settings: { hiddenSections: ["system", "docker", "security"] } }));
+    expect(useApp.getState().section).toBe("monitoring");
+    expect(useApp.getState().settings.hiddenSections).toEqual(["docker"]);
+    await useApp.getState().hydrate(Promise.resolve({ v: 1, section: "security" }));
+    expect(useApp.getState().section).toBe("monitoring");
+  });
+});

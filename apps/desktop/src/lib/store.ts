@@ -238,17 +238,23 @@ function readActiveServer(): string | null {
   }
 }
 
+/** Sections disparues (fusionnées dans Supervision), retirées de l'état enregistré. */
+const LEGACY_SECTIONS: string[] = ["system", "security"];
+
 export const useApp = create<State>((set, get) => ({
   hydrated: false,
   hydrate: async (saved) => {
     try {
       const raw = (await (saved ?? api.uiStateGet())) as Partial<Persisted> | null;
       if (raw && raw.v === 1) {
-        // L'ancienne section « Sécurité » vit désormais dans Système (onglet Sécurité).
-        const legacySecurity = (raw.section as string) === "security";
-        if (legacySecurity) void import("./shell").then(({ useShell }) => useShell.setState({ intent: { section: "system", tab: "security" } }));
+        // Anciennes sections « Sécurité » puis « Système » : fusionnées dans Supervision.
+        const legacy = raw.section as string | undefined;
+        if (legacy === "security") void import("./shell").then(({ useShell }) => useShell.setState({ intent: { section: "monitoring", tab: "security" } }));
+        const section = legacy === "security" || legacy === "system" ? "monitoring" : (raw.section ?? "servers");
+        const saved = raw.settings;
+        if (saved?.hiddenSections) saved.hiddenSections = saved.hiddenSections.filter((id) => !LEGACY_SECTIONS.includes(id));
         set({
-          section: legacySecurity ? "system" : (raw.section ?? "servers"),
+          section,
           // Les sessions partagées ne survivent pas à la fermeture de l'app.
           tabs: (raw.tabs ?? []).filter((t) => !t.join),
           activeTab: raw.activeTab ?? null,

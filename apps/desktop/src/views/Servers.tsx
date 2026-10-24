@@ -366,7 +366,7 @@ function ServerDetail({ server, onEdit, moveItems }: { server: ServerView; onEdi
     { section: "docker", label: "Docker", icon: <Container size={15} />, hint: summary?.connected && summary.docker ? `${summary.containersRunning} conteneur(s)` : "conteneurs, compose" },
     { section: "databases", label: "Bases", icon: <Database size={15} />, hint: "SQL et Redis" },
     { section: "sites", label: "Sites", icon: <Globe size={15} />, hint: summary?.connected ? `${summary.certificates.length} certificat(s)` : "nginx, certificats" },
-    { section: "system", tab: "security", label: "Sécurité", icon: <ShieldCheck size={15} />, hint: "audit, pare-feu" },
+    { section: "monitoring", tab: "security", label: "Sécurité", icon: <ShieldCheck size={15} />, hint: "audit, pare-feu" },
   ];
   const jumps = hasShell(server) ? allJumps : allJumps.filter((j) => j.section === "files");
 
@@ -471,7 +471,7 @@ function ServerDetail({ server, onEdit, moveItems }: { server: ServerView; onEdi
           <div className="grid grid-cols-2 gap-2 @sm:grid-cols-3">
             {jumps.map((j) => (
               <button
-                key={j.section}
+                key={`${j.section}:${j.tab ?? ""}`}
                 type="button"
                 onClick={() => go(j.section, j.tab)}
                 className={`flex min-w-0 flex-col items-start gap-1 rounded-lg border border-border bg-subtle px-2.5 py-2 text-left transition-colors hover:border-border-strong ${FOCUS_RING}`}

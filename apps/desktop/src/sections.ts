@@ -11,7 +11,6 @@ import {
   LayoutDashboard,
   Monitor,
   Network,
-  Power,
   ScrollText,
   Server,
   Settings,
@@ -34,7 +33,6 @@ export type SectionId =
   | "mesh"
   | "github"
   | "backups"
-  | "system"
   | "help"
   | "settings";
 
@@ -67,7 +65,7 @@ export const SECTIONS: Section[] = [
   { id: "mesh", group: "poste", label: "Réseau privé", icon: Network, description: "Relie tes serveurs de différents hébergeurs dans un réseau privé chiffré (WireGuard)." },
   { id: "github", group: "poste", label: "GitHub", icon: GitBranch, description: "Tes dépôts GitHub, où ils sont déployés sur tes serveurs, cloner et mettre à jour." },
   { id: "servers", group: "poste", label: "Serveurs", icon: Server, description: "Profils de connexion, clés SSH et secrets stockés dans le keyring de l'OS." },
-  { id: "monitoring", group: "serveur", label: "Supervision", icon: Activity, perServer: true, description: "CPU, RAM, disque, réseau, processus, services systemd et alertes." },
+  { id: "monitoring", group: "serveur", label: "Supervision", icon: Activity, perServer: true, description: "Ressources, processus, services, tâches planifiées, alertes, alimentation, sécurité et mises à jour du serveur." },
   { id: "files", group: "serveur", label: "Fichiers", icon: FolderTree, perServer: true, description: "Explorateur SFTP, recherche et grep distants, archives, comparaison, transferts entre serveurs, édition distante." },
   { id: "docker", group: "serveur", label: "Docker", icon: Container, perServer: true, description: "Conteneurs, logs en direct, exec, stats, compose, catalogue d'applications 1-clic, registres privés et nettoyage de disque." },
   { id: "vms", group: "serveur", label: "Machines virtuelles", icon: Monitor, perServer: true, description: "VM KVM/QEMU (libvirt) : démarrage, arrêt, écran et console série, sans rien exposer sur Internet." },
@@ -75,7 +73,6 @@ export const SECTIONS: Section[] = [
   { id: "sites", group: "serveur", label: "Sites", icon: Globe, perServer: true, description: "Sous-domaines nginx, certificats SSL, sauvegardes de configuration." },
   { id: "logs", group: "serveur", label: "Journaux", icon: ScrollText, perServer: true, description: "Logs Docker, systemd et nginx en direct, fusionnés et filtrables." },
   { id: "backups", group: "serveur", label: "Sauvegardes", icon: DatabaseBackup, perServer: true, description: "Sauvegardes planifiées et chiffrées (restic), restauration." },
-  { id: "system", group: "serveur", label: "Système", icon: Power, perServer: true, description: "Redémarrage, extinction, audit de sécurité, pare-feu, fail2ban, logiciels et mises à jour, et alimentation via l'API de l'hébergeur." },
   { id: "help", group: "pied", label: "Aide", icon: CircleHelp, description: "Comment marche chaque fonctionnalité et ce qu'elle demande sur le serveur." },
   { id: "settings", group: "pied", label: "Réglages", icon: Settings, description: "Préférences, raccourcis, assistant IA, synchronisation et journal d'actions." },
 ];

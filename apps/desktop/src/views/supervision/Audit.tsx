@@ -1,12 +1,12 @@
-// Audit de sécurité, intégré à la vue d'ensemble : score, constats à traiter (corriger ou ignorer)
-// et, à part, points conformes et constats ignorés. L'audit lui-même est lu par la page Système.
-import { useEffect, useRef, useState } from "react";
+// Audit de sécurité : score, constats à traiter (corriger ou ignorer) et, à part, points conformes et
+// constats ignorés. L'audit lui-même est lu (et gardé 15 min) par la page Supervision.
+import { useState } from "react";
 import { AlertTriangle, Archive, ArchiveRestore, CheckCircle2, EyeOff, Info, OctagonAlert, RefreshCw, Wrench } from "lucide-react";
 import { api, errorMessage, type Finding, type FixPlan, type IgnoredFinding, type SecurityReport, type Severity } from "../../lib/api";
 import { auditSummary, PENALTY, scoreVerdict } from "../../lib/system";
 import { useAppPick } from "../../lib/store";
 import { Badge, Button, Card, ErrorState, IconButton, Loading, Modal, ResultBanner } from "../../components/ui";
-import type { SecTab } from "./Security";
+import type { SecuritySection } from "../../lib/system";
 
 export type AuditProps = {
   serverId: string;
@@ -19,20 +19,18 @@ export type AuditProps = {
   /** IP bannies par fail2ban, connues après la première visite de Sécurité. */
   banned: number | null;
   onShowUpdates: () => void;
-  onShowSecurity: (sub: SecTab) => void;
-  /** Change à chaque lien vers l'audit : le bloc se fait défiler à l'écran. */
-  focus: number;
+  onShowSecurity: (sub: SecuritySection) => void;
 };
 
-const LABEL: Record<Severity, string> = { critical: "critique", high: "élevé", medium: "moyen", low: "faible", ok: "OK" };
-const TONE: Record<Severity, "danger" | "warn" | "accent" | "muted" | "ok"> = { critical: "danger", high: "danger", medium: "warn", low: "muted", ok: "ok" };
+export const LABEL: Record<Severity, string> = { critical: "critique", high: "élevé", medium: "moyen", low: "faible", ok: "OK" };
+export const TONE: Record<Severity, "danger" | "warn" | "accent" | "muted" | "ok"> = { critical: "danger", high: "danger", medium: "warn", low: "muted", ok: "ok" };
 const GROUPS: { title: string; severities: Severity[] }[] = [
   { title: "À corriger en priorité", severities: ["critical", "high"] },
   { title: "À prévoir", severities: ["medium"] },
   { title: "Améliorations", severities: ["low"] },
 ];
 
-function SeverityIcon({ s }: { s: Severity }) {
+export function SeverityIcon({ s }: { s: Severity }) {
   if (s === "critical" || s === "high") return <OctagonAlert size={15} className="shrink-0 text-danger" />;
   if (s === "medium") return <AlertTriangle size={15} className="shrink-0 text-warn" />;
   return <Info size={15} className="shrink-0 text-muted" />;
@@ -40,14 +38,10 @@ function SeverityIcon({ s }: { s: Severity }) {
 
 const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? "s" : ""}`;
 
-/** Score et constats à traiter, groupés par priorité, avec « Corriger » (script montré avant) et « Ignorer ». */
-export function AuditFindings({ serverId, report, error, loading, reload, ignored, reloadIgnored, banned, onShowUpdates, onShowSecurity, focus }: AuditProps) {
+/** « Corriger » (script montré avant) et « Ignorer » (raison facultative) : partagés par la liste et « À traiter ». */
+export function useFindingActions({ serverId, reload, reloadIgnored, onShowUpdates }: Pick<AuditProps, "serverId" | "reload" | "reloadIgnored" | "onShowUpdates">) {
   const { ask, notify } = useAppPick("ask", "notify");
   const [fixing, setFixing] = useState<{ finding: Finding; plan: FixPlan } | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (focus) ref.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [focus]);
 
   /** Met un constat de côté, avec une raison facultative : il rejoint les constats ignorés. */
   const ignore = async (f: Finding) => {
@@ -67,7 +61,7 @@ export function AuditFindings({ serverId, report, error, loading, reload, ignore
   };
 
   const startFix = async (f: Finding) => {
-    // Un seul chemin pour les paquets : l'onglet Logiciels (application non interactive et journal).
+    // Un seul chemin pour les paquets : la section Mises à jour (application non interactive et journal).
     if (f.fix === "apply-updates") return onShowUpdates();
     try {
       setFixing({ finding: f, plan: await api.securityFixPlan(f.fix!) });
@@ -76,11 +70,30 @@ export function AuditFindings({ serverId, report, error, loading, reload, ignore
     }
   };
 
+  const dialog = fixing && (
+    <FixDialog
+      serverId={serverId}
+      finding={fixing.finding}
+      plan={fixing.plan}
+      onClose={() => setFixing(null)}
+      onDone={() => {
+        setFixing(null);
+        reload();
+      }}
+    />
+  );
+  return { ignore, startFix, dialog };
+}
+
+/** Score et constats à traiter, groupés par priorité, avec « Corriger » et « Ignorer ». */
+export function AuditFindings({ serverId, report, error, loading, reload, ignored, reloadIgnored, banned, onShowUpdates, onShowSecurity }: AuditProps) {
+  const { ignore, startFix, dialog } = useFindingActions({ serverId, reload, reloadIgnored, onShowUpdates });
+
   const summary = report ? auditSummary(report.findings, ignored.map((i) => i.findingId)) : null;
 
   return (
     <Card padded={false} tone={summary?.serious ? "danger" : undefined} className="min-w-0 overflow-hidden">
-      <div ref={ref} className="flex min-h-11 scroll-mt-4 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2">
+      <div className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2">
         {summary && <ScoreGauge score={summary.score} small />}
         <div className="min-w-0 flex-1">
           <h2 className="text-[13px] font-semibold">{summary ? `Sécurité · ${scoreVerdict(summary.score)}` : "Audit de sécurité"}</h2>
@@ -160,18 +173,7 @@ export function AuditFindings({ serverId, report, error, loading, reload, ignore
           );
         })
       )}
-      {fixing && (
-        <FixDialog
-          serverId={serverId}
-          finding={fixing.finding}
-          plan={fixing.plan}
-          onClose={() => setFixing(null)}
-          onDone={() => {
-            setFixing(null);
-            reload();
-          }}
-        />
-      )}
+      {dialog}
     </Card>
   );
 }

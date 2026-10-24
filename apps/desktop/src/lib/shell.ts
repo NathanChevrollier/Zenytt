@@ -23,7 +23,7 @@ interface ShellState {
   /** Demande d'ouverture du formulaire « Nouveau serveur » (depuis le sélecteur ou l'accueil). */
   newServerRequested: boolean;
   requestNewServer: (v: boolean) => void;
-  /** Onglet à ouvrir à l'arrivée sur une section (lien « Installer l'agent » → onglet Agent…). */
+  /** Onglet à ouvrir à l'arrivée sur une section (lien « Installer l'agent » → tiroir Alertes de Supervision…). */
   intent: { section: SectionId; tab: string } | null;
   /** Tiroir « Machines » à droite (retenu d'une session à l'autre). */
   machinesOpen: boolean;

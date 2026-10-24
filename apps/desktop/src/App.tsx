@@ -44,7 +44,7 @@ const VncSession = lazy(() => import("./components/VncSession"));
 const VIEWS: Partial<Record<SectionId, ComponentType>> = {
   servers: lazy(() => import("./views/Servers")),
   files: lazy(() => import("./views/Files")),
-  monitoring: lazy(() => import("./views/Monitoring")),
+  monitoring: lazy(() => import("./views/Supervision")),
   docker: lazy(() => import("./views/Docker")),
   vms: lazy(() => import("./views/Vms")),
   databases: lazy(() => import("./views/Databases")),
@@ -54,7 +54,6 @@ const VIEWS: Partial<Record<SectionId, ComponentType>> = {
   mesh: lazy(() => import("./views/Mesh")),
   github: lazy(() => import("./views/Github")),
   backups: lazy(() => import("./views/Backups")),
-  system: lazy(() => import("./views/System")),
   help: lazy(() => import("./views/Help")),
   settings: lazy(() => import("./views/Settings")),
 };

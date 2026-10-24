@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Play, RotateCw, ScrollText, Search, Square } from "lucide-react";
+// Services systemd : filtre, inactifs masqués, en échec d'abord, actions ; un clic ouvre le journal.
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { ExternalLink, Play, RotateCw, ScrollText, Search, Square } from "lucide-react";
 import { api, errorMessage, type Service } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
 import { Badge, Button, Checkbox, DataTable, Drawer, EmptyState, IconButton, Input, Loading, type Column } from "../../components/ui";
-import { useCachedState } from "../../lib/cache";
+import { navigate } from "../../lib/shell";
 import { useAutoRefresh } from "../../lib/refresh";
 
-export default function Services({ serverId, onCount }: { serverId: string; onCount?: (n: number) => void }) {
+export type ServiceList = Service[] | null | undefined;
+
+/** `list` : `undefined` en lecture, `null` sans systemd. Partagée avec la page (compteur « en échec »). */
+export default function Services({ serverId, list, setList, extra }: { serverId: string; list: ServiceList; setList: Dispatch<SetStateAction<ServiceList>>; extra?: ReactNode }) {
   const { ask, notify } = useAppPick("ask", "notify");
-  const [list, setList] = useCachedState<Service[] | null | undefined>(`services:${serverId}`, undefined);
   const [filter, setFilter] = useState("");
   const [onlyActive, setOnlyActive] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -20,13 +23,12 @@ export default function Services({ serverId, onCount }: { serverId: string; onCo
     } catch (e) {
       notify(errorMessage(e), "error");
     }
-  }, [serverId, notify]);
+  }, [serverId, notify, setList]);
 
   useEffect(() => {
     void load();
   }, [load]);
   useAutoRefresh((auto) => (auto ? api.services(serverId).then(setList, () => {}) : load()), { serverId });
-  useEffect(() => onCount?.(list?.filter((s) => s.active === "active").length ?? 0), [list, onCount]);
 
   const rows = useMemo(() => {
     const f = filter.toLowerCase();
@@ -90,13 +92,17 @@ export default function Services({ serverId, onCount }: { serverId: string; onCo
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-3 border-b border-border px-7 py-2.5">
-        <label className="relative w-80">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-2">
+        <h2 className="text-[13px] font-semibold">
+          Services
+          {failed > 0 ? <span className="ml-1 font-normal text-danger">· {failed} en échec</span> : list && <span className="ml-1 font-normal text-faint">· {list.length}</span>}
+        </h2>
+        <label className="relative w-64 min-w-40">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />
           <Input className="pl-8" placeholder="Filtrer les services" value={filter} onChange={(e) => setFilter(e.target.value)} />
         </label>
         <Checkbox checked={onlyActive} onChange={setOnlyActive} label="Masquer les inactifs non activés" />
-        {failed > 0 && <Badge tone="danger">{failed} en échec</Badge>}
+        <span className="ml-auto">{extra}</span>
       </div>
       {list === undefined ? (
         <div className="p-7">
@@ -110,7 +116,7 @@ export default function Services({ serverId, onCount }: { serverId: string; onCo
           columns={columns}
           rowHeight={38}
           initialSort={{ key: "state", dir: "asc" }}
-          onRowDoubleClick={(s) => setLogsOf(s.unit)}
+          onRowClick={(s) => setLogsOf(s.unit)}
           actionsWidth={76}
         rowActions={(s) =>
             s.active === "active" ? (
@@ -156,9 +162,14 @@ function LogsDrawer({ serverId, unit, onClose }: { serverId: string; unit: strin
       modal={false}
       onClose={onClose}
       actions={
-        <Button size="sm" onClick={() => setLines((l) => l + 700)}>
-          Charger plus
-        </Button>
+        <>
+          <Button size="sm" onClick={() => setLines((l) => l + 700)}>
+            Charger plus
+          </Button>
+          <Button size="sm" variant="ghost" icon={<ExternalLink size={13} />} onClick={() => navigate("logs", `unit:${unit}`)}>
+            Ouvrir dans Journaux
+          </Button>
+        </>
       }
     >
       {text === null ? <Loading rows={10} /> : <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap select-text">{text}</pre>}
