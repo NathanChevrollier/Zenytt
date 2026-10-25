@@ -576,6 +576,21 @@ mod tests {
     }
 
     #[test]
+    fn old_desktops_without_folder_still_load() {
+        // Bureau des premières versions : ni protocole, ni port, ni dossier.
+        let old = r#"{"desktops":[{"id":"d1","name":"PC","host":"192.168.1.20","username":"bob"}]}"#;
+        let d: Data = serde_json::from_str(old).unwrap();
+        let r = &d.desktops[0];
+        assert_eq!((r.protocol, r.port, r.group.as_deref()), (DesktopProtocol::Rdp, 3389, None));
+        // Le dossier est écrit sous `group`, comme celui des serveurs.
+        let mut r = r.clone();
+        r.group = Some("Maison".into());
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("\"group\":\"Maison\""), "{json}");
+        assert_eq!(serde_json::from_str::<RemoteDesktop>(&json).unwrap(), r);
+    }
+
+    #[test]
     fn corrupt_file_is_kept_and_backup_restored() {
         let dir = tempfile::tempdir().unwrap();
         let s = Store::open(dir.path());
