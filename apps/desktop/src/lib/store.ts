@@ -98,7 +98,7 @@ export interface Settings {
   hiddenSections?: SectionId[];
   /** Copie sur ce PC du dépôt de sauvegarde de chaque serveur (par identifiant de serveur). */
   backupMirrors?: Record<string, BackupMirror>;
-  /** Écran d'une VM ouvert depuis le tiroir Machines : dans Zenytt, ou dans le client du système. */
+  /** Écran d'une VM ou d'un bureau à distance (sélecteur de serveur, palette) : dans Zenytt, ou dans le client du système. */
   vmScreen?: "internal" | "external";
 }
 

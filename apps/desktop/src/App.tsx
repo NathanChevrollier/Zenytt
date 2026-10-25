@@ -28,7 +28,7 @@ import { usePolling } from "./lib/poll";
 // Fenêtres et panneaux ouverts à la demande : chargés à leur première ouverture, pas au démarrage.
 const CommandPalette = lazy(() => import("./components/CommandPalette"));
 const AssistantPanel = lazy(() => import("./components/AssistantPanel"));
-const MachinesDrawer = lazy(() => import("./components/shell/MachinesDrawer"));
+const SessionsDrawer = lazy(() => import("./components/shell/SessionsDrawer"));
 const GuideDialog = lazy(() => import("./components/GuideDialog"));
 const ShortcutsHelp = lazy(() => import("./components/shell/ShortcutsHelp"));
 const HomeView = lazy(() => import("./views/Home"));
@@ -263,9 +263,9 @@ export default function App() {
             )}
           </div>
           {machinesOpen && (
-            <ErrorBoundary label="le tiroir des machines" compact onClose={() => useShell.getState().setMachinesOpen(false)} closeLabel="Fermer le tiroir">
+            <ErrorBoundary label="le tiroir des sessions ouvertes" compact onClose={() => useShell.getState().setMachinesOpen(false)} closeLabel="Fermer le tiroir">
               <Suspense fallback={null}>
-                <MachinesDrawer />
+                <SessionsDrawer />
               </Suspense>
             </ErrorBoundary>
           )}

@@ -250,6 +250,17 @@ function General() {
             ]}
           />
         </Setting>
+        <Setting title="Écrans distants" description="Où s'ouvrent l'écran d'une VM et les bureaux à distance (sélecteur de serveur, palette). L'autre moyen reste au clic droit ; un bureau qui ne s'affiche pas dans Zenytt (SPICE, RDP sans mot de passe) part toujours dans le client du système.">
+          <Select
+            className="w-44"
+            value={settings.vmScreen ?? "internal"}
+            onChange={(vmScreen) => setSettings({ vmScreen })}
+            options={[
+              { value: "internal", label: "Dans Zenytt" },
+              { value: "external", label: "Client du système" },
+            ]}
+          />
+        </Setting>
       </Group>
       <Group card title="Mises à jour et journaux">
         <Setting title="Mises à jour" description="Zenytt vérifie au démarrage si une nouvelle version est publiée sur GitHub. Les mises à jour sont signées : une version modifiée est refusée.">

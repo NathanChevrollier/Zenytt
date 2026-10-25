@@ -13,7 +13,7 @@ export const SHORTCUTS = {
   termSearch: { label: "Rechercher dans le terminal", default: "Ctrl+Shift+F" },
   termHistory: { label: "Historique des commandes du serveur", default: "Ctrl+Shift+R" },
   assistant: { label: "Ouvrir l'assistant IA", default: "Ctrl+I" },
-  machines: { label: "Tiroir des machines (changer de machine)", default: "Ctrl+Shift+M" },
+  machines: { label: "Sessions ouvertes (écrans distants, terminaux)", default: "Ctrl+Shift+M" },
   quit: { label: "Quitter Zenytt", default: "Ctrl+Q" },
 } as const;
 
