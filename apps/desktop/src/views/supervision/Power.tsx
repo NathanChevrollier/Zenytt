@@ -1,11 +1,12 @@
-// Alimentation : un seul bloc, par SSH (redémarrer, programmer, éteindre, avec l'attente du retour)
-// et par l'hébergeur (état, redémarrage API, reset forcé, allumer, éteindre), utilisable SSH coupé.
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+// Alimentation : un menu du bandeau, par SSH (redémarrer, programmer, éteindre, avec l'attente du
+// retour) et par l'hébergeur (redémarrage API, reset forcé, allumer, éteindre), utilisable SSH coupé.
+import { useEffect, useRef, useState } from "react";
+import { Clock, Loader2, Power, RefreshCw, RotateCcw, Settings2, Zap } from "lucide-react";
 import { api, errorMessage, formatDuration, type SystemInfo } from "../../lib/api";
 import { formatAt } from "../../lib/system";
 import { useApp } from "../../lib/store";
-import { Badge, Button, Card, Field, IconButton, Input, Meter, Modal, Segmented, StatusDot, type Tone } from "../../components/ui";
+import { MenuButton, type MenuItem } from "../../components/ContextMenu";
+import { Button, Field, Input, Modal, Segmented } from "../../components/ui";
 import { KINDS, STATE, type ProviderState } from "./Provider";
 
 type PowerKind = "reboot" | "poweroff";
@@ -13,7 +14,7 @@ export type PowerModalMode = PowerKind | "schedule";
 /** Délai d'attente du retour, en secondes (celui de `systemWaitOnline`). */
 const WAIT_TIMEOUT = 600;
 
-/** Actions d'alimentation par SSH, partagées entre le bloc Alimentation et « À traiter ». */
+/** Actions d'alimentation par SSH, partagées entre le menu Alimentation et « À traiter ». */
 export function usePower(serverId: string, name: string, info: SystemInfo | null, reload: () => Promise<void>) {
   const { notify, refreshServers } = useApp.getState();
   const [modal, setModal] = useState<PowerModalMode | null>(null);
@@ -80,107 +81,42 @@ export function usePower(serverId: string, name: string, info: SystemInfo | null
 
 export type PowerState = ReturnType<typeof usePower>;
 
-function Row({ title, children }: { title: ReactNode; children: ReactNode }) {
-  return (
-    <div className="flex min-h-10 items-center gap-3 px-4 py-1.5">
-      <span className="min-w-0 flex-1 truncate text-[13px]">{title}</span>
-      {children}
-    </div>
-  );
-}
-
-/** Bloc « Alimentation » du rail. `power` absent : SSH indisponible, seule la partie hébergeur agit. */
-export function PowerCard({ name, power, provider, onConfigure }: { name: string; power: PowerState | null; provider: ProviderState; onConfigure: () => void }) {
+/**
+ * Menu « Alimentation » du bandeau de la page : par SSH (redémarrer, programmer, éteindre) et par
+ * l'hébergeur (utilisable SSH coupé). `power` absent : SSH indisponible. Pendant l'attente du
+ * retour après un redémarrage, le menu laisse la place au chronomètre.
+ */
+export function PowerMenu({ name, power, provider, onConfigure }: { name: string; power: PowerState | null; provider: ProviderState; onConfigure: () => void }) {
   const { view, status, statusError, busy, ready, test, act } = provider;
+  if (power?.waitStart) return <Waiting name={name} start={power.waitStart} onStop={power.stopWaiting} />;
   const kind = KINDS.find((k) => k.value === view?.link?.kind)?.label;
-  const [label, tone] = status ? STATE[status.state] : ["", "muted" as Tone];
-  return (
-    <Card padded={false} tone="danger" className="flex min-w-0 flex-col">
-      <h2 className="border-b border-border px-4 py-2.5 text-[13px] font-semibold">Alimentation</h2>
-      <div className="px-4 pt-2.5 text-[11.5px] text-muted">Par SSH</div>
-      {!power ? (
-        <p className="px-4 py-2 text-[13px] text-muted">SSH ne répond pas : passe par l'hébergeur.</p>
-      ) : power.waitStart ? (
-        <Waiting name={name} start={power.waitStart} onStop={power.stopWaiting} />
-      ) : (
-        <div className="pb-1.5">
-          <Row title="Redémarrer maintenant">
-            <Button size="sm" title="Coupe sessions et services ; Zenytt attend le retour puis se reconnecte" onClick={() => power.setModal("reboot")}>
-              Redémarrer…
-            </Button>
-          </Row>
-          <Row title="Redémarrage ou extinction différés">
-            <Button size="sm" title="Différé, annulable jusqu'à l'heure prévue" onClick={() => power.setModal("schedule")}>
-              Programmer…
-            </Button>
-          </Row>
-          <Row title="Éteindre le serveur">
-            <Button size="sm" variant="danger" title="Rallumage depuis l'hébergeur seulement" onClick={() => power.setModal("poweroff")}>
-              Éteindre…
-            </Button>
-          </Row>
-        </div>
-      )}
-      <div className="flex items-center gap-2 border-t border-border px-4 pt-2.5 text-[11.5px] text-muted">
-        <span className="truncate">Par l'hébergeur{kind ? ` · ${kind}` : ""}</span>
-        {ready && (
-          <button type="button" className="text-accent hover:underline" onClick={onConfigure}>
-            Configurer
-          </button>
-        )}
-        {ready && (
-          <span className="ml-auto flex items-center gap-1.5" aria-live="polite">
-            {status ? (
-              <Badge tone={tone} title={status.state === "unknown" ? status.raw : undefined}>
-                <StatusDot tone={tone} pulse={status.state === "starting" || status.state === "stopping"} />
-                {label}
-              </Badge>
-            ) : statusError ? (
-              <Badge tone="danger" title={statusError}>
-                injoignable
-              </Badge>
-            ) : (
-              busy === "status" && <span>lecture de l'état…</span>
-            )}
-            <IconButton size="sm" title="Relire l'état" disabled={busy === "status"} onClick={() => void test()}>
-              <RefreshCw size={13} className={busy === "status" ? "animate-spin" : ""} />
-            </IconButton>
-          </span>
-        )}
-      </div>
-      {!view ? (
-        <p className="px-4 py-2.5 text-[13px] text-muted">Lecture…</p>
-      ) : !ready ? (
-        <Row title={<span className="text-muted">Non configuré : redémarrer ou rallumer sans SSH</span>}>
-          <Button size="sm" onClick={onConfigure}>
-            Configurer…
-          </Button>
-        </Row>
-      ) : (
-        <>
-          {statusError && (
-            <p className="truncate px-4 pt-1 text-xs text-danger" title={statusError}>
-              {statusError}
-            </p>
-          )}
-          <div className="flex flex-wrap items-center gap-1.5 px-4 pt-2 pb-3">
-            <Button size="sm" variant="outline" loading={busy === "reboot"} onClick={() => void act("reboot")} title="Redémarrage logiciel demandé à l'hébergeur">
-              Redémarrer (API)…
-            </Button>
-            <Button size="sm" variant="outline" loading={busy === "reset"} onClick={() => void act("reset")} title="Coupe et rallume sans arrêt propre, quand le système est bloqué">
-              Reset forcé…
-            </Button>
-            <Button size="sm" variant="outline" loading={busy === "powerOn"} disabled={status?.state === "running"} onClick={() => void act("powerOn")}>
-              Allumer…
-            </Button>
-            <Button size="sm" variant="danger" loading={busy === "powerOff"} disabled={status?.state === "off"} onClick={() => void act("powerOff")}>
-              Éteindre…
-            </Button>
-          </div>
-        </>
-      )}
-    </Card>
-  );
+  const state = status ? STATE[status.state][0] : statusError ? "injoignable" : busy === "status" ? "lecture de l'état…" : "";
+  const items = (): MenuItem[] => [
+    { heading: "Par SSH" },
+    ...(power
+      ? [
+          { label: "Redémarrer maintenant…", icon: <RotateCcw size={14} />, hint: "attend le retour", onClick: () => power.setModal("reboot") },
+          { label: "Programmer un redémarrage ou une extinction…", icon: <Clock size={14} />, onClick: () => power.setModal("schedule") },
+          { label: "Éteindre le serveur…", icon: <Power size={14} />, danger: true, onClick: () => power.setModal("poweroff") },
+        ]
+      : [{ label: "SSH ne répond pas : passe par l'hébergeur", disabled: true, onClick: () => {} }]),
+    "separator",
+    { heading: `Par l'hébergeur${kind ? ` · ${kind}` : ""}${ready && state ? ` · ${state}` : ""}` },
+    ...(!view
+      ? [{ label: "Lecture…", disabled: true, onClick: () => {} }]
+      : !ready
+        ? [{ label: "Configurer l'hébergeur…", icon: <Settings2 size={14} />, hint: "redémarrer ou rallumer sans SSH", onClick: onConfigure }]
+        : [
+            { label: "Redémarrer (API)…", icon: <RotateCcw size={14} />, disabled: !!busy, onClick: () => void act("reboot") },
+            { label: "Reset forcé…", icon: <Zap size={14} />, hint: "système bloqué", disabled: !!busy, onClick: () => void act("reset") },
+            { label: "Allumer…", icon: <Power size={14} />, disabled: !!busy || status?.state === "running", onClick: () => void act("powerOn") },
+            { label: "Éteindre…", icon: <Power size={14} />, danger: true, disabled: !!busy || status?.state === "off", onClick: () => void act("powerOff") },
+            "separator" as const,
+            { label: "Relire l'état", icon: <RefreshCw size={14} />, disabled: busy === "status", onClick: () => void test() },
+            { label: "Configurer…", icon: <Settings2 size={14} />, onClick: onConfigure },
+          ]),
+  ];
+  return <MenuButton label={busy && busy !== "status" ? "Alimentation…" : "Alimentation"} icon={<Power size={14} />} title="Redémarrer, programmer, éteindre (SSH ou hébergeur)" items={items} />;
 }
 
 function Waiting({ name, start, onStop }: { name: string; start: number; onStop: () => void }) {
@@ -192,24 +128,20 @@ function Waiting({ name, start, onStop }: { name: string; start: number; onStop:
   const secs = Math.floor((now - start) / 1000);
   const clock = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
   return (
-    <div className="flex flex-col gap-2 px-4 py-2.5">
-      <div className="flex items-center gap-3" role="status" aria-live="polite">
-        <Loader2 size={16} className="shrink-0 animate-spin text-accent" />
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium">En attente du retour de {name}</div>
-          <div className="text-xs text-muted">{secs < 10 ? "Arrêt en cours…" : "Nouvelle tentative de connexion toutes les 5 s."}</div>
-        </div>
-        <span className="text-lg font-semibold tabular-nums" aria-label={`${secs} secondes écoulées`}>
-          {clock}
-        </span>
-      </div>
-      <Meter value={(secs / WAIT_TIMEOUT) * 100} tone="accent" />
-      <div className="flex items-center gap-2 text-[11.5px] text-faint">
-        <span className="flex-1">Abandon après {WAIT_TIMEOUT / 60} min. Muet ? Vérifie l'état chez l'hébergeur ci-dessous.</span>
-        <Button size="sm" variant="ghost" onClick={onStop}>
-          Arrêter d'attendre
-        </Button>
-      </div>
+    <div
+      className="flex h-8 items-center gap-2 rounded-lg border border-border bg-subtle pr-1 pl-2.5 text-[13px]"
+      role="status"
+      aria-live="polite"
+      title={`${secs < 10 ? "Arrêt en cours…" : "Nouvelle tentative de connexion toutes les 5 s."} Abandon après ${WAIT_TIMEOUT / 60} min ; muet, vérifie l'état chez l'hébergeur.`}
+    >
+      <Loader2 size={14} className="shrink-0 animate-spin text-accent" />
+      <span className="whitespace-nowrap">Retour de {name} attendu</span>
+      <span className="font-semibold tabular-nums" aria-label={`${secs} secondes écoulées`}>
+        {clock}
+      </span>
+      <Button size="sm" variant="ghost" onClick={onStop}>
+        Arrêter d'attendre
+      </Button>
     </div>
   );
 }

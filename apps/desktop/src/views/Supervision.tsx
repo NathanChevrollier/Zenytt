@@ -20,8 +20,8 @@ import PageLayout from "../components/PageLayout";
 import ServerGate, { ServerContext } from "../components/ServerGate";
 import { useDoctor } from "../components/ConnectionDoctor";
 import Overview, { RANGES, type RangeId } from "./supervision/Overview";
-import Todo from "./supervision/Todo";
-import { PowerCard, usePower } from "./supervision/Power";
+import { TodoIndicator } from "./supervision/Todo";
+import { PowerMenu, usePower } from "./supervision/Power";
 import { ProviderDrawer, STATE, KINDS, useProvider } from "./supervision/Provider";
 import Activity from "./supervision/Activity";
 import Security from "./supervision/Security";
@@ -184,10 +184,10 @@ function Supervision({ serverId, server }: { serverId: string; server: ServerVie
   const providerKind = KINDS.find((k) => k.value === provider.view?.link?.kind)?.label;
   const securityCount = (updates?.length ?? 0) + (summary?.problems.length ?? 0);
 
-  const rail = (
+  const bar = (
     <>
       {ready && (
-        <Todo
+        <TodoIndicator
           agent={agent}
           info={info}
           services={services}
@@ -216,7 +216,7 @@ function Supervision({ serverId, server }: { serverId: string; server: ServerVie
           onShowFail2ban={() => showSecurity("fail2ban")}
         />
       )}
-      <PowerCard name={server.name} power={ready ? power : null} provider={provider} onConfigure={() => setDrawer("provider")} />
+      <PowerMenu name={server.name} power={ready ? power : null} provider={provider} onConfigure={() => setDrawer("provider")} />
     </>
   );
 
@@ -238,7 +238,7 @@ function Supervision({ serverId, server }: { serverId: string; server: ServerVie
             )
           )}
           {provider.ready && (
-            <button type="button" onClick={() => setDrawer("provider")}>
+            <button type="button" onClick={() => setDrawer("provider")} title={provider.statusError ?? undefined}>
               <Badge tone={provider.status ? STATE[provider.status.state][1] : provider.statusError ? "danger" : "muted"}>
                 hébergeur {providerKind} · {provider.status ? STATE[provider.status.state][0] : provider.statusError ? "injoignable" : "…"}
               </Badge>
@@ -254,19 +254,22 @@ function Supervision({ serverId, server }: { serverId: string; server: ServerVie
         </>
       }
       actions={
-        tab === "overview" && ready ? (
-          <Segmented
-            label="Période"
-            value={range}
-            onChange={setRange}
-            options={RANGES.map((r) => ({
-              value: r.id,
-              label: r.label,
-              disabled: r.secs > 0 && !agentOk,
-              title: r.secs > 0 && !agentOk ? "Installe l'agent zenyttd (Alertes › Régler…) pour conserver l'historique" : undefined,
-            }))}
-          />
-        ) : undefined
+        <>
+          {bar}
+          {tab === "overview" && ready && (
+            <Segmented
+              label="Période"
+              value={range}
+              onChange={setRange}
+              options={RANGES.map((r) => ({
+                value: r.id,
+                label: r.label,
+                disabled: r.secs > 0 && !agentOk,
+                title: r.secs > 0 && !agentOk ? "Installe l'agent zenyttd (Alertes › Régler…) pour conserver l'historique" : undefined,
+              }))}
+            />
+          )}
+        </>
       }
       tabs={[
         { id: "overview", label: "Vue d'ensemble", count: alerts || undefined, tone: alerts ? "danger" : undefined },
@@ -278,9 +281,8 @@ function Supervision({ serverId, server }: { serverId: string; server: ServerVie
       scroll={tab !== "activity"}
     >
       {!ready ? (
-        <div className="@container flex min-w-0 flex-col gap-5 px-7 py-5">
-          <div className="grid min-w-0 items-start gap-5 @min-[1100px]:grid-cols-[minmax(0,2fr)_minmax(340px,1fr)]">
-            {trying ? (
+        <div className="flex min-w-0 flex-col gap-5 px-7 py-5">
+          {trying ? (
               <EmptyState icon={<Loader2 className="animate-spin" />} title={`Connexion à ${server.name}…`}>
                 Ouverture de la session SSH.
               </EmptyState>
@@ -297,11 +299,9 @@ function Supervision({ serverId, server }: { serverId: string; server: ServerVie
                   </>
                 }
               >
-                Les relevés, services et réglages passent par SSH. L'alimentation par l'hébergeur reste disponible.
+                Les relevés, services et réglages passent par SSH. L'alimentation par l'hébergeur reste disponible dans le menu Alimentation, en haut.
               </EmptyState>
             )}
-            <aside className="flex min-w-0 flex-col gap-4">{rail}</aside>
-          </div>
         </div>
       ) : (
         <>
@@ -314,7 +314,6 @@ function Supervision({ serverId, server }: { serverId: string; server: ServerVie
               agent={agent}
               visible={tab === "overview"}
               range={range}
-              rail={rail}
               onAllProcesses={allProcesses}
               onProcCount={setProcCount}
             />

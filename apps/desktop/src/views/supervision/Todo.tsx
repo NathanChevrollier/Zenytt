@@ -1,8 +1,9 @@
 // « À traiter » : tout ce qui demande une action, en lignes courtes menant à l'endroit où agir
 // (alertes, services en échec, mises à jour, redémarrage requis, constats d'audit sérieux, IP
-// bannies, agent absent). Une seule ligne verte quand tout va bien.
-import type { ReactNode } from "react";
-import { CheckCircle2, EyeOff, Loader2, Wrench } from "lucide-react";
+// bannies, agent absent). Une seule ligne verte quand tout va bien. Affiché depuis un voyant du bandeau.
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AlertTriangle, CheckCircle2, EyeOff, Loader2, Wrench } from "lucide-react";
+import { FOCUS_RING } from "../../components/kit/base";
 import type { AgentInfo, Finding, Service, SystemInfo, SystemUpdate } from "../../lib/api";
 import { formatAt, updateGroup } from "../../lib/system";
 import { Button, Card, IconButton, StatusDot, type Tone } from "../../components/ui";
@@ -57,6 +58,66 @@ export interface TodoProps {
   onShowSecurity: () => void;
   onShowAudit: () => void;
   onShowFail2ban: () => void;
+}
+
+/** Voyant « À traiter » du bandeau : nombre de points et couleur du plus grave ; un clic déplie la liste. */
+export function TodoIndicator(p: TodoProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+
+  const alerts = p.agent?.status?.activeAlerts.length ?? 0;
+  const failed = (p.services ?? []).some((s) => s.active === "failed");
+  const serious = !!p.audit?.serious.length;
+  const count =
+    (p.info?.scheduled ? 1 : 0) +
+    alerts +
+    (failed ? 1 : 0) +
+    (p.info?.rebootRequired && !p.power?.waitStart ? 1 : 0) +
+    (p.updates?.length ? 1 : 0) +
+    (p.audit?.problems.length ? 1 : 0) +
+    (p.banned ? 1 : 0) +
+    (p.agent && !p.agent.running ? 1 : 0);
+  const loaded = !!p.audit && !p.audit.loading && !!p.updates;
+  const tone: Tone = alerts || failed || serious ? "danger" : count ? "warn" : loaded ? "ok" : "muted";
+  const color = { danger: "border-danger/40 text-danger", warn: "border-warn/40 text-warn", ok: "border-border text-ok", muted: "border-border text-muted" }[tone as "danger" | "warn" | "ok" | "muted"];
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((o) => !o)}
+        className={`flex h-8 items-center gap-1.5 rounded-lg border bg-subtle px-2.5 text-[13px] font-medium hover:bg-hover-strong ${color} ${FOCUS_RING}`}
+        title="Ce qui demande une action sur ce serveur"
+      >
+        {count ? <AlertTriangle size={14} /> : loaded ? <CheckCircle2 size={14} /> : <Loader2 size={14} className="animate-spin" />}
+        {count ? plural(count, "point à traiter", "points à traiter") : loaded ? "Rien à traiter" : "Vérification…"}
+      </button>
+      {open && (
+        // Toute action de la liste (aller à, corriger, régler…) referme le panneau.
+        <div
+          role="dialog"
+          aria-label="À traiter"
+          className="animate-pop-in absolute top-full right-0 z-40 mt-1.5 w-[min(460px,calc(100vw-2rem))] rounded-xl shadow-2xl"
+          onClick={(e) => (e.target as Element).closest("button") && setOpen(false)}
+        >
+          <Todo {...p} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function Todo(p: TodoProps) {

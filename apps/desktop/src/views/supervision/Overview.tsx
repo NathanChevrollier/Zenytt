@@ -1,6 +1,6 @@
 // Vue d'ensemble de Supervision : fiche du serveur (nom d'hôte et fuseau modifiables sur place), six
 // chiffres clés, quatre courbes sur la période choisie (seuils des règles d'alerte en pointillés),
-// disques et processus les plus actifs ; à droite, le rail fourni par la page (À traiter, Alimentation).
+// disques et processus les plus actifs. « À traiter » et « Alimentation » sont dans le bandeau de la page.
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, Loader2, Pencil, SlidersHorizontal, X } from "lucide-react";
 import { api, diskCounts, errorMessage, formatBytes, formatDuration, fullestDisk, type AgentInfo, type AlertMetric, type Disk, type DiskRule, type HistoryPoint, type Metrics, type Process, type SystemInfo } from "../../lib/api";
@@ -40,7 +40,6 @@ export default function Overview({
   agent,
   visible,
   range,
-  rail,
   onAllProcesses,
   onProcCount,
 }: {
@@ -51,7 +50,6 @@ export default function Overview({
   agent: AgentInfo | null;
   visible: boolean;
   range: RangeId;
-  rail: ReactNode;
   onAllProcesses: () => void;
   onProcCount: (n: number) => void;
 }) {
@@ -192,7 +190,7 @@ export default function Overview({
         </dl>
       )}
 
-      <div className="grid min-w-0 items-start gap-5 px-7 py-5 @min-[1100px]:grid-cols-[minmax(0,2fr)_minmax(340px,1fr)]">
+      <div className="min-w-0 px-7 py-5">
         <section aria-label="Santé" className="@container flex min-w-0 flex-col gap-4">
           {error && <ErrorState message={error} />}
           <div className="grid grid-cols-2 gap-3 @xl:grid-cols-3 @4xl:grid-cols-6">
@@ -301,10 +299,6 @@ export default function Overview({
             </Card>
           </div>
         </section>
-
-        <aside aria-label="À traiter et alimentation" className="grid min-w-0 items-start gap-4 @3xl:grid-cols-2 @min-[1100px]:grid-cols-1">
-          {rail}
-        </aside>
       </div>
       {editingDisk && <DiskRuleDialog serverId={serverId} disk={editingDisk} rule={diskRules.find((r) => r.mount === editingDisk.mount)} onClose={() => setEditingDisk(null)} onSaved={loadDiskRules} />}
     </div>
