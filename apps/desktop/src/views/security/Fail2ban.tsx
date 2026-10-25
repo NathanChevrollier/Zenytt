@@ -1,11 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { Ban, FileSearch, Plus, RefreshCw, Settings2, ShieldCheck, ShieldOff, Tag, Trash2, TriangleAlert, UserCheck } from "lucide-react";
+import { Ban, FileSearch, Plus, RefreshCw, ScrollText, Settings2, ShieldCheck, ShieldOff, Tag, Trash2, TriangleAlert, UserCheck } from "lucide-react";
 import { banDurationText, banEnd, banEndText, bannedAddresses, groupByDay, recidivists, timeOf, unbanKinds } from "../../lib/fail2ban";
 import { api, errorMessage, MANUAL_JAILS, type BanDuration, type F2bEvent, type F2bState } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
-import { Badge, Button, EmptyState, ErrorState, IconButton, Input, Loading, MenuButton, Segmented, type MenuItem } from "../../components/ui";
+import { Badge, Button, Drawer, EmptyState, ErrorState, IconButton, Input, Loading, MenuButton, Segmented, type MenuItem } from "../../components/ui";
 import { useCachedState } from "../../lib/cache";
 import { BanDialog, EventKind, GeoBanner, IpDrawer, IpTags, jailLabel, LabelDialog, useIpInfo } from "./Fail2banParts";
+import { Panel, type TocInfo } from "../supervision/Panel";
 
 const Fail2banSettings = lazy(() => import("./Fail2banSettings"));
 
@@ -21,7 +22,7 @@ function BanEnd({ until }: { until: string | null | undefined }) {
   return until === null ? <Badge tone="danger">définitif</Badge> : <span className="shrink-0 text-xs text-muted" title="Heure du serveur">{text}</span>;
 }
 
-export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: string; onCount?: (n: number) => void; onAudit?: () => void }) {
+export default function Fail2ban({ serverId, onSummary, onAudit }: { serverId: string; onSummary?: (s: TocInfo) => void; onAudit?: () => void }) {
   const { ask, notify } = useAppPick("ask", "notify");
   const [state, setState] = useCachedState<F2bState | null>(`fail2ban:${serverId}`, null);
   const [events, setEvents] = useState<F2bEvent[] | null>(null);
@@ -35,6 +36,7 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
   const [banning, setBanning] = useState<{ ip?: string; duration?: BanDuration } | null>(null);
   const [labeling, setLabeling] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [journalOpen, setJournalOpen] = useState(false);
   const { loadLabels, loadGeo } = useIpInfo();
   const geoInstalled = useIpInfo((s) => !!s.geoStatus?.installed);
 
@@ -66,9 +68,6 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
 
   // Adresses distinctes : une même IP peut figurer dans plusieurs jails.
   const bannedCount = state ? bannedAddresses(state.jails).size : null;
-  useEffect(() => {
-    if (bannedCount != null) onCount?.(bannedCount);
-  }, [bannedCount, onCount]);
 
   // Liste commune à tous les jails (Zenytt les garde synchronisées), hors boucle locale.
   const ignored = [...new Set(state?.jails.flatMap((j) => j.ignoreip) ?? [])].filter((a) => !LOOPBACK.includes(a));
@@ -80,6 +79,14 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
     const manual = new Set(state?.jails.filter((j) => j.name in MANUAL_JAILS).flatMap((j) => j.banned) ?? []);
     return recidivists(events ?? []).filter((r) => !manual.has(r.ip));
   }, [events, state]);
+  // Jails Zenytt vides : inutile de les montrer tant qu'aucune IP n'y a été bannie.
+  const jails = state?.jails.filter((j) => !(j.name in MANUAL_JAILS) || j.banned.length > 0) ?? [];
+  const off = !!state && (!state.installed || !state.running);
+  useEffect(() => {
+    if (off) onSummary?.({ count: null, sub: state?.installed ? "arrêté" : "non installé", tone: "warn" });
+    else if (bannedCount != null)
+      onSummary?.({ count: bannedCount, sub: recid.length ? `${recid.length} récidive${recid.length > 1 ? "s" : ""}` : `${jails.length} jail(s) actif(s)`, tone: recid.length ? "warn" : bannedCount ? "danger" : "muted" });
+  }, [off, state?.installed, bannedCount, recid.length, jails.length, onSummary]);
   const recidOf = useMemo(() => new Map(recid.map((r) => [r.ip, r])), [recid]);
 
   // Les plus insistants : tentatives repérées par IP dans le journal récent.
@@ -132,91 +139,129 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
     { label: "Débloquer", icon: <ShieldCheck size={14} />, onClick: () => void unban(jail, ip) },
   ];
 
-  if (error && !state) return <ErrorState message={error} onRetry={() => void load()} />;
-  if (!state) return <Loading label="Lecture de fail2ban…" rows={4} />;
+  const refresh = (
+    <IconButton title="Actualiser" onClick={() => void load()}>
+      <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+    </IconButton>
+  );
+  if (error && !state)
+    return (
+      <Panel title="fail2ban" actions={refresh}>
+        <div className="p-4">
+          <ErrorState message={error} onRetry={() => void load()} />
+        </div>
+      </Panel>
+    );
+  if (!state)
+    return (
+      <Panel title="fail2ban">
+        <div className="p-4">
+          <Loading label="Lecture de fail2ban…" rows={4} />
+        </div>
+      </Panel>
+    );
   if (!state.installed || !state.running)
     return (
-      <EmptyState
-        icon={<ShieldOff />}
-        title={state.installed ? "fail2ban est arrêté" : "fail2ban n'est pas installé"}
-        action={onAudit && <Button onClick={onAudit}>{state.installed ? "Le démarrer depuis l'audit" : "L'installer depuis l'audit"}</Button>}
-      >
-        fail2ban bannit les adresses qui multiplient les échecs de connexion.
-      </EmptyState>
+      <Panel title="fail2ban" status={<Badge tone="warn">{state.installed ? "arrêté" : "non installé"}</Badge>} actions={refresh}>
+        <EmptyState
+          icon={<ShieldOff />}
+          title={state.installed ? "fail2ban est arrêté" : "fail2ban n'est pas installé"}
+          action={onAudit && <Button onClick={onAudit}>{state.installed ? "Le démarrer depuis l'audit" : "L'installer depuis l'audit"}</Button>}
+        >
+          fail2ban bannit les adresses qui multiplient les échecs de connexion.
+        </EmptyState>
+      </Panel>
     );
 
   const myIpIgnored = !!myIp && ignored.includes(myIp);
   const myIpBanned = !!myIp && state.jails.some((j) => j.banned.includes(myIp));
-  // Jails Zenytt vides : inutile de les montrer tant qu'aucune IP n'y a été bannie.
-  const jails = state.jails.filter((j) => !(j.name in MANUAL_JAILS) || j.banned.length > 0);
   const unbans = unbanKinds(events ?? [], Object.fromEntries(state.jails.map((j) => [j.name, j.bantime])));
   const shownEvents = (events ?? []).map((e, i) => ({ ...e, unban: unbans.get(i) })).filter((e) => eventFilter === "all" || (eventFilter === "ban" ? e.kind === "ban" || e.kind === "restore" || e.kind === "unban" : e.kind === "found"));
+  const banEvents = (events ?? []).filter((e) => e.kind === "ban" || e.kind === "restore").length;
+  const foundEvents = (events ?? []).filter((e) => e.kind === "found").length;
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <div className="flex items-center gap-2 text-[13px] text-muted">
-        fail2ban {state.version} · {jails.length} jail(s) actif(s)
-        <Button size="sm" className="ml-auto" icon={<Settings2 size={13} />} onClick={() => setSettingsOpen(true)}>
-          Réglages…
-        </Button>
-        <Button size="sm" variant="danger" icon={<Ban size={13} />} onClick={() => setBanning({})}>
-          Bannir une IP…
-        </Button>
-        <IconButton title="Actualiser" onClick={() => void load()}>
-          <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
-        </IconButton>
-      </div>
-
-      <GeoBanner />
-
-      {recid.length > 0 && (
-        <section className="flex flex-col gap-2 rounded-lg border border-warn/40 bg-warn/8 px-4 py-3">
-          <div className="flex items-center gap-2 text-[13px] font-medium text-warn">
-            <TriangleAlert size={16} />
-            {recid.length === 1 ? "Une adresse déjà bannie recommence" : `${recid.length} adresses déjà bannies recommencent`}
-          </div>
-          <p className="text-xs text-muted">Débloquées au bout de la durée du jail, elles reviennent aussitôt. Un bannissement long ou définitif les écarte pour de bon.</p>
-          <ul className="flex flex-col gap-1">
-            {recid.slice(0, 6).map((r) => (
-              <li key={r.ip} className="flex flex-wrap items-center gap-2.5 text-[13px]">
-                <button type="button" className="shrink-0 font-mono hover:text-accent" onClick={() => setDetail(r.ip)}>
-                  {r.ip}
-                </button>
-                <IpTags ip={r.ip} compact recidivist={r} />
-                <span className="ml-auto flex shrink-0 gap-1">
-                  <Button size="sm" onClick={() => setBanning({ ip: r.ip, duration: "month" })}>
-                    30 jours
-                  </Button>
-                  <Button size="sm" variant="danger" onClick={() => setBanning({ ip: r.ip, duration: "forever" })}>
-                    Définitivement
-                  </Button>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {myIp && !myIpIgnored && (
-        <div className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-[13px] ${myIpBanned ? "border-danger/40 bg-danger/10" : "border-warn/40 bg-warn/10"}`}>
-          <UserCheck size={16} className="shrink-0" />
-          <span className="flex-1">
-            Ton IP actuelle <span className="font-mono">{myIp}</span>
-            {myIpBanned ? " est bannie. " : " peut être bannie après quelques échecs de connexion. "}
-            L'ajouter aux exceptions évite de te retrouver bloqué dehors (fais-le seulement si c'est ton IP fixe, par exemple celle de ta box).
-          </span>
-          <Button size="sm" variant="primary" loading={saving} onClick={() => add(myIp)}>
-            Ne jamais bannir mon IP
+    <Panel
+      title="fail2ban"
+      status={
+        <span className="text-xs text-muted">
+          {state.version} · {jails.length} jail(s) actif(s) · {bannedCount} IP bannie{bannedCount !== 1 ? "s" : ""}
+        </span>
+      }
+      actions={
+        <>
+          <Button size="sm" icon={<Settings2 size={13} />} onClick={() => setSettingsOpen(true)}>
+            Réglages…
           </Button>
-        </div>
-      )}
-
-      {/* Grand écran : jails et journal à gauche, adresses insistantes et exceptions à droite. */}
-      <div className="grid min-w-0 items-start gap-4 @5xl:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
-        <div className="flex min-w-0 flex-col gap-4">
+          <Button size="sm" variant="danger" icon={<Ban size={13} />} onClick={() => setBanning({})}>
+            Bannir une IP…
+          </Button>
+          {refresh}
+        </>
+      }
+      banners={
+        <>
+          <GeoBanner />
+          {recid.length > 0 && (
+            <section className="flex flex-col gap-2 rounded-lg border border-warn/40 bg-warn/8 px-4 py-3">
+              <div className="flex items-center gap-2 text-[13px] font-medium text-warn">
+                <TriangleAlert size={16} />
+                {recid.length === 1 ? "Une adresse déjà bannie recommence" : `${recid.length} adresses déjà bannies recommencent`}
+              </div>
+              <p className="text-xs text-muted">Débloquées au bout de la durée du jail, elles reviennent aussitôt. Un bannissement long ou définitif les écarte pour de bon.</p>
+              <ul className="flex flex-col gap-1">
+                {recid.slice(0, 6).map((r) => (
+                  <li key={r.ip} className="flex flex-wrap items-center gap-2.5 text-[13px]">
+                    <button type="button" className="shrink-0 font-mono hover:text-accent" onClick={() => setDetail(r.ip)}>
+                      {r.ip}
+                    </button>
+                    <IpTags ip={r.ip} compact recidivist={r} />
+                    <span className="ml-auto flex shrink-0 gap-1">
+                      <Button size="sm" onClick={() => setBanning({ ip: r.ip, duration: "month" })}>
+                        30 jours
+                      </Button>
+                      <Button size="sm" variant="danger" onClick={() => setBanning({ ip: r.ip, duration: "forever" })}>
+                        Définitivement
+                      </Button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {myIp && !myIpIgnored && (
+            <div className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-[13px] ${myIpBanned ? "border-danger/40 bg-danger/10" : "border-warn/40 bg-warn/10"}`}>
+              <UserCheck size={16} className="shrink-0" />
+              <span className="flex-1">
+                Ton IP actuelle <span className="font-mono">{myIp}</span>
+                {myIpBanned ? " est bannie. " : " peut être bannie après quelques échecs de connexion. "}
+                L'ajouter aux exceptions évite de te retrouver bloqué dehors (fais-le seulement si c'est ton IP fixe, par exemple celle de ta box).
+              </span>
+              <Button size="sm" variant="primary" loading={saving} onClick={() => add(myIp)}>
+                Ne jamais bannir mon IP
+              </Button>
+            </div>
+          )}
+        </>
+      }
+      footer={
+        <>
+          <span className="min-w-0 flex-1 truncate text-muted">
+            Journal récent :{" "}
+            {events === null ? "lecture…" : events.length === 0 ? "vide" : `${banEvents} bannissement${banEvents > 1 ? "s" : ""} et ${foundEvents} tentative${foundEvents > 1 ? "s" : ""}`}
+          </span>
+          <Button size="sm" icon={<ScrollText size={13} />} disabled={events === null} onClick={() => setJournalOpen(true)}>
+            Ouvrir le journal…
+          </Button>
+        </>
+      }
+    >
+      {/* Jails et leurs adresses (2/3) | adresses insistantes et exceptions (1/3) ; empilés si la section est étroite. */}
+      <div className="grid min-w-0 divide-y divide-border @min-[900px]:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)] @min-[900px]:divide-x @min-[900px]:divide-y-0">
+        <div className="flex min-w-0 flex-col divide-y divide-border">
           {jails.map((j) => (
-            <section key={j.name} className="rounded-xl border border-border bg-panel">
-              <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
+            <section key={j.name} className="min-w-0">
+              <header className="flex flex-wrap items-center gap-2 px-4 py-2.5">
                 <span className="font-medium">{jailLabel(j.name)}</span>
                 <Badge tone={j.currentlyBanned ? "danger" : "ok"}>{j.currentlyBanned} bannie(s)</Badge>
                 <span className="ml-auto text-xs text-muted">
@@ -226,9 +271,9 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
                 </span>
               </header>
               {j.banned.length === 0 ? (
-                <p className="px-4 py-3 text-[13px] text-muted">Aucune adresse bannie.</p>
+                <p className="px-4 pb-3 text-[13px] text-muted">Aucune adresse bannie.</p>
               ) : (
-                <ul className="divide-y divide-border/50">
+                <ul className="divide-y divide-border/50 border-t border-border/50">
                   {j.banned.map((ip) => (
                     <li key={ip} className="flex items-center gap-3 px-4 py-2 text-[13px]">
                       <button type="button" className="shrink-0 font-mono hover:text-accent" title="Détails et tentatives" onClick={() => setDetail(ip)}>
@@ -249,66 +294,13 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
               )}
             </section>
           ))}
-
-          <section className="flex flex-col gap-3 rounded-lg border border-border bg-panel p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="font-medium">Journal</h2>
-              <Segmented
-                size="sm"
-                className="ml-auto"
-                label="Événements affichés"
-                value={eventFilter}
-                onChange={setEventFilter}
-                options={[
-                  { value: "ban", label: "Bannissements" },
-                  { value: "found", label: "Tentatives" },
-                  { value: "all", label: "Tout" },
-                ]}
-              />
-            </div>
-            {events === null ? (
-              <Loading rows={3} />
-            ) : shownEvents.length === 0 ? (
-              <p className="text-[13px] text-muted">Rien dans le journal récent de fail2ban.</p>
-            ) : (
-              <div className="max-h-[28rem] overflow-auto rounded-lg border border-border">
-                {groupByDay([...shownEvents].reverse().slice(0, 300)).map((g) => (
-                  <section key={g.day}>
-                    <h3 className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-subtle px-3 py-1.5 text-xs font-semibold">
-                      {g.day}
-                      <span className="font-normal text-faint">
-                        {g.items.length} événement{g.items.length > 1 ? "s" : ""}
-                      </span>
-                    </h3>
-                    <ul className="divide-y divide-line">
-                      {g.items.map((e, i) => (
-                        <li key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-hover-soft">
-                          <span className="w-16 shrink-0 font-mono text-[12px] text-muted tabular-nums" title={e.time}>
-                            {timeOf(e.time)}
-                          </span>
-                          <span className="w-40 shrink-0">
-                            <EventKind kind={e.kind} unban={e.unban} />
-                          </span>
-                          <button type="button" className="shrink-0 font-mono text-[12.5px] hover:text-accent" onClick={() => setDetail(e.ip)}>
-                            {e.ip}
-                          </button>
-                          <IpTags ip={e.ip} compact />
-                          <span className="ml-auto shrink-0 text-muted">{jailLabel(e.jail)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                ))}
-              </div>
-            )}
-          </section>
         </div>
-        <div className="flex min-w-0 flex-col gap-4">
+        <div className="flex min-w-0 flex-col divide-y divide-border">
           {topAttackers.length > 0 && (
-            <section className="flex flex-col gap-2 rounded-lg border border-border bg-panel p-4">
-              <h2 className="font-medium" title="Tentatives repérées par fail2ban dans son journal récent">
+            <section className="flex flex-col gap-2 px-4 py-3">
+              <h3 className="text-[13px] font-semibold" title="Tentatives repérées par fail2ban dans son journal récent">
                 Les plus insistants
-              </h2>
+              </h3>
               <ul className="flex flex-col gap-1">
                 {topAttackers.map(([ip, n]) => (
                   <li key={ip} className="flex items-center gap-3 text-[13px]">
@@ -323,9 +315,9 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
             </section>
           )}
 
-          <section className="flex flex-col gap-3 rounded-lg border border-border bg-panel p-4">
+          <section className="flex flex-col gap-3 px-4 py-3">
             <div>
-              <h2 className="font-medium">Adresses jamais bannies</h2>
+              <h3 className="text-[13px] font-semibold">Adresses jamais bannies</h3>
               <p className="text-xs text-muted" title="Écrites dans /etc/fail2ban/jail.d/zz-zenytt-ignore.local (configuration testée puis rechargée) ; tes fichiers ne sont pas modifiés.">
                 Pour tous les jails, dans un fichier propre à Zenytt.
               </p>
@@ -372,6 +364,66 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
         </div>
       </div>
 
+      {journalOpen && (
+        <Drawer
+          title="Journal fail2ban"
+          subtitle="Événements récents, du plus récent au plus ancien"
+          width={760}
+          flush
+          onClose={() => setJournalOpen(false)}
+          actions={
+            <Segmented
+              size="sm"
+              label="Événements affichés"
+              value={eventFilter}
+              onChange={setEventFilter}
+              options={[
+                { value: "ban", label: "Bannissements" },
+                { value: "found", label: "Tentatives" },
+                { value: "all", label: "Tout" },
+              ]}
+            />
+          }
+        >
+          {events === null ? (
+            <div className="p-5">
+              <Loading rows={3} />
+            </div>
+          ) : shownEvents.length === 0 ? (
+            <p className="p-5 text-[13px] text-muted">Rien dans le journal récent de fail2ban.</p>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-auto">
+              {groupByDay([...shownEvents].reverse().slice(0, 300)).map((g) => (
+                <section key={g.day}>
+                  <h3 className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-subtle px-3 py-1.5 text-xs font-semibold">
+                    {g.day}
+                    <span className="font-normal text-faint">
+                      {g.items.length} événement{g.items.length > 1 ? "s" : ""}
+                    </span>
+                  </h3>
+                  <ul className="divide-y divide-line">
+                    {g.items.map((e, i) => (
+                      <li key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-hover-soft">
+                        <span className="w-16 shrink-0 font-mono text-[12px] text-muted tabular-nums" title={e.time}>
+                          {timeOf(e.time)}
+                        </span>
+                        <span className="w-40 shrink-0">
+                          <EventKind kind={e.kind} unban={e.unban} />
+                        </span>
+                        <button type="button" className="shrink-0 font-mono text-[12.5px] hover:text-accent" onClick={() => setDetail(e.ip)}>
+                          {e.ip}
+                        </button>
+                        <IpTags ip={e.ip} compact />
+                        <span className="ml-auto shrink-0 text-muted">{jailLabel(e.jail)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
+          )}
+        </Drawer>
+      )}
       {detail && (
         <IpDrawer
           serverId={serverId}
@@ -389,6 +441,6 @@ export default function Fail2ban({ serverId, onCount, onAudit }: { serverId: str
           <Fail2banSettings serverId={serverId} jails={state.jails} onClose={() => setSettingsOpen(false)} onSaved={() => void load()} />
         </Suspense>
       )}
-    </div>
+    </Panel>
   );
 }
