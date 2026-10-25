@@ -7,7 +7,7 @@ import { deployProject, GithubDeployDialog, RestrictPortDialog, tunnelTo } from 
 import ContainerDrawer from "./ContainerDrawer";
 import ConditionBadge from "./ConditionBadge";
 import PortChips, { isExposed } from "./PortChips";
-import { stateTone, useContainerActions, useContainerStats } from "./shared";
+import { openComposeLogs, stateTone, useContainerActions, useContainerStats } from "./shared";
 import { containerKey, memBytes, projectCounts, projectDir, projectNameFromPath } from "../../lib/compose";
 import { composeLockKey, confirmDestructive, groupByClient, NO_CLIENT, useItemFolders, useLocks } from "../../lib/folders";
 import { ClientFilter, clientGroupItems, clientMenuItems } from "../../components/ClientTools";
@@ -45,7 +45,7 @@ function useSessionSet(key: string) {
 }
 
 export default function Compose({ serverId, data, docker, reload, onNew, onCatalog }: { serverId: string; data: DockerOverview; docker: string; reload: () => Promise<void>; onNew: () => void; onCatalog: () => void }) {
-  const { ask, notify, openTab } = useAppPick("ask", "notify", "openTab");
+  const { ask, notify } = useAppPick("ask", "notify");
   const stats = useContainerStats(serverId);
   const containerActions = useContainerActions(serverId, docker, reload, data.projects);
   const [busy, setBusy] = useState<string | null>(null);
@@ -300,12 +300,7 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
             <IconButton
               size="sm"
               title="Logs de tous les services, en direct"
-              onClick={async () =>
-                openTab(serverId, {
-                  title: `${p.name} (logs)`,
-                  command: (await api.composeCommand(p, "logs -f --tail 200")).replace(/^docker /, `${docker} `),
-                })
-              }
+              onClick={() => openComposeLogs(serverId, docker, p, services)}
             >
               <ScrollText size={14} />
             </IconButton>

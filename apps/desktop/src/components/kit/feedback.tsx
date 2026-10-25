@@ -89,6 +89,7 @@ export function Drawer({
   tabs,
   width = 480,
   modal = true,
+  flush = false,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -99,6 +100,8 @@ export function Drawer({
   tabs?: ReactNode;
   width?: number;
   modal?: boolean;
+  /** Contenu sans marge ni défilement propre (il gère lui-même sa zone défilante). */
+  flush?: boolean;
 }) {
   useEscape(onClose);
   const panel = (
@@ -123,7 +126,7 @@ export function Drawer({
         {actions && <div className="flex flex-wrap items-center gap-1.5">{actions}</div>}
       </div>
       {tabs}
-      <div className="min-h-0 flex-1 overflow-auto p-5">{children}</div>
+      <div className={flush ? "flex min-h-0 flex-1 flex-col" : "min-h-0 flex-1 overflow-auto p-5"}>{children}</div>
       {footer && <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-3">{footer}</div>}
     </aside>
   );

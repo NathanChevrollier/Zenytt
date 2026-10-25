@@ -33,6 +33,7 @@ const GuideDialog = lazy(() => import("./components/GuideDialog"));
 const ShortcutsHelp = lazy(() => import("./components/shell/ShortcutsHelp"));
 const HomeView = lazy(() => import("./views/Home"));
 const CloseDialog = lazy(() => import("./components/CloseDialog"));
+const LogDrawer = lazy(() => import("./components/LogDrawer"));
 
 // Chargé à part : xterm pèse un tiers de l'app et n'est pas nécessaire pour afficher l'accueil.
 const TerminalView = lazy(() => import("./views/Terminal"));
@@ -177,6 +178,9 @@ export default function App() {
 
   const assistantOpen = useAssistant((s) => s.open);
   const machinesOpen = useShell((s) => s.machinesOpen);
+  const logTarget = useShell((s) => s.logs);
+  // Le tiroir de logs appartient à la page qui l'a ouvert : changer de page ou de serveur le ferme.
+  useEffect(() => useShell.setState({ logs: null }), [section, activeServerId]);
   const themeSetting = useApp((s) => s.settings.theme);
   useEffect(() => applyTheme(themeSetting), [themeSetting]);
 
@@ -261,6 +265,13 @@ export default function App() {
                   </div>
                 )}
               </>
+            )}
+            {logTarget && (
+              <ErrorBoundary label="le tiroir de logs" compact onClose={() => useShell.setState({ logs: null })} closeLabel="Fermer le tiroir">
+                <Suspense fallback={null}>
+                  <LogDrawer key={`${logTarget.serverId}:${logTarget.kind}:${logTarget.name}`} target={logTarget} />
+                </Suspense>
+              </ErrorBoundary>
             )}
           </div>
           {machinesOpen && (

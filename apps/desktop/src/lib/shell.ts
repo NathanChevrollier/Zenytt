@@ -4,6 +4,20 @@ import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { useApp } from "./store";
 import type { SectionId } from "../sections";
+import type { LogSource } from "./api";
+
+/** Journaux ouverts dans le tiroir de logs (conteneur, projet compose ou service systemd). */
+export interface LogTarget {
+  serverId: string;
+  /** « conteneur », « projet », « service » : affiché devant le nom. */
+  kind: string;
+  name: string;
+  sources: LogSource[];
+  /** Sources écartées au-delà de la limite d'un suivi (gros projet compose). */
+  skipped?: number;
+  /** Ancien suivi dans un onglet de terminal (menu ⋯). */
+  terminal?: () => void;
+}
 
 interface ShellState {
   /** Sous-partie affichée par la page (onglet courant…), dernier maillon du fil d'Ariane. */
@@ -28,6 +42,7 @@ interface ShellState {
   /** Tiroir « Machines » à droite (retenu d'une session à l'autre). */
   machinesOpen: boolean;
   setMachinesOpen: (v: boolean) => void;
+  logs: LogTarget | null;
 }
 
 const MACHINES_KEY = "zenytt.machines";
@@ -55,6 +70,7 @@ export const useShell = create<ShellState>((set) => ({
   newServerRequested: false,
   requestNewServer: (newServerRequested) => set({ newServerRequested }),
   intent: null,
+  logs: null,
   machinesOpen: readMachinesOpen(),
   setMachinesOpen: (machinesOpen) => {
     try {
@@ -65,6 +81,8 @@ export const useShell = create<ShellState>((set) => ({
     set({ machinesOpen });
   },
 }));
+
+export const openLogs = (logs: LogTarget | null) => useShell.setState({ logs });
 
 /** Va à une section, en ouvrant directement l'un de ses onglets. */
 export function navigate(section: SectionId, tab?: string, serverId?: string) {

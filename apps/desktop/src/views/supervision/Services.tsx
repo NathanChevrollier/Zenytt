@@ -1,10 +1,10 @@
 // Services systemd : filtre, inactifs masqués, en échec d'abord, actions ; un clic ouvre le journal.
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
-import { ExternalLink, Play, RotateCw, ScrollText, Search, Square } from "lucide-react";
+import { Play, RotateCw, ScrollText, Search, Square } from "lucide-react";
 import { api, errorMessage, type Service } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
-import { Badge, Button, Checkbox, DataTable, Drawer, EmptyState, IconButton, Input, Loading, type Column } from "../../components/ui";
-import { navigate } from "../../lib/shell";
+import { Badge, Checkbox, DataTable, EmptyState, IconButton, Input, Loading, type Column } from "../../components/ui";
+import { openLogs } from "../../lib/shell";
 import { useAutoRefresh } from "../../lib/refresh";
 
 export type ServiceList = Service[] | null | undefined;
@@ -15,7 +15,6 @@ export default function Services({ serverId, list, setList, extra }: { serverId:
   const [filter, setFilter] = useState("");
   const [onlyActive, setOnlyActive] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [logsOf, setLogsOf] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -29,6 +28,8 @@ export default function Services({ serverId, list, setList, extra }: { serverId:
     void load();
   }, [load]);
   useAutoRefresh((auto) => (auto ? api.services(serverId).then(setList, () => {}) : load()), { serverId });
+
+  const logsOf = (unit: string) => openLogs({ serverId, kind: "service", name: unit.replace(/\.service$/, ""), sources: [{ kind: "unit", name: unit }] });
 
   const rows = useMemo(() => {
     const f = filter.toLowerCase();
@@ -116,7 +117,7 @@ export default function Services({ serverId, list, setList, extra }: { serverId:
           columns={columns}
           rowHeight={38}
           initialSort={{ key: "state", dir: "asc" }}
-          onRowClick={(s) => setLogsOf(s.unit)}
+          onRowClick={(s) => logsOf(s.unit)}
           actionsWidth={76}
         rowActions={(s) =>
             s.active === "active" ? (
@@ -137,42 +138,11 @@ export default function Services({ serverId, list, setList, extra }: { serverId:
                 ]
               : [{ label: "Démarrer", icon: <Play size={14} />, onClick: () => void act(s, "start", "Démarrer") }]),
             "separator" as const,
-            { label: "Journaux", icon: <ScrollText size={14} />, onClick: () => setLogsOf(s.unit) },
+            { label: "Journaux", icon: <ScrollText size={14} />, onClick: () => logsOf(s.unit) },
           ]}
           empty={filter ? "Aucun service ne correspond." : "Aucun service."}
         />
       )}
-      {logsOf && <LogsDrawer serverId={serverId} unit={logsOf} onClose={() => setLogsOf(null)} />}
     </div>
-  );
-}
-
-function LogsDrawer({ serverId, unit, onClose }: { serverId: string; unit: string; onClose: () => void }) {
-  const [text, setText] = useState<string | null>(null);
-  const [lines, setLines] = useState(300);
-  useEffect(() => {
-    setText(null);
-    api.serviceLogs(serverId, unit, lines).then(setText, (e) => setText(errorMessage(e)));
-  }, [serverId, unit, lines]);
-  return (
-    <Drawer
-      title={`Journaux de ${unit}`}
-      subtitle={`journalctl -u ${unit} · ${lines} dernières lignes`}
-      width={720}
-      modal={false}
-      onClose={onClose}
-      actions={
-        <>
-          <Button size="sm" onClick={() => setLines((l) => l + 700)}>
-            Charger plus
-          </Button>
-          <Button size="sm" variant="ghost" icon={<ExternalLink size={13} />} onClick={() => navigate("logs", `unit:${unit}`)}>
-            Ouvrir dans Journaux
-          </Button>
-        </>
-      }
-    >
-      {text === null ? <Loading rows={10} /> : <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap select-text">{text}</pre>}
-    </Drawer>
   );
 }
