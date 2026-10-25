@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composeChoices, composeFileIn, containerKey, isComposeFile, memBytes, projectCounts, projectDir, projectNameFromPath } from "./compose";
+import { appsViewOf, composeChoices, composeFileIn, containerKey, isComposeFile, memBytes, projectCounts, projectDir, projectNameFromPath, resolveDockerLink } from "./compose";
 import type { ComposeFileInfo, ComposeFileState } from "./api";
 
 const info = (state: ComposeFileState, hasBuild = false): ComposeFileInfo => ({ file: "/opt/app/docker-compose.yml", project: "app", hasBuild, ports: [], busyPorts: [], state });
@@ -64,5 +64,19 @@ describe("memBytes", () => {
   it("renvoie 0 si illisible", () => {
     expect(memBytes("--")).toBe(0);
     expect(memBytes("")).toBe(0);
+  });
+
+  it("migre les anciens onglets et affichages de la page Docker", () => {
+    expect(resolveDockerLink("containers")).toEqual({ tab: "apps", registries: false });
+    expect(resolveDockerLink("compose")).toEqual({ tab: "apps", registries: false });
+    expect(resolveDockerLink("apps")).toEqual({ tab: "apps", registries: false });
+    expect(resolveDockerLink("")).toEqual({ tab: "apps", registries: false });
+    expect(resolveDockerLink(null)).toEqual({ tab: "apps", registries: false });
+    expect(resolveDockerLink("storage")).toEqual({ tab: "storage", registries: false });
+    expect(resolveDockerLink("registries")).toEqual({ tab: "apps", registries: true });
+    expect(appsViewOf("project")).toBe("cards");
+    expect(appsViewOf(null)).toBe("cards");
+    expect(appsViewOf("folder")).toBe("folder");
+    expect(appsViewOf("none")).toBe("none");
   });
 });

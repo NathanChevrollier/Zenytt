@@ -13,6 +13,7 @@ import { navigate, useShell } from "../lib/shell";
 import { peekCached } from "../lib/cache";
 import { display, shortcutOf } from "../lib/shortcuts";
 import { Kbd } from "./ui";
+import { openContainerLogs } from "../views/docker/shared";
 
 type Group = "Chemins" | "Navigation" | "Serveurs" | "Conteneurs" | "Projets compose" | "Actions" | "Sites" | "Fragments" | "Raccourcis" | "Tunnels" | "Bureaux à distance" | "Historique" | "Aide";
 
@@ -194,7 +195,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
         },
       });
       for (const c of docker?.containers ?? []) {
-        list.push({ group: "Conteneurs", id: `logs:${c.name}`, label: `Logs de ${c.name}`, hint: server.name, icon: <ScrollText size={15} />, run: () => openTab(sid, { title: `${c.name} (logs)`, command: `${dk} logs -f --tail 300 ${shellQuote(c.id)}` }) });
+        list.push({ group: "Conteneurs", id: `logs:${c.name}`, label: `Logs de ${c.name}`, hint: server.name, icon: <ScrollText size={15} />, run: () => openContainerLogs(sid, dk, c) });
         if (c.state === "running") {
           list.push({
             group: "Conteneurs", id: `shell:${c.name}`,

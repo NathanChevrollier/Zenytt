@@ -103,12 +103,17 @@ pub async fn logs_start(
         return Err("choisis entre 1 et 12 sources".into());
     }
     let (conn, sudo) = admin(&store, &sessions, &server_id).await?;
-    let tail = lines.clamp(0, 2000);
+    let tail = lines.clamp(0, 5000);
     let docker_access = if sources.iter().any(|s| s.kind == "docker") {
         docker::access(&conn, sudo.as_deref()).await.map_err(err)?.0
     } else {
         Access::Unavailable
     };
+
+    // Sans sudo utilisable, journaux et fichiers se lisent avec les droits de l'utilisateur (ce qu'il peut voir).
+    let can_root = sudo.is_some()
+        || sources.iter().all(|s| s.kind == "docker")
+        || conn.exec("[ \"$(id -u)\" = 0 ] || sudo -n true 2>/dev/null", None).await.map(|o| o.success()).unwrap_or(false);
 
     let mut stream = Stream { tasks: vec![], writers: vec![] };
     for (idx, src) in sources.iter().enumerate() {
@@ -118,9 +123,9 @@ pub async fn logs_start(
                 docker_access == Access::Sudo,
             ),
             "unit" if safe_name(&src.name) => {
-                (format!("journalctl -f -n {tail} -o short-iso --no-pager -u {}", shell_quote(&src.name)), true)
+                (format!("journalctl -f -n {tail} -o short-iso --no-pager -u {}", shell_quote(&src.name)), can_root)
             }
-            "file" if safe_log_file(&src.name) => (format!("tail -n {tail} -F {} 2>&1", shell_quote(&src.name)), true),
+            "file" if safe_log_file(&src.name) => (format!("tail -n {tail} -F {} 2>&1", shell_quote(&src.name)), can_root),
             _ => return Err(format!("source refusée : {} {}", src.kind, src.name)),
         };
         // La commande tourne en arrière-plan et s'arrête dès que stdin se ferme (fin du suivi côté app) :
