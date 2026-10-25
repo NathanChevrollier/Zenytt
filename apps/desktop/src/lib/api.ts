@@ -453,11 +453,16 @@ export interface Disk {
 /** Compte dans l'alerte « Disque » et la jauge principale. */
 export const diskCounts = (d: Disk) => !d.readOnly && !d.ignored;
 
-/** Disque à montrer en jauge principale : `/` s'il compte, sinon le plus gros qui compte. */
-export function mainDisk(disks: Disk[] | undefined): Disk | undefined {
+/**
+ * « Disque le plus plein » : seule définition de l'app (tuiles, accueil, serveurs, barre du terminal),
+ * la même que l'alerte « Disque » de l'agent et l'historique (maximum des volumes qui comptent).
+ * Si aucun ne compte, `/` (ou le premier) reste montré.
+ */
+export function fullestDisk(disks: Disk[] | undefined): Disk | undefined {
   if (!disks?.length) return undefined;
+  const ratio = (d: Disk) => (d.total ? d.used / d.total : 0);
   const counting = disks.filter(diskCounts);
-  return counting.find((d) => d.mount === "/") ?? [...counting].sort((a, b) => b.total - a.total)[0] ?? disks.find((d) => d.mount === "/") ?? disks[0];
+  return [...counting].sort((a, b) => ratio(b) - ratio(a))[0] ?? disks.find((d) => d.mount === "/") ?? disks[0];
 }
 
 /** Réglage d'un point de montage (supervision). */
@@ -579,6 +584,8 @@ export interface ProviderView {
 export interface ProviderStatus {
   state: "running" | "off" | "starting" | "stopping" | "unknown";
   raw: string;
+  /** Nom du serveur chez l'hébergeur, quand l'API le donne. */
+  name: string | null;
 }
 
 export interface GithubStatus {
@@ -1027,6 +1034,9 @@ export type BackupDestination =
 export interface DbSource {
   container: string;
   kind: "mysql" | "postgres";
+  /** Projet/service compose : retrouve le conteneur s'il est recréé sous un autre nom. */
+  project?: string;
+  service?: string;
 }
 
 export interface BackupConfig {
@@ -1044,13 +1054,43 @@ export interface BackupOverview {
   status: {
     restic: string | null;
     config: BackupConfig | null;
-    last: { startedAt: number; finishedAt: number; ok: boolean; message: string } | null;
+    last: { startedAt: number; finishedAt: number; ok: boolean; message: string; step: string } | null;
     nextRun: string | null;
   };
   defaultConfig: BackupConfig;
   volumes: string[];
   databases: DbSource[];
   passwordInKeyring: boolean;
+}
+
+export type BackupSourceKind = "database" | "volume" | "path";
+export type BackupFix =
+  | { kind: "unlock" | "installRestic" | "enableSchedule" | "runNow" | "editConfig" }
+  | { kind: "startContainer"; container: string }
+  | { kind: "relink"; source: BackupSourceKind; from: string; to: string }
+  | { kind: "removeSource"; source: BackupSourceKind; name: string };
+
+export interface BackupSourceCheck {
+  source: BackupSourceKind;
+  name: string;
+  state: "ok" | "stopped" | "missing" | "recreated" | "dbDropped" | "empty" | "authFailed" | "unknown";
+  detail: string;
+  fix: BackupFix | null;
+}
+
+export interface BackupIssue {
+  severity: "danger" | "warn" | "info";
+  title: string;
+  detail: string;
+  evidence: string | null;
+  fix: BackupFix | null;
+}
+
+export interface BackupHealth {
+  now: number;
+  lastSuccess: number | null;
+  sources: BackupSourceCheck[];
+  issues: BackupIssue[];
 }
 
 export interface Snapshot {
@@ -1899,6 +1939,8 @@ export const api = {
   backupStageDownload: (serverId: string, restored: string) => invoke<string>("backup_stage_download", { serverId, restored }),
   backupCheck: (serverId: string) => invoke<string>("backup_check", { serverId }),
   backupInstallRestic: (serverId: string) => invoke<string>("backup_install_restic", { serverId }),
+  backupHealth: (serverId: string) => invoke<BackupHealth>("backup_health", { serverId }),
+  backupApplyFix: (serverId: string, fix: BackupFix) => invoke<string>("backup_apply_fix", { serverId, fix }),
   backupMirror: (serverId: string, dir: string, transferId: number, onProgress: (p: MirrorProgress) => void) => {
     const channel = new Channel<MirrorProgress>();
     channel.onmessage = onProgress;

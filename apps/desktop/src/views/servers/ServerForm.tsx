@@ -184,7 +184,7 @@ export default function ServerForm({ server, folders, onClose, onSaved }: { serv
           {identity ? (
             <p className="rounded-lg border border-border bg-subtle p-3 text-xs text-muted">
               Authentification de l'identifiant « {identity.name} » ({AUTH_LABELS[identity.authKind]}
-              {identity.authKind === "password" && !identity.hasPassword ? ", demandé à la connexion" : ""}). Modifiable dans l'onglet Identifiants.
+              {identity.authKind === "password" && !identity.hasPassword ? ", demandé à la connexion" : ""}). Modifiable depuis le bouton « Identifiants » de la page Serveurs.
             </p>
           ) : (
             <>

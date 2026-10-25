@@ -91,9 +91,7 @@ pub async fn dashboard_summary(
                     let mut metrics = None;
                     if let Ok(text) = conn.run(COLLECT_SCRIPT).await {
                         let raw = parse_collect(&text, now_ms());
-                        let mut prev = monitor.prev.lock().await;
-                        metrics = Some(zenytt_protocol::compute(prev.get(&server_id), &raw));
-                        prev.insert(server_id.clone(), raw);
+                        metrics = Some(monitor.prev.lock().await.entry(server_id.clone()).or_default().compute(raw));
                     }
                     (false, metrics, vec![])
                 }

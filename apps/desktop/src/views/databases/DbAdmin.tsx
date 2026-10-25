@@ -7,37 +7,48 @@ import { api, errorMessage, formatBytes, type DbBackupFile, type DbInstance, typ
 import { useAppPick } from "../../lib/store";
 import { track } from "../../lib/transfers";
 import { usePolling } from "../../lib/poll";
-import { Badge, Button, Card, EmptyState, ErrorState, Field, IconButton, Input, Loading, Modal, Segmented, Select } from "../../components/ui";
-
-type Section = "backups" | "users" | "activity";
+import { Badge, Button, Card, EmptyState, ErrorState, Field, IconButton, Input, Loading, Modal, Select } from "../../components/ui";
 
 /** Horodatage de nom de fichier : 2026-09-30_1402. */
 const stamp = () => new Date().toISOString().slice(0, 16).replace("T", "_").replace(":", "");
 
 export default function DbAdmin({ serverId, instances, instanceId, onInstance, databases }: { serverId: string; instances: DbInstance[]; instanceId: string | null; onInstance: (id: string) => void; databases: DbNamed[] | null }) {
-  const [section, setSection] = useState<Section>("backups");
   const instance = instances.find((i) => i.id === instanceId) ?? instances[0];
   if (!instance) return <EmptyState icon={<DatabaseBackup />} title="Aucune instance" />;
   const sqlite = instance.engine === "sqlite";
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-7 py-5">
+    <div className="@container flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-7 py-5">
       <div className="flex flex-wrap items-center gap-3">
         <Select className="w-72" value={instance.id} onChange={onInstance} options={instances.map((i) => ({ value: i.id, label: i.label }))} aria-label="Instance" />
-        <Segmented
-          label="Rubrique"
-          value={sqlite ? "backups" : section}
-          onChange={setSection}
-          options={[
-            { value: "backups", label: "Sauvegardes" },
-            { value: "users", label: "Utilisateurs", disabled: sqlite, title: sqlite ? "SQLite n'a pas de comptes" : undefined },
-            { value: "activity", label: "Requêtes en cours", disabled: sqlite },
-          ]}
-        />
       </div>
-      {(sqlite || section === "backups") && <Backups key={instance.id} serverId={serverId} instance={instance} databases={databases} />}
-      {!sqlite && section === "users" && <UsersPanel key={instance.id} serverId={serverId} instance={instance} databases={databases} />}
-      {!sqlite && section === "activity" && <ActivityPanel key={instance.id} serverId={serverId} instance={instance} />}
+      {/* Sauvegardes à gauche sur toute la hauteur, comptes et requêtes en cours à droite ; une colonne en dessous de 1100 px. */}
+      <div className="grid min-w-0 gap-4 @[1100px]:grid-cols-2">
+        <Backups key={instance.id} serverId={serverId} instance={instance} databases={databases} />
+        {sqlite ? (
+          <>
+            <Unavailable icon={<Users size={15} />} title="Comptes" />
+            <Unavailable icon={<Activity size={15} />} title="Requêtes en cours" />
+          </>
+        ) : (
+          <>
+            <UsersPanel key={`u${instance.id}`} serverId={serverId} instance={instance} databases={databases} />
+            <ActivityPanel key={`a${instance.id}`} serverId={serverId} instance={instance} />
+          </>
+        )}
+      </div>
     </div>
+  );
+}
+
+function Unavailable({ icon, title }: { icon: React.ReactNode; title: string }) {
+  return (
+    <Card className="flex min-w-0 flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <span className="text-muted">{icon}</span>
+        <h2 className="text-sm font-semibold">{title}</h2>
+      </div>
+      <p className="text-[13px] text-muted">Non disponible pour SQLite : pas de comptes ni de requêtes en cours à suivre.</p>
+    </Card>
   );
 }
 
@@ -127,7 +138,7 @@ function Backups({ serverId, instance, databases }: { serverId: string; instance
     });
 
   return (
-    <>
+    <div className="flex min-w-0 flex-col gap-4 @[1100px]:row-span-2">
       <Card className="flex flex-wrap items-end gap-3">
         <Field label={instance.engine === "sqlite" ? "Fichier" : "Base"} className="w-64">
           {instance.engine === "sqlite" ? (
@@ -180,7 +191,7 @@ function Backups({ serverId, instance, databases }: { serverId: string; instance
           </Card>
         )}
       </section>
-    </>
+    </div>
   );
 }
 
@@ -260,7 +271,7 @@ function UsersPanel({ serverId, instance, databases }: { serverId: string; insta
   };
 
   return (
-    <section className="flex flex-col gap-3">
+    <Card className="flex min-w-0 flex-col gap-3">
       <div className="flex items-center gap-2">
         <Users size={15} className="text-muted" />
         <h2 className="text-sm font-semibold">Comptes</h2>
@@ -289,7 +300,7 @@ function UsersPanel({ serverId, instance, databases }: { serverId: string; insta
         />
       )}
       {creating && <CreateUserDialog serverId={serverId} instance={instance} databases={databases} onClose={() => setCreating(false)} onDone={load} />}
-    </section>
+    </Card>
   );
 }
 
@@ -387,7 +398,7 @@ function ActivityPanel({ serverId, instance }: { serverId: string; instance: DbI
   };
 
   return (
-    <section className="flex flex-col gap-3">
+    <Card className="flex min-w-0 flex-col gap-3">
       <div className="flex items-center gap-2">
         <Activity size={15} className="text-muted" />
         <h2 className="text-sm font-semibold">Requêtes en cours</h2>
@@ -414,6 +425,6 @@ function ActivityPanel({ serverId, instance }: { serverId: string; instance: DbI
           }}
         />
       )}
-    </section>
+    </Card>
   );
 }

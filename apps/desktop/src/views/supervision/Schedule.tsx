@@ -28,7 +28,8 @@ export default function ScheduleView({ serverId, onCount }: { serverId: string; 
     void load();
   }, [load]);
   useAutoRefresh((auto) => (auto ? api.scheduleList(serverId).then(setData, () => {}) : load()), { serverId });
-  useEffect(() => onCount?.((data?.crontabs.reduce((n, c) => n + c.jobs.length, 0) ?? 0) + (data?.timers.length ?? 0)), [data, onCount]);
+  const count = (data?.crontabs.reduce((n, c) => n + c.jobs.length, 0) ?? 0) + (data?.timers.length ?? 0);
+  useEffect(() => onCount?.(count), [count, onCount]);
 
   /** Crontab de l'utilisateur de connexion (ou la première modifiable) : cible de « Nouvelle tâche ». */
   const mine = data?.crontabs.find((c) => c.editable);
@@ -44,19 +45,37 @@ export default function ScheduleView({ serverId, onCount }: { serverId: string; 
     }
   };
 
-  if (error) return <ErrorState message={error} onRetry={() => void load()} />;
-  if (!data) return <Loading rows={6} />;
+  const header = (
+    <div className="flex min-h-7 items-center gap-2">
+      <h2 className="text-[13px] font-semibold" title="Crontabs des utilisateurs, fichiers système (/etc/crontab, /etc/cron.d) et timers systemd">
+        Tâches planifiées {data && <span className="font-normal text-faint">· {count}</span>}
+      </h2>
+      {mine && (
+        <Button size="sm" className="ml-auto" variant="primary" icon={<Plus size={13} />} onClick={() => setJobForm({ source: mine, job: null })}>
+          Nouvelle tâche
+        </Button>
+      )}
+    </div>
+  );
+
+  if (error)
+    return (
+      <div className="@container flex flex-col gap-3">
+        {header}
+        <ErrorState message={error} onRetry={() => void load()} />
+      </div>
+    );
+  if (!data)
+    return (
+      <div className="@container flex flex-col gap-3">
+        {header}
+        <Loading rows={6} />
+      </div>
+    );
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="text-[13px] text-muted">Crontabs des utilisateurs, fichiers système (/etc/crontab, /etc/cron.d) et timers systemd.</p>
-        {mine && (
-          <Button className="ml-auto" variant="primary" icon={<Plus size={14} />} onClick={() => setJobForm({ source: mine, job: null })}>
-            Nouvelle tâche
-          </Button>
-        )}
-      </div>
+    <div className="@container flex flex-col gap-3">
+      {header}
 
       {data.crontabs.length === 0 && <p className="text-[13px] text-muted">Aucune crontab.</p>}
       {data.crontabs.map((c) => (
@@ -83,19 +102,19 @@ export default function ScheduleView({ serverId, onCount }: { serverId: string; 
               {c.jobs.map((j, i) => {
                 const role = describeCron(j.command);
                 return (
-                  <li key={i} className="grid grid-cols-[200px_minmax(0,1fr)_auto] items-start gap-3 border-t border-line px-4 py-2.5 first:border-t-0">
+                  <li key={i} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 border-t border-line px-4 py-2 first:border-t-0 @xl:grid-cols-[200px_minmax(0,1fr)_auto]">
                     <div>
                       <div className="font-mono text-xs">{j.schedule}</div>
                       <div className="text-xs text-muted">{j.human ?? humanSchedule(j.schedule) ?? ""}</div>
                       {j.user !== null && <div className="text-[11px] text-faint">en tant que {j.user}</div>}
                     </div>
-                    <div className="min-w-0">
+                    <div className="col-start-1 min-w-0 @xl:col-start-2 @xl:row-start-1">
                       <div className="font-mono text-xs break-all select-text">{j.command}</div>
                       {/* Ce que la commande fait réellement : une crontab ne se relit pas toute seule. */}
                       {role && <div className="mt-1 text-xs leading-relaxed text-muted">{role}</div>}
                     </div>
                     {c.editable && (
-                      <span className="flex">
+                      <span className="col-start-2 row-start-1 flex @xl:col-start-3">
                         <IconButton size="sm" title="Modifier la tâche" onClick={() => setJobForm({ source: c, job: j })}>
                           <Pencil size={13} />
                         </IconButton>
@@ -119,18 +138,20 @@ export default function ScheduleView({ serverId, onCount }: { serverId: string; 
           </header>
           <ul>
             {data.timers.map((t) => (
-              <li key={t.unit} className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-3 border-t border-line px-4 py-2 first:border-t-0">
+              <li key={t.unit} className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] items-center gap-3 border-t border-line px-4 py-2 first:border-t-0 @xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
                 <div className="min-w-0">
                   <div className="truncate font-mono text-xs">{t.unit}</div>
                   <div className="truncate text-[11px] text-faint">{t.activates}</div>
                 </div>
-                <div className="text-xs">
-                  <span className="text-faint">prochaine </span>
-                  {t.next}
-                </div>
-                <div className="text-xs text-muted">
-                  <span className="text-faint">dernière </span>
-                  {t.last}
+                <div className="flex min-w-0 flex-col @xl:contents">
+                  <div className="truncate text-xs" title={t.next}>
+                    <span className="text-faint">prochaine </span>
+                    {t.next}
+                  </div>
+                  <div className="truncate text-xs text-muted" title={t.last}>
+                    <span className="text-faint">dernière </span>
+                    {t.last}
+                  </div>
                 </div>
                 {t.activates.endsWith(".service") ? (
                   <Button

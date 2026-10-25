@@ -1,4 +1,5 @@
-// Aide intégrée en deux colonnes : sommaire par thème (avec recherche) à gauche, fiche à droite.
+// Aide intégrée : sommaire par thème (avec recherche) à gauche, fiche à droite (elle-même en deux
+// colonnes quand la place le permet : lecture, puis prérequis / pannes / fiches voisines).
 // Le « ? » d'une page ouvre, lui, une fenêtre ne contenant que la fiche de cette page (GuideDialog).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -7,6 +8,9 @@ import { GUIDES, TOPICS, type Guide } from "../lib/guides";
 import { useAppPick } from "../lib/store";
 import { navigate } from "../lib/shell";
 import { SECTIONS } from "../sections";
+
+/** Onglet nommé dans « Ouvrir … » quand la fiche mène à une partie précise d'une page. */
+const TAB_LABELS: Record<string, string> = { security: "Sécurité", tunnels: "Tunnels SSH", mesh: "Réseau privé" };
 import PageLayout from "../components/PageLayout";
 import GuideContent from "../components/GuideContent";
 import { SPONSORS_URL } from "../lib/links";
@@ -46,12 +50,13 @@ export default function HelpView() {
 
   const section = selected.section ? SECTIONS.find((s) => s.id === selected.section) : undefined;
   const topic = TOPICS.find((t) => t.id === selected.topic);
+  const related = GUIDES.filter((g) => g.topic === selected.topic && g.id !== selected.id);
 
   return (
     <PageLayout title="Aide" subtitle="Ce que fait chaque fonctionnalité, ce qu'elle demande sur le serveur, et les commandes à coller." scroll={false}>
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-panel">
-          <div className="border-b border-border p-3">
+        <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-panel">
+          <div className="border-b border-border p-2">
             <label className="relative block">
               <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />
               <Input
@@ -71,7 +76,7 @@ export default function HelpView() {
               )}
             </label>
           </div>
-          <nav className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-2" aria-label="Sommaire de l'aide">
+          <nav className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-2" aria-label="Sommaire de l'aide">
             {TOPICS.map((t) => {
               const fiches = resultats.filter((g) => g.topic === t.id);
               if (!fiches.length) return null;
@@ -86,7 +91,7 @@ export default function HelpView() {
                         type="button"
                         aria-current={on ? "page" : undefined}
                         onClick={() => openHelpPage(g.id)}
-                        className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors ${FOCUS_RING} ${
+                        className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13px] transition-colors ${FOCUS_RING} ${
                           on ? "bg-accent/12 font-medium text-fg" : "text-fg/85 hover:bg-hover"
                         }`}
                       >
@@ -114,23 +119,43 @@ export default function HelpView() {
         </aside>
 
         <div ref={article} className="min-w-0 flex-1 overflow-auto">
-          <article className="mx-auto flex max-w-3xl flex-col gap-4 px-8 py-6">
-            <header className="flex flex-col gap-2 border-b border-border pb-4">
-              <span className="text-xs text-muted">{topic?.label}</span>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-xl font-semibold tracking-tight">{selected.title}</h2>
-                {selected.automatic && <Badge tone="ok">Installé par Zenytt</Badge>}
-              </div>
-              <p className="text-[14px] leading-relaxed text-muted">{selected.summary}</p>
-              {section && (
-                <div>
-                  <Button size="sm" icon={<ArrowRight size={13} />} onClick={() => navigate(section.id, selected.tab)}>
-                    Ouvrir {selected.tab === "security" ? "Système › Sécurité" : section.label}
-                  </Button>
+          {/* Calé à gauche, plafonné sur très grand écran : pas de colonne centrée entre deux bandes vides. */}
+          <article className="flex max-w-[1480px] flex-col gap-4 px-6 py-4">
+            <header className="flex items-start gap-4 border-b border-border pb-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                  <h2 className="text-lg font-semibold tracking-tight">{selected.title}</h2>
+                  <span className="text-xs text-muted">{topic?.label}</span>
+                  {selected.automatic && <Badge tone="ok">Installé par Zenytt</Badge>}
                 </div>
+                <p className="mt-1 max-w-[90ch] text-[13.5px] leading-relaxed text-muted">{selected.summary}</p>
+              </div>
+              {section && (
+                <Button size="sm" className="shrink-0" icon={<ArrowRight size={13} />} onClick={() => navigate(section.id, selected.tab)}>
+                  Ouvrir {section.label}
+                  {selected.tab && TAB_LABELS[selected.tab] && ` › ${TAB_LABELS[selected.tab]}`}
+                </Button>
               )}
             </header>
-            <GuideContent guide={selected} />
+            <GuideContent
+              guide={selected}
+              aside={
+                related.length > 0 && (
+                  <section className="flex flex-col gap-1.5">
+                    <h3 className="text-[11px] font-semibold tracking-wide text-muted uppercase">Dans le même thème</h3>
+                    <ul className="-mx-2 flex flex-col">
+                      {related.map((g) => (
+                        <li key={g.id}>
+                          <button type="button" className={`w-full truncate rounded px-2 py-1 text-left text-[13px] text-fg/85 hover:bg-hover hover:text-fg ${FOCUS_RING}`} title={g.summary} onClick={() => openHelpPage(g.id)}>
+                            {g.title}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )
+              }
+            />
           </article>
         </div>
       </div>

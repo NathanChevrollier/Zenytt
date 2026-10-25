@@ -1,8 +1,10 @@
+// Tiroir « Alertes » : l'agent zenyttd (installer, mettre à jour, désinstaller), ses règles, les sites
+// surveillés, les canaux (Discord, ntfy, webhook, test), les notifications Windows et le journal.
 import { useEffect, useState } from "react";
 import { BellRing, CheckCircle2, Download, OctagonAlert, Plus, Save, ShieldCheck, Trash2 } from "lucide-react";
 import { api, errorMessage, type AgentConfig, type AgentInfo, type AlertMetric } from "../../lib/api";
-import { useAppPick } from "../../lib/store";
-import { Badge, Button, Card, Checkbox, ErrorState, Field, IconButton, Input, Loading, Select } from "../../components/ui";
+import { useApp, useAppPick } from "../../lib/store";
+import { Badge, Button, Checkbox, Drawer, ErrorState, Field, IconButton, Input, Loading, Select } from "../../components/ui";
 
 const METRICS: { id: AlertMetric; label: string; unit: string }[] = [
   { id: "cpu", label: "CPU", unit: "%" },
@@ -11,8 +13,10 @@ const METRICS: { id: AlertMetric; label: string; unit: string }[] = [
   { id: "load", label: "Charge (1 min)", unit: "" },
 ];
 
-export default function Agent({ serverId, agent, reload }: { serverId: string; agent: AgentInfo | null; reload: () => Promise<void> }) {
+export default function AlertsDrawer({ serverId, agent, reload, onClose }: { serverId: string; agent: AgentInfo | null; reload: () => Promise<void>; onClose: () => void }) {
   const { ask, notify } = useAppPick("ask", "notify");
+  const winNotify = useApp((s) => s.settings.alertNotifications);
+  const setSettings = useApp((s) => s.setSettings);
   const [busy, setBusy] = useState<string | null>(null);
   const [cfg, setCfg] = useState<AgentConfig | null>(null);
 
@@ -49,37 +53,56 @@ export default function Agent({ serverId, agent, reload }: { serverId: string; a
     if (ok) await run("uninstall", () => api.agentUninstall(serverId), "Agent désinstallé");
   };
 
-  if (!agent) return <Loading label="Vérification de l'agent…" />;
+  const winToggle = (
+    <Checkbox checked={winNotify} onChange={(v) => setSettings({ alertNotifications: v })} label="Notifications Windows (Zenytt ouvert)" hint="Nouvelles alertes des serveurs connectés, sans agent requis pour l'affichage." />
+  );
+
+  if (!agent)
+    return (
+      <Drawer title="Alertes" width={880} onClose={onClose}>
+        <Loading label="Vérification de l'agent…" />
+      </Drawer>
+    );
 
   if (!agent.installed || !agent.running) {
     return (
-      <Card className="mx-auto flex max-w-2xl flex-col gap-4 p-6">
-        <div className="flex items-center gap-3">
-          <ShieldCheck size={28} className="text-accent" />
-          <div>
-            <h2 className="font-semibold">{agent.installed ? "L'agent zenyttd ne répond pas" : "Installer l'agent zenyttd"}</h2>
-            <p className="text-sm text-muted">Historique sur 30 jours et alertes, même quand ton PC est éteint.</p>
-          </div>
+      <Drawer title="Alertes" subtitle={agent.installed ? "agent zenyttd installé mais muet" : "agent zenyttd absent"} width={880} onClose={onClose}>
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+          <section className="flex min-w-0 flex-col gap-3">
+            <div className="flex items-center gap-3">
+              <ShieldCheck size={26} className="shrink-0 text-accent" />
+              <div>
+                <h3 className="font-semibold">{agent.installed ? "L'agent zenyttd ne répond pas" : "Installer l'agent zenyttd"}</h3>
+                <p className="text-sm text-muted">Historique sur 30 jours et alertes, même quand ton PC est éteint.</p>
+              </div>
+            </div>
+            {agent.error && <pre className="rounded-lg border border-warn/35 bg-warn/8 p-3 font-mono text-xs whitespace-pre-wrap text-warn">{agent.error}</pre>}
+            <div className="flex gap-2">
+              <Button variant="primary" icon={<Download size={14} />} loading={busy === "install"} onClick={() => void install()}>
+                {agent.installed ? "Réinstaller et redémarrer" : "Installer l'agent"}
+              </Button>
+              {agent.installed && (
+                <Button variant="ghost" loading={busy === "uninstall"} onClick={() => void uninstall()}>
+                  Désinstaller
+                </Button>
+              )}
+            </div>
+            <div className="mt-2 border-t border-border pt-3">{winToggle}</div>
+          </section>
+          <section className="flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-subtle p-4">
+            <h3 className="text-[13px] font-semibold">Ce qui est installé</h3>
+            <ul className="flex flex-col gap-1.5 text-[13px] text-muted">
+              <li>• Binaire statique d'environ 2 Mo, installé dans /usr/local/bin/zenyttd.</li>
+              <li>• Tourne sous un utilisateur système dédié, avec un service systemd durci et limité à 64 Mo de RAM.</li>
+              <li>
+                • N'ouvre <strong className="text-fg">aucun port</strong> : il ne répond que sur un socket local, joint à travers ta connexion SSH.
+              </li>
+              <li>• Ne touche ni à nginx, ni à Docker, ni à tes sites.</li>
+            </ul>
+            <p className="text-xs text-faint">Nécessite les droits root : connexion en root ou mot de passe sudo renseigné dans le profil du serveur.</p>
+          </section>
         </div>
-        {agent.error && <pre className="rounded-lg border border-warn/35 bg-warn/8 p-3 font-mono text-xs whitespace-pre-wrap text-warn">{agent.error}</pre>}
-        <ul className="flex flex-col gap-1.5 text-sm text-muted">
-          <li>• Binaire statique d'environ 2 Mo, installé dans /usr/local/bin/zenyttd.</li>
-          <li>• Tourne sous un utilisateur système dédié, avec un service systemd durci et limité à 64 Mo de RAM.</li>
-          <li>• N'ouvre <strong className="text-fg">aucun port</strong> : il ne répond que sur un socket local, joint à travers ta connexion SSH.</li>
-          <li>• Ne touche ni à nginx, ni à Docker, ni à tes sites.</li>
-        </ul>
-        <div className="flex gap-2">
-          <Button variant="primary" icon={<Download size={14} />} loading={busy === "install"} onClick={() => void install()}>
-            {agent.installed ? "Réinstaller et redémarrer" : "Installer l'agent"}
-          </Button>
-          {agent.installed && (
-            <Button variant="ghost" loading={busy === "uninstall"} onClick={() => void uninstall()}>
-              Désinstaller
-            </Button>
-          )}
-        </div>
-        <p className="text-xs text-muted">Nécessite les droits root : connexion en root ou mot de passe sudo renseigné dans le profil du serveur.</p>
-      </Card>
+      </Drawer>
     );
   }
 
@@ -89,26 +112,42 @@ export default function Agent({ serverId, agent, reload }: { serverId: string; a
   const dirty = JSON.stringify(cfg) !== JSON.stringify(st.config);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-panel px-4 py-3 text-[13px]">
-        <CheckCircle2 size={16} className="text-ok" />
-        <span>
-          zenyttd {st.version} actif sur <span className="font-mono">{st.hostname}</span>
+    <Drawer
+      title="Alertes"
+      subtitle={
+        <span className="flex items-center gap-1.5">
+          <CheckCircle2 size={13} className="text-ok" />
+          zenyttd {st.version} actif sur <span className="font-mono">{st.hostname}</span> · démarré le {new Date(st.startedAt).toLocaleString("fr-FR")}
         </span>
-        <span className="text-muted">démarré le {new Date(st.startedAt).toLocaleString("fr-FR")}</span>
-        <div className="ml-auto flex gap-2">
+      }
+      width={880}
+      onClose={onClose}
+      actions={
+        <>
           <Button size="sm" loading={busy === "install"} onClick={() => void install()}>
-            Mettre à jour
+            Mettre à jour l'agent
           </Button>
           <Button size="sm" variant="ghost" loading={busy === "uninstall"} onClick={() => void uninstall()}>
             Désinstaller
           </Button>
-        </div>
-      </div>
-      {st.configError && <ErrorState message={st.configError} />}
-
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <section className="rounded-xl border border-border bg-panel p-4">
+        </>
+      }
+      footer={
+        <>
+          {dirty && <span className="mr-auto text-xs text-muted">Modifications non enregistrées : l'agent les applique dans les secondes qui suivent.</span>}
+          <Button variant="ghost" disabled={!dirty} onClick={() => setCfg(structuredClone(st.config))}>
+            Annuler
+          </Button>
+          <Button variant="primary" icon={<Save size={14} />} disabled={!dirty} loading={busy === "save"} onClick={() => void run("save", () => api.agentSaveConfig(serverId, cfg), "Configuration enregistrée")}>
+            Enregistrer
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        {st.configError && <ErrorState message={st.configError} />}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <section className="rounded-xl border border-border bg-panel p-4 lg:col-span-2">
           <h3 className="mb-1 text-[13px] font-semibold">Règles d'alerte</h3>
           <p className="mb-3 text-xs text-muted">Une alerte part quand le seuil est dépassé pendant toute la durée indiquée, puis un message « résolu » quand ça redescend.</p>
           <div className="flex flex-col gap-2">
@@ -192,10 +231,11 @@ export default function Agent({ serverId, agent, reload }: { serverId: string; a
             >
               Envoyer une notification de test
             </Button>
+            <div className="border-t border-border pt-3">{winToggle}</div>
           </div>
         </section>
 
-        <section className="rounded-xl border border-border bg-panel p-4">
+        <section className="rounded-xl border border-border bg-panel p-4 lg:col-span-2">
           <h3 className="mb-3 text-[13px] font-semibold">Journal des alertes</h3>
           {st.recentEvents.length === 0 ? (
             <p className="text-sm text-muted">Aucune alerte pour l'instant.</p>
@@ -218,17 +258,7 @@ export default function Agent({ serverId, agent, reload }: { serverId: string; a
         </section>
       </div>
 
-      {dirty && (
-        <div className="animate-pop-in sticky bottom-3 flex items-center justify-end gap-2 rounded-xl border border-accent/40 bg-raised px-4 py-3 shadow-2xl">
-          <span className="mr-auto text-sm text-muted">Modifications non enregistrées. L'agent les appliquera dans les secondes qui suivent.</span>
-          <Button variant="ghost" onClick={() => setCfg(structuredClone(st.config))}>
-            Annuler
-          </Button>
-          <Button variant="primary" icon={<Save size={14} />} loading={busy === "save"} onClick={() => void run("save", () => api.agentSaveConfig(serverId, cfg), "Configuration enregistrée")}>
-            Enregistrer
-          </Button>
-        </div>
-      )}
-    </div>
+      </div>
+    </Drawer>
   );
 }

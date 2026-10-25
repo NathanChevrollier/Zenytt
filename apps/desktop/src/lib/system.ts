@@ -1,4 +1,4 @@
-// Aides pures de la page Système : regroupement des mises à jour et des images, validation.
+// Aides pures de Supervision : regroupement des mises à jour et des images, validation, liens vers la page.
 import type { ContainerImage, Finding, Severity, SystemUpdate } from "./api";
 
 export type UpdateGroup = "kernel" | "libs" | "apps";
@@ -50,8 +50,54 @@ export function scoreVerdict(score: number): string {
   return score >= 90 ? "Serveur bien protégé" : score >= 70 ? "Quelques points à renforcer" : score >= 40 ? "Des failles à corriger" : "Serveur exposé";
 }
 
-/** Onglet demandé à la page Système : « security/fail2ban » ouvre Sécurité sur son sous-onglet. */
+/** « security/fail2ban » → ["security", "fail2ban"]. */
 export function splitTab(tab: string): [string, string | null] {
   const i = tab.indexOf("/");
   return i < 0 ? [tab, null] : [tab.slice(0, i), tab.slice(i + 1)];
+}
+
+export type SupervisionTab = "overview" | "activity" | "security";
+/** Sections de l'onglet « Sécurité et mises à jour » (ancre de défilement). */
+export type SecuritySection = "updates" | "fail2ban" | "firewall" | "access";
+/** Tiroirs de la page Supervision. */
+export type SupervisionDrawer = "alerts" | "processes" | "provider" | "audit" | "images";
+export interface SupervisionLink {
+  tab: SupervisionTab;
+  section?: SecuritySection | "schedule";
+  drawer?: SupervisionDrawer;
+}
+
+/**
+ * Lien vers la page Supervision (nouveau ou ancien : Supervision, Système, Sécurité) → onglet, section
+ * à faire défiler et tiroir à ouvrir. Une seule table : palette, accueil, aide, notifications et
+ * état enregistré d'une ancienne version passent tous par ici.
+ */
+export function resolveSupervisionLink(raw: string | null | undefined): SupervisionLink {
+  const [main, sub] = splitTab(raw ?? "");
+  switch (main) {
+    case "activity":
+    case "services":
+      return { tab: "activity" };
+    case "processes":
+      return { tab: "activity", drawer: "processes" };
+    case "schedule":
+      return { tab: "activity", section: "schedule" };
+    case "agent":
+    case "alerts":
+      return { tab: "overview", drawer: "alerts" };
+    case "provider":
+      return { tab: "overview", drawer: "provider" };
+    case "software":
+    case "updates":
+    case "inventory":
+      return { tab: "security", section: "updates" };
+    case "images":
+      return { tab: "security", section: "updates", drawer: "images" };
+    case "security":
+      if (sub === "audit") return { tab: "security", drawer: "audit" };
+      if (sub === "firewall" || sub === "fail2ban" || sub === "access" || sub === "updates") return { tab: "security", section: sub };
+      return { tab: "security" };
+    default:
+      return { tab: "overview" };
+  }
 }

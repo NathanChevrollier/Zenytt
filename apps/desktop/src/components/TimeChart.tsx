@@ -21,6 +21,7 @@ export default function TimeChart({
   format,
   max,
   height = 180,
+  threshold,
 }: {
   times: number[];
   series: ChartSeries[];
@@ -28,6 +29,8 @@ export default function TimeChart({
   /** Borne haute fixe (ex. 100 pour un pourcentage) ; auto sinon. */
   max?: number;
   height?: number;
+  /** Seuil tracé en pointillés (règle d'alerte, nombre de cœurs…). */
+  threshold?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const tip = useRef<HTMLDivElement>(null);
@@ -57,7 +60,7 @@ export default function TimeChart({
       height,
       legend: { show: false },
       cursor: { points: { size: 8 }, drag: { x: false, y: false } },
-      scales: { x: { time: true }, y: { range: (_u, _min, dataMax) => [0, max ?? Math.max(dataMax * 1.15, 1)] } },
+      scales: { x: { time: true }, y: { range: (_u, _min, dataMax) => [0, max ?? Math.max(dataMax * 1.15, 1, (threshold ?? 0) * 1.1)] } },
       axes: [
         {
           ...axis,
@@ -84,6 +87,23 @@ export default function TimeChart({
         })),
       ],
       hooks: {
+        draw: [
+          (u) => {
+            if (threshold == null) return;
+            const y = Math.round(u.valToPos(threshold, "y", true)) + 0.5;
+            const ctx = u.ctx;
+            ctx.save();
+            ctx.strokeStyle = css.getPropertyValue("--color-danger").trim() || "#e5484d";
+            ctx.globalAlpha = 0.7;
+            ctx.lineWidth = devicePixelRatio;
+            ctx.setLineDash([4 * devicePixelRatio, 4 * devicePixelRatio]);
+            ctx.beginPath();
+            ctx.moveTo(u.bbox.left, y);
+            ctx.lineTo(u.bbox.left + u.bbox.width, y);
+            ctx.stroke();
+            ctx.restore();
+          },
+        ],
         setCursor: [
           (u) => {
             const t = tip.current!;
@@ -129,7 +149,7 @@ export default function TimeChart({
     };
     // Le graphique est recréé si la structure des séries change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [labels, height, max, theme]);
+  }, [labels, height, max, theme, threshold]);
 
   useEffect(() => {
     plot.current?.setData([times.map((t) => t / 1000), ...series.map((s) => s.values)] as uPlot.AlignedData);

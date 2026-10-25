@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Cpu, HardDrive, MemoryStick, Timer } from "lucide-react";
-import { api, mainDisk, formatBytes, formatDuration, type Metrics } from "../lib/api";
+import { fullestDisk, formatBytes, formatDuration } from "../lib/api";
 import { useApp } from "../lib/store";
-import { usePolling } from "../lib/poll";
+import { useMetrics } from "../lib/metrics";
 import { CRIT_AT, WARN_AT } from "./ui";
 
 const pct = (used: number, total: number) => (total > 0 ? (used / total) * 100 : 0);
@@ -18,27 +17,13 @@ function tone(value: number): string {
  */
 export default function TerminalStatusBar({ serverId, visible }: { serverId: string; visible: boolean }) {
   const server = useApp((s) => s.servers.find((x) => x.id === serverId));
-  const [m, setM] = useState<Metrics | null>(null);
-  const [failed, setFailed] = useState(false);
-  // Autre serveur : on n'affiche pas les mesures du précédent en attendant les siennes.
-  useEffect(() => setM(null), [serverId]);
-
-  usePolling(
-    async () => {
-      try {
-        setM(await api.metrics(serverId));
-        setFailed(false);
-      } catch {
-        setFailed(true);
-      }
-    },
-    3000,
-    [serverId],
-    visible && !!server?.connected,
-  );
+  // Relevé partagé avec la supervision : une seule requête par serveur, quel que soit le nombre de lecteurs.
+  const { samples, error } = useMetrics(serverId, 3000, visible && !!server?.connected);
+  const m = samples[samples.length - 1] ?? null;
+  const failed = !!error;
 
   const live = server?.connected && m && !failed;
-  const root = mainDisk(m?.disks);
+  const root = fullestDisk(m?.disks);
   const cpu = m?.cpuPercent ?? 0;
   const mem = m ? pct(m.memUsed, m.memTotal) : 0;
   const disk = root ? pct(root.used, root.total) : 0;

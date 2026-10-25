@@ -1,7 +1,8 @@
 // Éléments partagés par les onglets de la page Docker.
 import { useState } from "react";
 import { api, errorMessage, shellQuote, type ComposeProject, type Container, type ContainerStats } from "../../lib/api";
-import { useAppPick } from "../../lib/store";
+import { useApp, useAppPick } from "../../lib/store";
+import { openLogs } from "../../lib/shell";
 import { composeLockKey, confirmDestructive, useItemFolders, useLocks } from "../../lib/folders";
 import { useCachedState } from "../../lib/cache";
 import { usePolling } from "../../lib/poll";
@@ -58,8 +59,42 @@ export function useContainerActions(serverId: string, docker: string, reload: ()
     }
   };
   const shell = (c: Container) => openTab(serverId, { title: `${c.name} (shell)`, command: `${docker} exec -it ${shellQuote(c.id)} sh -c 'command -v bash >/dev/null && exec bash || exec sh'` });
-  const logs = (c: Container) => openTab(serverId, { title: `${c.name} (logs)`, command: `${docker} logs -f --tail 300 ${shellQuote(c.id)}` });
+  const logs = (c: Container) => openContainerLogs(serverId, docker, c);
   return { busy, act, shell, logs };
+}
+
+/** Tiroir de logs d'un conteneur ; le menu ⋯ garde l'ancien `docker logs -f` dans un terminal. */
+export function openContainerLogs(serverId: string, docker: string, c: Container) {
+  openLogs({
+    serverId,
+    kind: "conteneur",
+    name: c.name,
+    sources: [{ kind: "docker", name: c.name }],
+    terminal: () => useApp.getState().openTab(serverId, { title: `${c.name} (logs)`, command: `${docker} logs -f --tail 300 ${shellQuote(c.id)}` }),
+  });
+}
+
+/** Limite de sources d'un suivi (`logs_start`). */
+const MAX_SOURCES = 12;
+
+/** Tiroir de logs de tous les services d'un projet compose (ancien `compose logs -f` au menu ⋯). */
+export function openComposeLogs(serverId: string, docker: string, p: ComposeProject, containers: Container[]) {
+  const names = containers.map((c) => c.name);
+  openLogs({
+    serverId,
+    kind: "projet",
+    name: p.name,
+    sources: names.slice(0, MAX_SOURCES).map((name) => ({ kind: "docker" as const, name })),
+    skipped: Math.max(0, names.length - MAX_SOURCES),
+    terminal: async () => {
+      try {
+        const command = (await api.composeCommand(p, "logs -f --tail 200")).replace(/^docker /, `${docker} `);
+        useApp.getState().openTab(serverId, { title: `${p.name} (logs)`, command });
+      } catch (e) {
+        useApp.getState().notify(errorMessage(e), "error");
+      }
+    },
+  });
 }
 
 /**

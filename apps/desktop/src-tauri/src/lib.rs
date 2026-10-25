@@ -401,6 +401,8 @@ pub fn run() {
             backups::backup_stage_download,
             backups::backup_check,
             backups::backup_install_restic,
+            backups::backup_health,
+            backups::backup_apply_fix,
             backups::backup_mirror,
             deploy::deploy_suggest_host,
             deploy::deploy_prepare,

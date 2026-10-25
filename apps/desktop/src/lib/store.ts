@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorMessage, hasShell, type ServerView } from "./api";
-import type { SectionId } from "../sections";
+import { MOVED_SECTIONS, type SectionId } from "../sections";
 import type { GuideId } from "./guides";
 import type { ThemeSetting } from "./theme";
 
@@ -98,7 +98,7 @@ export interface Settings {
   hiddenSections?: SectionId[];
   /** Copie sur ce PC du dépôt de sauvegarde de chaque serveur (par identifiant de serveur). */
   backupMirrors?: Record<string, BackupMirror>;
-  /** Écran d'une VM ouvert depuis le tiroir Machines : dans Zenytt, ou dans le client du système. */
+  /** Écran d'une VM ou d'un bureau à distance (sélecteur de serveur, palette) : dans Zenytt, ou dans le client du système. */
   vmScreen?: "internal" | "external";
 }
 
@@ -238,23 +238,35 @@ function readActiveServer(): string | null {
   }
 }
 
+/**
+ * Onglets masqués d'une ancienne version : les sections disparues sont retirées ; Réseau reste
+ * masqué seulement si Tunnels et Réseau privé l'étaient tous les deux.
+ */
+function migrateHidden(ids: string[]): SectionId[] {
+  const kept = ids.filter((id) => !(id in MOVED_SECTIONS)) as SectionId[];
+  return ids.includes("tunnels") && ids.includes("mesh") && !kept.includes("network") ? [...kept, "network"] : kept;
+}
+
 export const useApp = create<State>((set, get) => ({
   hydrated: false,
   hydrate: async (saved) => {
     try {
       const raw = (await (saved ?? api.uiStateGet())) as Partial<Persisted> | null;
       if (raw && raw.v === 1) {
-        // L'ancienne section « Sécurité » vit désormais dans Système (onglet Sécurité).
-        const legacySecurity = (raw.section as string) === "security";
-        if (legacySecurity) void import("./shell").then(({ useShell }) => useShell.setState({ intent: { section: "system", tab: "security" } }));
+        // Anciennes sections (Système, Sécurité, Tunnels, Réseau privé) : leur page fusionnée, sur le bon onglet.
+        const moved = MOVED_SECTIONS[raw.section as string];
+        if (moved?.tab) void import("./shell").then(({ useShell }) => useShell.setState({ intent: { section: moved.section, tab: moved.tab! } }));
+        const section = moved?.section ?? raw.section ?? "servers";
+        const saved = raw.settings;
+        if (saved?.hiddenSections) saved.hiddenSections = migrateHidden(saved.hiddenSections);
         set({
-          section: legacySecurity ? "system" : (raw.section ?? "servers"),
+          section,
           // Les sessions partagées ne survivent pas à la fermeture de l'app.
           tabs: (raw.tabs ?? []).filter((t) => !t.join),
           activeTab: raw.activeTab ?? null,
           filesPaths: raw.filesPaths ?? {},
           settings: { ...get().settings, ...raw.settings },
-          recent: raw.recent ?? [],
+          recent: (raw.recent ?? []).map((id) => (id === "go:tunnels" ? "go:network" : id === "go:mesh" ? "go:network:mesh" : id)),
           bookmarks: raw.bookmarks ?? {},
           folders: { ...NO_FOLDERS, ...raw.folders },
         });

@@ -1,25 +1,23 @@
-// Docker : conteneurs (avec leur tiroir de détail), projets compose, stockage et nettoyage,
-// registres privés. Les actions de création (catalogue, nouveau projet) sont dans l'en-tête.
+// Docker : applications (projets compose et conteneurs, avec leur tiroir de détail), stockage et
+// nettoyage. Registres privés, catalogue et nouveau projet sont dans l'en-tête.
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { Container as ContainerIcon, Package, Plus } from "lucide-react";
+import { Container as ContainerIcon, KeyRound, Package, Plus } from "lucide-react";
 import { api, errorMessage, type DockerOverview } from "../lib/api";
 import { useApp } from "../lib/store";
 import { useTabIntent } from "../lib/shell";
-import { Badge, Button, EmptyState, ErrorState, Loading } from "../components/ui";
+import { Badge, Button, Drawer, EmptyState, ErrorState, Loading } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 import ServerGate, { ServerContext } from "../components/ServerGate";
 import { useCachedState } from "../lib/cache";
 import { useAutoRefresh } from "../lib/refresh";
 import type { ComposePreset } from "../components/NewComposeProject";
-import Containers from "./docker/Containers";
-import Compose from "./docker/Compose";
+import { resolveDockerLink, type DockerTab } from "../lib/compose";
+import Apps from "./docker/Apps";
 import Storage from "./docker/Storage";
 
 const NewComposeProject = lazy(() => import("../components/NewComposeProject"));
 const AppCatalog = lazy(() => import("../components/AppCatalog"));
 const DockerRegistries = lazy(() => import("../components/DockerRegistries"));
-
-type TabId = "containers" | "compose" | "storage" | "registries";
 
 export default function DockerView() {
   return <ServerGate title="Docker" guide="docker">{(serverId) => <Docker key={serverId} serverId={serverId} />}</ServerGate>;
@@ -27,7 +25,17 @@ export default function DockerView() {
 
 function Docker({ serverId }: { serverId: string }) {
   const server = useApp((s) => s.servers.find((x) => x.id === serverId));
-  const [tab, setTab] = useTabIntent<TabId>("docker", "containers");
+  // Lien demandé (`navigate("docker", …)`), ancien ou nouveau : traduit une fois puis effacé.
+  const [raw, setRaw] = useTabIntent<string>("docker", "");
+  const [tab, setTab] = useState<DockerTab>(() => resolveDockerLink(raw).tab);
+  const [registries, setRegistries] = useState(() => resolveDockerLink(raw).registries);
+  useEffect(() => {
+    if (!raw) return;
+    const link = resolveDockerLink(raw);
+    setTab(link.tab);
+    if (link.registries) setRegistries(true);
+    setRaw("");
+  }, [raw, setRaw]);
   const [data, setData] = useCachedState<DockerOverview | null>(`docker:${serverId}`, null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -51,7 +59,7 @@ function Docker({ serverId }: { serverId: string }) {
 
   const context = server && <ServerContext server={server} />;
   const layout = (children: React.ReactNode, extra?: Partial<React.ComponentProps<typeof PageLayout>>) => (
-    <PageLayout title="Docker" context={context} guide={tab === "compose" ? "compose" : "docker"} {...extra}>
+    <PageLayout title="Docker" context={context} guide="docker" {...extra}>
       {children}
     </PageLayout>
   );
@@ -77,7 +85,7 @@ function Docker({ serverId }: { serverId: string }) {
       <PageLayout
         title="Docker"
         context={context}
-        guide={tab === "compose" ? "compose" : "docker"}
+        guide="docker"
         subtitle={`${data.engine === "podman" ? "Podman" : "Docker"} ${data.version}${data.access === "sudo" ? " · via sudo" : ""}`}
         status={
           <>
@@ -87,16 +95,17 @@ function Docker({ serverId }: { serverId: string }) {
           </>
         }
         tabs={[
-          { id: "containers", label: "Conteneurs", count: data.containers.length },
-          { id: "compose", label: "Projets compose", count: data.projects.length },
+          { id: "apps", label: "Applications", count: `${data.projects.length} projet${data.projects.length > 1 ? "s" : ""} · ${data.containers.length} conteneur${data.containers.length > 1 ? "s" : ""}` },
           { id: "storage", label: "Images, volumes et nettoyage" },
-          { id: "registries", label: "Registres" },
         ]}
         activeTab={tab}
         onTab={setTab}
-        scroll={tab !== "containers"}
+        scroll={tab !== "apps"}
         actions={
           <>
+            <Button icon={<KeyRound size={14} />} onClick={() => setRegistries(true)}>
+              Registres
+            </Button>
             <Button icon={<Package size={14} />} onClick={() => setCatalogOpen(true)}>
               Catalogue d'applications
             </Button>
@@ -106,17 +115,16 @@ function Docker({ serverId }: { serverId: string }) {
           </>
         }
       >
-        {tab === "containers" && <Containers serverId={serverId} data={data} docker={docker} reload={load} />}
-        {tab === "compose" && <Compose serverId={serverId} data={data} docker={docker} reload={load} onNew={() => setCreating(true)} onCatalog={() => setCatalogOpen(true)} />}
+        {tab === "apps" && <Apps serverId={serverId} data={data} docker={docker} reload={load} onNew={() => setCreating(true)} onCatalog={() => setCatalogOpen(true)} />}
         {tab === "storage" && <Storage serverId={serverId} />}
-        {tab === "registries" && (
-          <div className="px-7 py-5">
-            <Suspense fallback={<Loading rows={4} />}>
-              <DockerRegistries serverId={serverId} />
-            </Suspense>
-          </div>
-        )}
       </PageLayout>
+      {registries && (
+        <Drawer title="Registres" subtitle="Identifiants des registres d'images privés et connexion de ce serveur" width={760} onClose={() => setRegistries(false)}>
+          <Suspense fallback={<Loading rows={4} />}>
+            <DockerRegistries serverId={serverId} />
+          </Suspense>
+        </Drawer>
+      )}
       {catalogOpen && (
         <Suspense fallback={null}>
           <AppCatalog
@@ -140,7 +148,7 @@ function Docker({ serverId }: { serverId: string }) {
             }}
             onDone={() => {
               void load();
-              setTab("compose");
+              setTab("apps");
             }}
           />
         </Suspense>

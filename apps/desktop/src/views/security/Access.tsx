@@ -4,8 +4,9 @@ import { api, errorMessage, type ServerUser } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
 import { Badge, Button, ErrorState, Field, IconButton, Loading, Modal, Textarea } from "../../components/ui";
 import { useCachedState } from "../../lib/cache";
+import { Panel, type TocInfo } from "../supervision/Panel";
 
-export default function Access({ serverId, onCount }: { serverId: string; onCount?: (n: number) => void }) {
+export default function Access({ serverId, onSummary }: { serverId: string; onSummary?: (s: TocInfo) => void }) {
   const { ask, notify } = useAppPick("ask", "notify");
   const [users, setUsers] = useCachedState<ServerUser[] | null>(`users:${serverId}`, null);
   const [error, setError] = useState<string | null>(null);
@@ -29,9 +30,10 @@ export default function Access({ serverId, onCount }: { serverId: string; onCoun
     void load();
   }, [load]);
   const count = users?.length;
+  const keys = users?.reduce((n, u) => n + u.keys.length, 0) ?? 0;
   useEffect(() => {
-    if (count != null) onCount?.(count);
-  }, [count, onCount]);
+    if (count != null) onSummary?.({ count, sub: `compte${count > 1 ? "s" : ""} · ${keys} clé${keys > 1 ? "s" : ""}` });
+  }, [count, keys, onSummary]);
 
   const addKey = async (user: string, key: string) => {
     await api.accessAddKey(serverId, user, key.trim());
@@ -40,19 +42,42 @@ export default function Access({ serverId, onCount }: { serverId: string; onCoun
     await load();
   };
 
-  if (error && !users) return <ErrorState message={error} onRetry={() => void load()} />;
-  if (!users) return <Loading label="Lecture des comptes…" rows={4} />;
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2 text-[13px] text-muted">
-        Comptes avec un shell (root compris) et leurs clés SSH autorisées.
-        <IconButton title="Actualiser" className="ml-auto" onClick={() => void load()}>
+  const panel = (children: React.ReactNode, extra?: React.ReactNode) => (
+    <Panel
+      title="Accès SSH"
+      status={
+        <span className="text-xs text-muted">
+          Comptes avec un shell (root compris) et leurs clés SSH autorisées{count != null && ` · ${count} compte${count > 1 ? "s" : ""}`}
+        </span>
+      }
+      actions={
+        <IconButton title="Actualiser" onClick={() => void load()}>
           <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
         </IconButton>
-      </div>
+      }
+    >
+      {children}
+      {extra}
+    </Panel>
+  );
+  if (error && !users)
+    return panel(
+      <div className="p-4">
+        <ErrorState message={error} onRetry={() => void load()} />
+      </div>,
+    );
+  if (!users)
+    return panel(
+      <div className="p-4">
+        <Loading label="Lecture des comptes…" rows={4} />
+      </div>,
+    );
+
+  // Deux colonnes dès que la section est assez large ; un compte seul en fin de grille prend toute la ligne.
+  return panel(
+    <div className="grid gap-3 p-4 @min-[900px]:grid-cols-2 @min-[900px]:[&>:last-child:nth-child(odd)]:col-span-2">
       {users.map((u) => (
-        <section key={u.name} className="rounded-xl border border-border bg-panel">
+        <section key={u.name} className="@container min-w-0 rounded-lg border border-border">
           <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
             <UserRound size={14} />
             <span className="font-medium">{u.name}</span>
@@ -61,12 +86,12 @@ export default function Access({ serverId, onCount }: { serverId: string; onCoun
                 <ShieldCheck size={11} className="mr-1" /> {u.uid === 0 ? "root" : "sudo"}
               </Badge>
             )}
-            <span className="min-w-0 truncate text-xs text-muted">
-              {u.home} · {u.shell} · dernière connexion : {u.lastLogin || "inconnue"}
-            </span>
             <Button size="sm" className="ml-auto" icon={<Plus size={13} />} onClick={() => setAdding(u.name)}>
               Autoriser une clé
             </Button>
+            <span className="w-full min-w-0 truncate text-xs text-muted">
+              {u.home} · {u.shell} · dernière connexion : {u.lastLogin || "inconnue"}
+            </span>
           </header>
           {u.keys.length === 0 ? (
             <p className="px-4 py-2.5 text-[13px] text-muted">Aucune clé SSH : connexion par mot de passe uniquement (si autorisée).</p>
@@ -77,12 +102,12 @@ export default function Access({ serverId, onCount }: { serverId: string; onCoun
                   <KeyRound size={14} className={k.current ? "text-accent" : "text-muted"} />
                   <span className="w-28 font-mono text-xs">{k.algorithm}</span>
                   {/* Commentaire, empreinte et options en colonnes quand la place le permet. */}
-                  <span className="flex min-w-0 flex-1 flex-col @4xl:flex-row @4xl:items-center @4xl:gap-4">
-                    <span className="truncate @4xl:flex-1">{k.comment || <span className="text-muted">(sans commentaire)</span>}</span>
-                    <span className="truncate font-mono text-[11px] text-muted @4xl:flex-[1.4]" title={k.fingerprint}>
+                  <span className="flex min-w-0 flex-1 flex-col @min-[600px]:flex-row @min-[600px]:items-center @min-[600px]:gap-4">
+                    <span className="truncate @min-[600px]:flex-1">{k.comment || <span className="text-muted">(sans commentaire)</span>}</span>
+                    <span className="truncate font-mono text-[11px] text-muted @min-[600px]:flex-[1.4]" title={k.fingerprint}>
                       {k.fingerprint}
                     </span>
-                    {k.options && <span className="truncate font-mono text-[11px] text-warn @4xl:flex-1" title={k.options}>{k.options}</span>}
+                    {k.options && <span className="truncate font-mono text-[11px] text-warn @min-[600px]:flex-1" title={k.options}>{k.options}</span>}
                   </span>
                   {k.current && <Badge tone="accent">clé de Zenytt</Badge>}
                   {!k.current && (
@@ -115,8 +140,8 @@ export default function Access({ serverId, onCount }: { serverId: string; onCoun
           )}
         </section>
       ))}
-      {adding && <AddKeyDialog user={adding} onClose={() => setAdding(null)} onAdd={(k) => addKey(adding, k)} />}
-    </div>
+    </div>,
+    adding && <AddKeyDialog user={adding} onClose={() => setAdding(null)} onAdd={(k) => addKey(adding, k)} />,
   );
 }
 

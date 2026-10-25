@@ -28,11 +28,12 @@ import { usePolling } from "./lib/poll";
 // Fenêtres et panneaux ouverts à la demande : chargés à leur première ouverture, pas au démarrage.
 const CommandPalette = lazy(() => import("./components/CommandPalette"));
 const AssistantPanel = lazy(() => import("./components/AssistantPanel"));
-const MachinesDrawer = lazy(() => import("./components/shell/MachinesDrawer"));
+const SessionsDrawer = lazy(() => import("./components/shell/SessionsDrawer"));
 const GuideDialog = lazy(() => import("./components/GuideDialog"));
 const ShortcutsHelp = lazy(() => import("./components/shell/ShortcutsHelp"));
 const HomeView = lazy(() => import("./views/Home"));
 const CloseDialog = lazy(() => import("./components/CloseDialog"));
+const LogDrawer = lazy(() => import("./components/LogDrawer"));
 
 // Chargé à part : xterm pèse un tiers de l'app et n'est pas nécessaire pour afficher l'accueil.
 const TerminalView = lazy(() => import("./views/Terminal"));
@@ -44,17 +45,15 @@ const VncSession = lazy(() => import("./components/VncSession"));
 const VIEWS: Partial<Record<SectionId, ComponentType>> = {
   servers: lazy(() => import("./views/Servers")),
   files: lazy(() => import("./views/Files")),
-  monitoring: lazy(() => import("./views/Monitoring")),
+  monitoring: lazy(() => import("./views/Supervision")),
   docker: lazy(() => import("./views/Docker")),
   vms: lazy(() => import("./views/Vms")),
   databases: lazy(() => import("./views/Databases")),
   sites: lazy(() => import("./views/Sites")),
   logs: lazy(() => import("./views/Logs")),
-  tunnels: lazy(() => import("./views/Tunnels")),
-  mesh: lazy(() => import("./views/Mesh")),
+  network: lazy(() => import("./views/Network")),
   github: lazy(() => import("./views/Github")),
   backups: lazy(() => import("./views/Backups")),
-  system: lazy(() => import("./views/System")),
   help: lazy(() => import("./views/Help")),
   settings: lazy(() => import("./views/Settings")),
 };
@@ -178,6 +177,9 @@ export default function App() {
 
   const assistantOpen = useAssistant((s) => s.open);
   const machinesOpen = useShell((s) => s.machinesOpen);
+  const logTarget = useShell((s) => s.logs);
+  // Le tiroir de logs appartient à la page qui l'a ouvert : changer de page ou de serveur le ferme.
+  useEffect(() => useShell.setState({ logs: null }), [section, activeServerId]);
   const themeSetting = useApp((s) => s.settings.theme);
   useEffect(() => applyTheme(themeSetting), [themeSetting]);
 
@@ -263,11 +265,18 @@ export default function App() {
                 )}
               </>
             )}
+            {logTarget && (
+              <ErrorBoundary label="le tiroir de logs" compact onClose={() => useShell.setState({ logs: null })} closeLabel="Fermer le tiroir">
+                <Suspense fallback={null}>
+                  <LogDrawer key={`${logTarget.serverId}:${logTarget.kind}:${logTarget.name}`} target={logTarget} />
+                </Suspense>
+              </ErrorBoundary>
+            )}
           </div>
           {machinesOpen && (
-            <ErrorBoundary label="le tiroir des machines" compact onClose={() => useShell.getState().setMachinesOpen(false)} closeLabel="Fermer le tiroir">
+            <ErrorBoundary label="le tiroir des sessions ouvertes" compact onClose={() => useShell.getState().setMachinesOpen(false)} closeLabel="Fermer le tiroir">
               <Suspense fallback={null}>
-                <MachinesDrawer />
+                <SessionsDrawer />
               </Suspense>
             </ErrorBoundary>
           )}

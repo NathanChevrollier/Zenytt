@@ -102,7 +102,7 @@ export const GUIDES: Guide[] = [
       "À la première connexion, l'empreinte de la clé d'hôte est mémorisée ; si elle change ensuite, Zenytt bloque et prévient au lieu de se connecter quand même.",
       "Le mot de passe sudo enregistré dans le profil sert aux actions qui en ont besoin : écriture nginx, pare-feu, agent, sauvegardes.",
       "Un serveur de rebond (bastion) se choisit dans le profil : Zenytt traverse le premier pour joindre le second.",
-      "Une identité de la banque (Serveurs → Identifiants) remplace l'utilisateur et les secrets sur plusieurs profils à la fois.",
+      "Une identité de la banque (bouton « Identifiants » de la page Serveurs) remplace l'utilisateur et les secrets sur plusieurs profils à la fois.",
     ],
     requirements: ["un accès SSH (mot de passe, clé OpenSSH, clé PuTTY .ppk, agent OpenSSH ou Pageant)"],
     steps: [
@@ -209,8 +209,11 @@ export const GUIDES: Guide[] = [
     title: "Supervision : ce que montrent les chiffres",
     topic: "exploitation",
     section: "monitoring",
-    summary: "Charge, mémoire, disques, réseau, processus et services, en direct ou sur 30 jours avec l'agent.",
+    summary: "Ressources en direct ou sur 30 jours avec l'agent, services, tâches planifiées, alimentation, sécurité et mises à jour : trois onglets.",
     how: [
+      "Vue d'ensemble : la fiche du serveur, six chiffres clés, les courbes de la période choisie (seuils d'alerte en pointillés), les disques, les processus les plus actifs, « À traiter » et l'alimentation (par SSH ou par l'hébergeur).",
+      "Activité : services systemd et tâches planifiées côte à côte ; un clic sur un service ouvre son journal, « Tous les processus » ouvre la liste complète.",
+      "Sécurité et mises à jour : score de l'audit, paquets et versions, fail2ban, pare-feu et accès SSH, sur une seule page.",
       "Sans agent : les chiffres sont lus à la demande pendant que Zenytt est ouvert, sans historique.",
       "Avec l'agent : 30 jours de moyennes par minute, et des alertes qui partent même PC éteint.",
       "La charge (« load ») se compare au nombre de cœurs : 2.00 sur 4 cœurs, c'est la moitié de la machine.",
@@ -222,6 +225,7 @@ export const GUIDES: Guide[] = [
     title: "Tâches planifiées (cron et timers)",
     topic: "exploitation",
     section: "monitoring",
+    tab: "schedule",
     summary: "Tout ce qui se déclenche tout seul sur le serveur : crontabs des utilisateurs, fichiers système de /etc/cron.d, et timers systemd.",
     how: [
       "Zenytt lit les crontabs de chaque utilisateur, /etc/crontab, /etc/cron.d, les dossiers cron.hourly/daily/weekly/monthly, et « systemctl list-timers ».",
@@ -248,10 +252,11 @@ export const GUIDES: Guide[] = [
     automatic: "Zenytt détecte tout seul s'il peut parler à Docker directement, sinon il passe par sudo. Podman est reconnu de la même façon.",
     how: [
       "« Shell » ouvre un onglet de terminal dans le conteneur (bash s'il existe, sinon sh).",
-      "« Logs » ouvre un onglet qui suit la sortie en direct.",
+      "« Logs » (d'un conteneur, d'un projet compose ou d'un service systemd) ouvre un tiroir qui suit la sortie en direct : filtre, niveaux, pause, export, « Charger plus » et « Ouvrir dans Journaux ». Son menu ⋯ garde le suivi dans un onglet de terminal.",
       "« Restreindre les ports » réécrit les ports publiés en 127.0.0.1 : le service n'est plus joignable depuis Internet, on y accède ensuite par un tunnel.",
       "L'onglet « Images, volumes et nettoyage » mesure la taille réelle de chaque volume et signale ceux qu'aucun conteneur, même arrêté, n'utilise : le gain en octets est annoncé avant toute suppression.",
-      "L'onglet « Registres » range les identifiants de Docker Hub, GitHub Packages, GitLab, AWS ECR ou d'un registre privé dans le coffre du système, et connecte un serveur en un clic : le jeton part sur l'entrée standard de docker login, jamais dans une ligne de commande.",
+      "L'onglet « Applications » montre une carte par projet compose (ses actions dans l'en-tête, ses services dedans) et une carte « Hors compose » ; « Affichage » repasse au tableau des conteneurs, par dossier local ou sans groupe.",
+      "Le bouton « Registres » de l'en-tête range les identifiants de Docker Hub, GitHub Packages, GitLab, AWS ECR ou d'un registre privé dans le coffre du système, et connecte un serveur en un clic : le jeton part sur l'entrée standard de docker login, jamais dans une ligne de commande.",
     ],
     requirements: ["Docker ou Podman installé", "l'utilisateur dans le groupe docker, ou un mot de passe sudo dans le profil"],
     steps: [
@@ -281,8 +286,8 @@ export const GUIDES: Guide[] = [
       "Zenytt utilise virsh sur le serveur, toujours sur la connexion système (qemu:///system) : la liste est celle de virt-manager.",
       "Une VM est désignée par son UUID dans chaque commande : un nom avec espaces, accents ou apostrophes ne pose aucun problème.",
       "L'écran (VNC) s'affiche dans Zenytt à travers un tunnel SSH ; le port VNC n'a jamais besoin d'être ouvert.",
-      "Il peut aussi s'ouvrir dans le client du système (remote-viewer de virt-viewer), toujours par le tunnel : c'est le moyen d'afficher une VM en SPICE. Le tiroir Machines (à droite) laisse choisir le moyen par défaut ; l'autre reste au clic droit.",
-      "Les VM se rangent dans des dossiers (menu ⋯ d'une VM, ou glisser-déposer), propres à ce PC : la page et le tiroir Machines les affichent pareil.",
+      "Il peut aussi s'ouvrir dans le client du système (remote-viewer de virt-viewer), toujours par le tunnel : c'est le moyen d'afficher une VM en SPICE. Le moyen par défaut se choisit dans Réglages › Général › Écrans distants ; l'autre reste au clic droit.",
+      "Les VM se rangent dans des dossiers (menu ⋯ d'une VM, ou glisser-déposer), propres à ce PC : la page et le sélecteur de serveur (dépliage des VM d'un serveur, avec Écran et Console série) les affichent pareil. Les écrans et terminaux en cours se reprennent dans le tiroir Sessions ouvertes.",
       "La console série s'ouvre dans un onglet terminal (Ctrl+] pour en sortir).",
       "Forcer l'arrêt et supprimer demandent toujours confirmation ; chaque action est inscrite dans le journal.",
     ],
@@ -408,8 +413,9 @@ export const GUIDES: Guide[] = [
     title: "Agent zenyttd : historique et alertes hors ligne",
     topic: "exploitation",
     section: "monitoring",
+    tab: "alerts",
     summary: "Sans agent, Zenytt montre l'état en direct quand il est ouvert. Avec l'agent, le serveur garde 30 jours d'historique et envoie les alertes même PC éteint.",
-    automatic: "Installation en un clic : Supervision → Alertes et agent → Installer. Zenytt envoie le binaire par SSH et crée le service.",
+    automatic: "Installation en un clic : Supervision › Vue d'ensemble › Alertes (« Régler… ») → Installer. Zenytt envoie le binaire par SSH et crée le service.",
     how: [
       "L'agent n'ouvre aucun port : il écoute sur un socket unix et Zenytt l'interroge à travers SSH.",
       "Il tourne sous un utilisateur dédié, avec un service systemd durci et 64 Mo de mémoire au maximum.",
@@ -425,7 +431,7 @@ export const GUIDES: Guide[] = [
     ],
     troubleshooting: [
       { symptom: "Le service ne démarre pas", answer: "Regarder la raison exacte dans le journal :", command: "journalctl -u zenyttd -n 30 --no-pager", sudo: true },
-      { symptom: "Aucune alerte ne part", answer: "Vérifier la destination (webhook, ntfy, Discord) depuis Supervision → Alertes et agent : un bouton envoie un message de test." },
+      { symptom: "Aucune alerte ne part", answer: "Vérifier la destination (webhook, ntfy, Discord) depuis Supervision › Vue d'ensemble › Alertes (« Régler… ») : un bouton envoie un message de test." },
     ],
   },
   {
@@ -463,14 +469,14 @@ export const GUIDES: Guide[] = [
     id: "security",
     title: "Audit de sécurité et corrections",
     topic: "securite",
-    section: "system",
+    section: "monitoring",
     tab: "security",
     summary: "État de SSH, du pare-feu, de fail2ban, des mises à jour, des ports exposés et des comptes privilégiés, avec des corrections guidées.",
     how: [
       "L'audit est en lecture seule : rien n'est modifié sans ton accord explicite.",
       "Avant de toucher à SSH ou au pare-feu, Zenytt garde une connexion de contrôle ouverte ; si la modification te coupe l'accès, elle est annulée automatiquement.",
       "Une alerte qui ne te concerne pas peut être ignorée : elle passe dans les archivées, avec la raison.",
-      "Tout se trouve dans Système › Sécurité : audit, pare-feu (règles), fail2ban (prisons, bannissements en cours) et accès SSH. Le correctif « mises à jour en attente » renvoie vers l'onglet Mises à jour.",
+      "Tout est dans Supervision › Sécurité et mises à jour : le score en tête (« Voir les constats » ouvre la liste complète, à corriger ou ignorer), puis les mises à jour, fail2ban (prisons, bannissements en cours), le pare-feu (règles) et les accès SSH. Les constats prioritaires remontent aussi dans « À traiter » de la vue d'ensemble.",
       "fail2ban → Réglages : durée de bannissement, nombre d'échecs et fenêtre par défaut ou par jail, bannissement progressif, jails à activer (recidive, nginx…). Zenytt les écrit dans son propre fichier, teste la configuration et la restaure si fail2ban la refuse.",
     ],
     requirements: ["un mot de passe sudo pour appliquer les corrections", "ufw ou firewalld, fail2ban"],
@@ -488,7 +494,8 @@ export const GUIDES: Guide[] = [
     id: "tunnels",
     title: "Tunnels : joindre un service sans l'exposer",
     topic: "securite",
-    section: "tunnels",
+    section: "network",
+    tab: "tunnels",
     summary: "Un port du serveur devient accessible sur ton PC en 127.0.0.1, à travers la connexion SSH. Le service reste invisible depuis Internet.",
     how: [
       "Zenytt n'écoute que sur 127.0.0.1 : le tunnel n'est pas partagé avec ton réseau local.",
@@ -507,7 +514,8 @@ export const GUIDES: Guide[] = [
     id: "mesh",
     title: "Réseau privé entre serveurs",
     topic: "securite",
-    section: "mesh",
+    section: "network",
+    tab: "mesh",
     summary: "Relie des serveurs de différents hébergeurs comme s'ils étaient sur le même réseau local, chiffré par WireGuard : une base de données joignable par ton app sans être exposée sur Internet.",
     automatic: "Zenytt installe WireGuard, fait générer une clé par chaque serveur, choisit un sous-réseau libre, attribue les adresses, ouvre le port UDP dans ufw ou firewalld et relie tous les serveurs entre eux.",
     how: [
@@ -542,6 +550,7 @@ export const GUIDES: Guide[] = [
     title: "Bureau à distance (RDP, VNC, SPICE)",
     topic: "securite",
     section: "servers",
+    tab: "desktops",
     summary: "Ouvrir la session graphique d'une machine Windows (RDP), d'un bureau Linux, d'un Raspberry Pi ou d'un Mac (VNC) dans Zenytt, et la console d'une VM QEMU/KVM (SPICE).",
     how: [
       "La session s'affiche dans Zenytt : le client RDP est intégré à l'app, rien n'est installé sur la machine distante.",
@@ -659,7 +668,7 @@ export const GUIDES: Guide[] = [
     ],
     requirements: ["une clé d'API (Claude ou service compatible OpenAI), ou un modèle local (Ollama, LM Studio)"],
     steps: [
-      { text: "Réglages → Assistant IA : choisir le fournisseur et coller la clé" },
+      { text: "Réglages → IA : choisir le fournisseur et coller la clé" },
       { text: "Pour un modèle local, vérifier qu'il répond", command: "curl -fsS http://localhost:11434/api/tags" },
       { text: "Ouvrir le panneau avec Ctrl+I" },
     ],

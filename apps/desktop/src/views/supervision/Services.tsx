@@ -1,18 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+// Services systemd : filtre, inactifs masqués, en échec d'abord, actions ; un clic ouvre le journal.
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { Play, RotateCw, ScrollText, Search, Square } from "lucide-react";
 import { api, errorMessage, type Service } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
-import { Badge, Button, Checkbox, DataTable, Drawer, EmptyState, IconButton, Input, Loading, type Column } from "../../components/ui";
-import { useCachedState } from "../../lib/cache";
+import { Badge, Checkbox, DataTable, EmptyState, IconButton, Input, Loading, type Column } from "../../components/ui";
+import { openLogs } from "../../lib/shell";
 import { useAutoRefresh } from "../../lib/refresh";
 
-export default function Services({ serverId, onCount }: { serverId: string; onCount?: (n: number) => void }) {
+export type ServiceList = Service[] | null | undefined;
+
+/** `list` : `undefined` en lecture, `null` sans systemd. Partagée avec la page (compteur « en échec »). */
+export default function Services({ serverId, list, setList, extra }: { serverId: string; list: ServiceList; setList: Dispatch<SetStateAction<ServiceList>>; extra?: ReactNode }) {
   const { ask, notify } = useAppPick("ask", "notify");
-  const [list, setList] = useCachedState<Service[] | null | undefined>(`services:${serverId}`, undefined);
   const [filter, setFilter] = useState("");
   const [onlyActive, setOnlyActive] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [logsOf, setLogsOf] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -20,13 +22,14 @@ export default function Services({ serverId, onCount }: { serverId: string; onCo
     } catch (e) {
       notify(errorMessage(e), "error");
     }
-  }, [serverId, notify]);
+  }, [serverId, notify, setList]);
 
   useEffect(() => {
     void load();
   }, [load]);
   useAutoRefresh((auto) => (auto ? api.services(serverId).then(setList, () => {}) : load()), { serverId });
-  useEffect(() => onCount?.(list?.filter((s) => s.active === "active").length ?? 0), [list, onCount]);
+
+  const logsOf = (unit: string) => openLogs({ serverId, kind: "service", name: unit.replace(/\.service$/, ""), sources: [{ kind: "unit", name: unit }] });
 
   const rows = useMemo(() => {
     const f = filter.toLowerCase();
@@ -90,13 +93,17 @@ export default function Services({ serverId, onCount }: { serverId: string; onCo
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-3 border-b border-border px-7 py-2.5">
-        <label className="relative w-80">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-2">
+        <h2 className="text-[13px] font-semibold">
+          Services
+          {failed > 0 ? <span className="ml-1 font-normal text-danger">· {failed} en échec</span> : list && <span className="ml-1 font-normal text-faint">· {list.length}</span>}
+        </h2>
+        <label className="relative w-64 min-w-40">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />
           <Input className="pl-8" placeholder="Filtrer les services" value={filter} onChange={(e) => setFilter(e.target.value)} />
         </label>
         <Checkbox checked={onlyActive} onChange={setOnlyActive} label="Masquer les inactifs non activés" />
-        {failed > 0 && <Badge tone="danger">{failed} en échec</Badge>}
+        <span className="ml-auto">{extra}</span>
       </div>
       {list === undefined ? (
         <div className="p-7">
@@ -110,7 +117,7 @@ export default function Services({ serverId, onCount }: { serverId: string; onCo
           columns={columns}
           rowHeight={38}
           initialSort={{ key: "state", dir: "asc" }}
-          onRowDoubleClick={(s) => setLogsOf(s.unit)}
+          onRowClick={(s) => logsOf(s.unit)}
           actionsWidth={76}
         rowActions={(s) =>
             s.active === "active" ? (
@@ -131,37 +138,11 @@ export default function Services({ serverId, onCount }: { serverId: string; onCo
                 ]
               : [{ label: "Démarrer", icon: <Play size={14} />, onClick: () => void act(s, "start", "Démarrer") }]),
             "separator" as const,
-            { label: "Journaux", icon: <ScrollText size={14} />, onClick: () => setLogsOf(s.unit) },
+            { label: "Journaux", icon: <ScrollText size={14} />, onClick: () => logsOf(s.unit) },
           ]}
           empty={filter ? "Aucun service ne correspond." : "Aucun service."}
         />
       )}
-      {logsOf && <LogsDrawer serverId={serverId} unit={logsOf} onClose={() => setLogsOf(null)} />}
     </div>
-  );
-}
-
-function LogsDrawer({ serverId, unit, onClose }: { serverId: string; unit: string; onClose: () => void }) {
-  const [text, setText] = useState<string | null>(null);
-  const [lines, setLines] = useState(300);
-  useEffect(() => {
-    setText(null);
-    api.serviceLogs(serverId, unit, lines).then(setText, (e) => setText(errorMessage(e)));
-  }, [serverId, unit, lines]);
-  return (
-    <Drawer
-      title={`Journaux de ${unit}`}
-      subtitle={`journalctl -u ${unit} · ${lines} dernières lignes`}
-      width={720}
-      modal={false}
-      onClose={onClose}
-      actions={
-        <Button size="sm" onClick={() => setLines((l) => l + 700)}>
-          Charger plus
-        </Button>
-      }
-    >
-      {text === null ? <Loading rows={10} /> : <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap select-text">{text}</pre>}
-    </Drawer>
   );
 }

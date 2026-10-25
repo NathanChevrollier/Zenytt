@@ -15,7 +15,9 @@ export default function GuideDialog() {
   return (
     <Modal
       title={fiche.title}
-      width="max-w-2xl"
+      description={fiche.summary}
+      // Assez large pour les deux colonnes de la fiche (lecture | prérequis et pannes).
+      width="max-w-5xl"
       onClose={() => openGuide(null)}
       footer={
         <Button
@@ -30,8 +32,7 @@ export default function GuideDialog() {
         </Button>
       }
     >
-      <p className="mb-4 text-[13px] leading-relaxed text-muted">{fiche.summary}</p>
-      <GuideContent guide={fiche} showOpen={false} />
+      <GuideContent guide={fiche} />
     </Modal>
   );
 }

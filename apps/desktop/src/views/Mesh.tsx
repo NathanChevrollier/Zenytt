@@ -1,6 +1,6 @@
 // Réseau privé : des serveurs de différents hébergeurs reliés par WireGuard, chacun avec une
 // adresse privée en 10.x. Zenytt orchestre par SSH ; l'état des liens est lu sur chaque serveur.
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, Network, Plus, RefreshCw, Trash2, Wrench } from "lucide-react";
 import { api, errorMessage, type MeshMemberStatus, type MeshNetwork, type MeshReport } from "../lib/api";
 import { writeClipboard } from "../lib/clipboard";
@@ -11,6 +11,7 @@ import { useAppPick } from "../lib/store";
 import { Badge, Button, EmptyState, IconButton, MenuButton, ResultBanner, Section, StatusDot } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 import MeshCreateDialog from "./mesh/MeshCreateDialog";
+import type { NetworkPage } from "./Network";
 
 /** Au-delà, un lien jamais établi n'est plus « en cours de liaison » : on explique quoi vérifier. */
 const HINT_AFTER_MS = 60_000;
@@ -22,7 +23,7 @@ const LINK_LOOK: Record<LinkState | "absent", { dot: string; label: string }> = 
   absent: { dot: "border border-dashed border-faint", label: "pas de lien direct (deux serveurs derrière un NAT)" },
 };
 
-export default function MeshView() {
+export default function MeshView({ page }: { page: NetworkPage }) {
   const { servers, notify, ask } = useAppPick("servers", "notify", "ask");
   const [networks, setNetworks] = useCachedState<MeshNetwork[]>("mesh:list", []);
   const [statuses, setStatuses] = useState<Record<string, MeshMemberStatus[]>>({});
@@ -39,6 +40,7 @@ export default function MeshView() {
     setStatuses(Object.fromEntries(entries));
   }, [setNetworks]);
   usePolling(refreshStatuses, 10_000, []);
+  useEffect(() => page.onCount(networks.length), [networks.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const serverName = (id: string) => servers.find((s) => s.id === id)?.name ?? "serveur supprimé";
 
@@ -85,7 +87,10 @@ export default function MeshView() {
 
   return (
     <PageLayout
-      title="Réseau privé"
+      title="Réseau"
+      tabs={page.tabs}
+      activeTab={page.activeTab}
+      onTab={page.onTab}
       subtitle="Relie tes serveurs de différents hébergeurs dans un réseau privé chiffré (WireGuard), sans rien exposer sur Internet."
       guide="mesh"
       actions={

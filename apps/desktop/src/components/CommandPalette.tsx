@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Box, Cable, CircleHelp, FolderOpen, Globe, History, Layers, Monitor, Plug, Power, RotateCw, ScrollText, Search, Server, ShieldCheck, SquareTerminal, Star, Stethoscope, Zap } from "lucide-react";
+import { Box, Cable, CircleHelp, FolderOpen, Globe, History, Layers, Monitor, Network, Plug, Power, RotateCw, ScrollText, Search, Server, ShieldCheck, SquareTerminal, Star, Stethoscope, Zap } from "lucide-react";
 import { useDoctor } from "./ConnectionDoctor";
 import { focusedTerminal } from "../lib/focus";
 import { api, errorMessage, hasShell, shellQuote, type DesktopView, type DockerOverview, type Snippet, type TunnelView, type WebEngine } from "../lib/api";
@@ -13,6 +13,7 @@ import { navigate, useShell } from "../lib/shell";
 import { peekCached } from "../lib/cache";
 import { display, shortcutOf } from "../lib/shortcuts";
 import { Kbd } from "./ui";
+import { openContainerLogs } from "../views/docker/shared";
 
 type Group = "Chemins" | "Navigation" | "Serveurs" | "Conteneurs" | "Projets compose" | "Actions" | "Sites" | "Fragments" | "Raccourcis" | "Tunnels" | "Bureaux à distance" | "Historique" | "Aide";
 
@@ -36,10 +37,15 @@ const SCOPE_GROUPS: Record<Exclude<ScopeKey, "">, Group[]> = {
 /** Ordre d'affichage des groupes quand rien n'est tapé ou sans préférence de score. */
 const GROUP_ORDER: Group[] = ["Chemins", "Actions", "Navigation", "Serveurs", "Conteneurs", "Projets compose", "Sites", "Fragments", "Raccourcis", "Tunnels", "Bureaux à distance", "Historique", "Aide"];
 
+const SUPERVISION_ALIASES = "supervision monitoring système systeme machine sécurité securite";
+const NETWORK_ALIASES = "réseau reseau tunnels tunnel ssh réseau privé mesh wireguard vpn";
+
 interface Action {
   id: string;
   label: string;
   hint?: string;
+  /** Mots cherchés en plus du libellé (anciens noms d'une section…). */
+  keywords?: string;
   icon: ReactNode;
   group: Group;
   run: () => void | Promise<void>;
@@ -104,11 +110,36 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
   }, [server?.id, server?.connected]);
 
   const actions = useMemo<Action[]>(() => {
-    const list: Action[] = SECTIONS.filter((s) => hasShell(server) || !needsShell(s.id)).map((s) => ({ group: "Navigation", id: `go:${s.id}`, label: `Aller à ${s.label}`, icon: <s.icon size={15} />, run: () => setSection(s.id) }));
-    // La sécurité vit dans Système : ses sous-parties restent trouvables par leur nom.
+    const list: Action[] = SECTIONS.filter((s) => hasShell(server) || !needsShell(s.id)).map((s) => ({
+      group: "Navigation",
+      id: `go:${s.id}`,
+      label: `Aller à ${s.label}`,
+      // Supervision a absorbé Système et Sécurité : leurs anciens noms y mènent toujours.
+      keywords: s.id === "monitoring" ? SUPERVISION_ALIASES : s.id === "network" ? NETWORK_ALIASES : undefined,
+      icon: <s.icon size={15} />,
+      run: () => setSection(s.id),
+    }));
+    // Les parties de Supervision restent trouvables par leur nom.
     if (hasShell(server))
-      for (const [tab, label] of [["security", "Sécurité"], ["security/firewall", "Pare-feu"], ["security/fail2ban", "fail2ban"], ["security/access", "Accès SSH"]])
-        list.push({ group: "Navigation", id: `go:system:${tab}`, label: `Aller à Système › ${label}`, icon: <ShieldCheck size={15} />, run: () => navigate("system", tab) });
+      for (const [tab, label] of [
+        ["activity", "Activité (services, tâches planifiées)"],
+        ["processes", "Processus"],
+        ["schedule", "Tâches planifiées"],
+        ["alerts", "Alertes et agent"],
+        ["provider", "Hébergeur"],
+        ["security", "Sécurité et mises à jour"],
+        ["security/audit", "Audit de sécurité"],
+        ["software", "Logiciels et mises à jour"],
+        ["security/firewall", "Pare-feu"],
+        ["security/fail2ban", "fail2ban"],
+        ["security/access", "Accès SSH"],
+      ])
+        list.push({ group: "Navigation", id: `go:monitoring:${tab}`, label: `Aller à Supervision › ${label}`, keywords: SUPERVISION_ALIASES, icon: <ShieldCheck size={15} />, run: () => navigate("monitoring", tab) });
+    // Réseau a absorbé Tunnels et Réseau privé : chaque onglet reste joignable directement.
+    list.push(
+      { group: "Navigation", id: "go:network:tunnels", label: "Aller à Réseau › Tunnels SSH", keywords: NETWORK_ALIASES, icon: <Cable size={15} />, run: () => navigate("network", "tunnels") },
+      { group: "Navigation", id: "go:network:mesh", label: "Aller à Réseau › Réseau privé", keywords: NETWORK_ALIASES, icon: <Network size={15} />, run: () => navigate("network", "mesh") },
+    );
     // Les fiches d'aide sont cherchables ici : « tmux », « compose », « restic »… mènent droit au mode d'emploi.
     for (const g of GUIDES) {
       list.push({ group: "Aide", id: `guide:${g.id}`, label: `Aide : ${g.title}`, hint: g.summary, icon: <CircleHelp size={15} />, run: () => useApp.getState().openHelpPage(g.id) });
@@ -164,7 +195,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
         },
       });
       for (const c of docker?.containers ?? []) {
-        list.push({ group: "Conteneurs", id: `logs:${c.name}`, label: `Logs de ${c.name}`, hint: server.name, icon: <ScrollText size={15} />, run: () => openTab(sid, { title: `${c.name} (logs)`, command: `${dk} logs -f --tail 300 ${shellQuote(c.id)}` }) });
+        list.push({ group: "Conteneurs", id: `logs:${c.name}`, label: `Logs de ${c.name}`, hint: server.name, icon: <ScrollText size={15} />, run: () => openContainerLogs(sid, dk, c) });
         if (c.state === "running") {
           list.push({
             group: "Conteneurs", id: `shell:${c.name}`,
@@ -291,7 +322,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
       return [...pool].sort((a, b) => rank(a) - rank(b)).slice(0, 40);
     }
     return pool
-      .map((a) => ({ a, s: score(query, `${a.label} ${a.hint ?? ""}`) + (recent.includes(a.id) ? 5 : 0) + (a.group === "Chemins" ? 1000 : 0) }))
+      .map((a) => ({ a, s: score(query, `${a.label} ${a.hint ?? ""} ${a.keywords ?? ""}`) + (recent.includes(a.id) ? 5 : 0) + (a.group === "Chemins" ? 1000 : 0) }))
       .filter((x) => x.s > 0)
       .sort((x, y) => y.s - x.s)
       .slice(0, 40)
