@@ -77,4 +77,21 @@ describe("état enregistré d'une ancienne version", () => {
     await useApp.getState().hydrate(Promise.resolve({ v: 1, section: "security" }));
     expect(useApp.getState().section).toBe("monitoring");
   });
+
+  it("Tunnels et Réseau privé mènent à Réseau, sur le bon onglet", async () => {
+    const { useShell } = await import("./shell");
+    await useApp.getState().hydrate(Promise.resolve({ v: 1, section: "mesh", recent: ["go:mesh", "go:tunnels", "go:docker"] }));
+    expect(useApp.getState().section).toBe("network");
+    expect(useApp.getState().recent).toEqual(["go:network:mesh", "go:network", "go:docker"]);
+    await vi.waitFor(() => expect(useShell.getState().intent).toEqual({ section: "network", tab: "mesh" }));
+    await useApp.getState().hydrate(Promise.resolve({ v: 1, section: "tunnels" }));
+    expect(useApp.getState().section).toBe("network");
+  });
+
+  it("Réseau n'est masqué que si Tunnels et Réseau privé l'étaient tous les deux", async () => {
+    await useApp.getState().hydrate(Promise.resolve({ v: 1, section: "home", settings: { hiddenSections: ["tunnels", "docker"] } }));
+    expect(useApp.getState().settings.hiddenSections).toEqual(["docker"]);
+    await useApp.getState().hydrate(Promise.resolve({ v: 1, section: "home", settings: { hiddenSections: ["mesh", "tunnels"] } }));
+    expect(useApp.getState().settings.hiddenSections).toEqual(["network"]);
+  });
 });

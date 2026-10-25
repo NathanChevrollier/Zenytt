@@ -493,7 +493,8 @@ export const GUIDES: Guide[] = [
     id: "tunnels",
     title: "Tunnels : joindre un service sans l'exposer",
     topic: "securite",
-    section: "tunnels",
+    section: "network",
+    tab: "tunnels",
     summary: "Un port du serveur devient accessible sur ton PC en 127.0.0.1, à travers la connexion SSH. Le service reste invisible depuis Internet.",
     how: [
       "Zenytt n'écoute que sur 127.0.0.1 : le tunnel n'est pas partagé avec ton réseau local.",
@@ -512,7 +513,8 @@ export const GUIDES: Guide[] = [
     id: "mesh",
     title: "Réseau privé entre serveurs",
     topic: "securite",
-    section: "mesh",
+    section: "network",
+    tab: "mesh",
     summary: "Relie des serveurs de différents hébergeurs comme s'ils étaient sur le même réseau local, chiffré par WireGuard : une base de données joignable par ton app sans être exposée sur Internet.",
     automatic: "Zenytt installe WireGuard, fait générer une clé par chaque serveur, choisit un sous-réseau libre, attribue les adresses, ouvre le port UDP dans ufw ou firewalld et relie tous les serveurs entre eux.",
     how: [

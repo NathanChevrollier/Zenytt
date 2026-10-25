@@ -8,6 +8,9 @@ import { GUIDES, TOPICS, type Guide } from "../lib/guides";
 import { useAppPick } from "../lib/store";
 import { navigate } from "../lib/shell";
 import { SECTIONS } from "../sections";
+
+/** Onglet nommé dans « Ouvrir … » quand la fiche mène à une partie précise d'une page. */
+const TAB_LABELS: Record<string, string> = { security: "Sécurité", tunnels: "Tunnels SSH", mesh: "Réseau privé" };
 import PageLayout from "../components/PageLayout";
 import GuideContent from "../components/GuideContent";
 import { SPONSORS_URL } from "../lib/links";
@@ -129,7 +132,8 @@ export default function HelpView() {
               </div>
               {section && (
                 <Button size="sm" className="shrink-0" icon={<ArrowRight size={13} />} onClick={() => navigate(section.id, selected.tab)}>
-                  Ouvrir {selected.tab === "security" ? "Supervision › Sécurité" : section.label}
+                  Ouvrir {section.label}
+                  {selected.tab && TAB_LABELS[selected.tab] && ` › ${TAB_LABELS[selected.tab]}`}
                 </Button>
               )}
             </header>

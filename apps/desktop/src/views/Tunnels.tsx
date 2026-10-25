@@ -1,5 +1,5 @@
 // Tunnels SSH : un port de 127.0.0.1 sur le PC relayé vers un service du serveur.
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Cable, CopyPlus, ExternalLink, Pencil, Play, Plus, Search, Square, Terminal as TerminalIcon, Trash2 } from "lucide-react";
 import { api, errorMessage, type TunnelDef, type TunnelView } from "../lib/api";
@@ -9,6 +9,7 @@ import { Badge, Button, Card, Checkbox, DataTable, EmptyState, Field, IconButton
 import PageLayout from "../components/PageLayout";
 import { usePolling } from "../lib/poll";
 import { useCachedState } from "../lib/cache";
+import type { NetworkPage } from "./Network";
 
 /** Services courants : un clic règle le port distant et propose un nom. */
 const PRESETS = [
@@ -41,7 +42,7 @@ function connectionString(t: Pick<TunnelDef, "localPort" | "remotePort">): { tex
   return { label: "Adresse", text: `127.0.0.1:${p}` };
 }
 
-export default function TunnelsView() {
+export default function TunnelsView({ page }: { page: NetworkPage }) {
   const { servers, notify, ask, activeServerId } = useAppPick("servers", "notify", "ask", "activeServerId");
   const [list, setList] = useCachedState<TunnelView[]>("tunnels:list", []);
   const [editing, setEditing] = useState<TunnelDef | null>(null);
@@ -50,6 +51,7 @@ export default function TunnelsView() {
 
   const load = useCallback(() => api.tunnels().then(setList), []);
   usePolling(load, 3000, []);
+  useEffect(() => page.onCount(list.length), [list.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const run = async (fn: () => Promise<unknown>) => {
     try {
@@ -164,7 +166,10 @@ export default function TunnelsView() {
 
   return (
     <PageLayout
-      title="Tunnels SSH"
+      title="Réseau"
+      tabs={page.tabs}
+      activeTab={page.activeTab}
+      onTab={page.onTab}
       subtitle="Accède depuis ton PC à un service du serveur sans l'exposer sur Internet."
       guide="tunnels"
       scroll={list.length === 0}

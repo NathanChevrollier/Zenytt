@@ -16,7 +16,7 @@ export async function tunnelTo(serverId: string, c: Container, remotePort: numbe
     const id = await api.tunnelSave({ id: "", serverId, name: `${c.name}:${remotePort}`, localPort, remoteHost: "127.0.0.1", remotePort, autoStart: false });
     await api.tunnelStart(id);
     void writeClipboard(`127.0.0.1:${localPort}`);
-    notify(`${c.name} accessible sur 127.0.0.1:${localPort} (adresse copiée). Gère-le dans l'onglet Tunnels.`, "success");
+    notify(`${c.name} accessible sur 127.0.0.1:${localPort} (adresse copiée). Gère-le dans Réseau › Tunnels SSH.`, "success");
   } catch (e) {
     notify(errorMessage(e), "error");
   }

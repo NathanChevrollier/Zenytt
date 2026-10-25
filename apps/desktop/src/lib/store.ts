@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorMessage, hasShell, type ServerView } from "./api";
-import type { SectionId } from "../sections";
+import { MOVED_SECTIONS, type SectionId } from "../sections";
 import type { GuideId } from "./guides";
 import type { ThemeSetting } from "./theme";
 
@@ -238,8 +238,14 @@ function readActiveServer(): string | null {
   }
 }
 
-/** Sections disparues (fusionnées dans Supervision), retirées de l'état enregistré. */
-const LEGACY_SECTIONS: string[] = ["system", "security"];
+/**
+ * Onglets masqués d'une ancienne version : les sections disparues sont retirées ; Réseau reste
+ * masqué seulement si Tunnels et Réseau privé l'étaient tous les deux.
+ */
+function migrateHidden(ids: string[]): SectionId[] {
+  const kept = ids.filter((id) => !(id in MOVED_SECTIONS)) as SectionId[];
+  return ids.includes("tunnels") && ids.includes("mesh") && !kept.includes("network") ? [...kept, "network"] : kept;
+}
 
 export const useApp = create<State>((set, get) => ({
   hydrated: false,
@@ -247,12 +253,12 @@ export const useApp = create<State>((set, get) => ({
     try {
       const raw = (await (saved ?? api.uiStateGet())) as Partial<Persisted> | null;
       if (raw && raw.v === 1) {
-        // Anciennes sections « Sécurité » puis « Système » : fusionnées dans Supervision.
-        const legacy = raw.section as string | undefined;
-        if (legacy === "security") void import("./shell").then(({ useShell }) => useShell.setState({ intent: { section: "monitoring", tab: "security" } }));
-        const section = legacy === "security" || legacy === "system" ? "monitoring" : (raw.section ?? "servers");
+        // Anciennes sections (Système, Sécurité, Tunnels, Réseau privé) : leur page fusionnée, sur le bon onglet.
+        const moved = MOVED_SECTIONS[raw.section as string];
+        if (moved?.tab) void import("./shell").then(({ useShell }) => useShell.setState({ intent: { section: moved.section, tab: moved.tab! } }));
+        const section = moved?.section ?? raw.section ?? "servers";
         const saved = raw.settings;
-        if (saved?.hiddenSections) saved.hiddenSections = saved.hiddenSections.filter((id) => !LEGACY_SECTIONS.includes(id));
+        if (saved?.hiddenSections) saved.hiddenSections = migrateHidden(saved.hiddenSections);
         set({
           section,
           // Les sessions partagées ne survivent pas à la fermeture de l'app.
@@ -260,7 +266,7 @@ export const useApp = create<State>((set, get) => ({
           activeTab: raw.activeTab ?? null,
           filesPaths: raw.filesPaths ?? {},
           settings: { ...get().settings, ...raw.settings },
-          recent: raw.recent ?? [],
+          recent: (raw.recent ?? []).map((id) => (id === "go:tunnels" ? "go:network" : id === "go:mesh" ? "go:network:mesh" : id)),
           bookmarks: raw.bookmarks ?? {},
           folders: { ...NO_FOLDERS, ...raw.folders },
         });
