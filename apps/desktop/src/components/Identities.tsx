@@ -71,7 +71,7 @@ export function IdentitySuggestions({ filter, onPick, onClose, index = -1 }: { f
   );
 }
 
-/** Onglet « Identifiants » de la page Serveurs. */
+/** Identifiants de la banque, dans le tiroir « Identifiants » de la page Serveurs. */
 export function IdentitiesPanel({ creating, onCreatingChange }: { creating: boolean; onCreatingChange: (v: boolean) => void }) {
   const { list, reload } = useIdentities();
   const { notify, ask } = useApp.getState();

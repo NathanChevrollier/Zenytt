@@ -791,6 +791,20 @@ mod tests {
     }
 
     #[test]
+    fn desktop_folder_survives_an_encrypted_export() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let source = Store::open(a.path());
+        source.write(|d| d.desktops.push(RemoteDesktop { group: Some("Maison".into()), ..desktop("d1", "pc.lan", "bob") })).unwrap();
+        let text = export(&source, "secret", false).unwrap();
+        let target = Store::open(b.path());
+        import(&target, &text, "secret").unwrap();
+        assert_eq!(target.read(|d| d.desktops[0].group.clone()), Some("Maison".into()));
+        // Un client plus ancien ignore les champs qu'il ne connaît pas au lieu de refuser le bureau.
+        let newer = r#"{"id":"d2","name":"PC","host":"h","username":"u","group":"Maison","champFutur":true}"#;
+        assert!(serde_json::from_str::<RemoteDesktop>(newer).is_ok());
+    }
+
+    #[test]
     fn import_does_not_redirect_a_desktop_or_registry() {
         let b = tempfile::tempdir().unwrap();
         let target = Store::open(b.path());
