@@ -1,21 +1,47 @@
 import { useMemo, useState } from "react";
-import { Cable, FileSearch, FolderInput, FolderPlus, Lock, Pause, Pencil, Play, RotateCw, ScrollText, Search, Square, SquareTerminal, Trash2 } from "lucide-react";
+import { Cable, Lock, Pencil, Play, RotateCw, ScrollText, SquareTerminal, Trash2 } from "lucide-react";
 import { api, errorMessage, type ComposeProject, type Container, type DockerOverview } from "../../lib/api";
 import { containerKey } from "../../lib/compose";
 import { useApp } from "../../lib/store";
 import { startDrag } from "../../lib/drag";
 import { askFolderName, toggleCollapsed } from "../../components/Folders";
 import { tunnelTo, RestrictPortDialog } from "../../components/DockerExtras";
-import { Badge, DataTable, IconButton, Input, MenuButton, Segmented, Select, StatusDot, useContextMenu, type Column, type MenuItem } from "../../components/ui";
+import { Badge, DataTable, IconButton, MenuButton, StatusDot, useContextMenu, type Column } from "../../components/ui";
 import ContainerDrawer from "./ContainerDrawer";
 import ConditionBadge from "./ConditionBadge";
 import { useContainerActions, useContainerFolders, useContainerStats } from "./shared";
 import PortChips, { isExposed } from "./PortChips";
+import { containerMenu } from "./containerMenu";
 
-type GroupBy = "project" | "folder" | "none";
-type StateFilter = "all" | "running" | "stopped";
+export type StateFilter = "all" | "running" | "stopped";
 
-export default function Containers({ serverId, data, docker, reload }: { serverId: string; data: DockerOverview; docker: string; reload: () => Promise<void> }) {
+/** Filtre texte (nom, image, projet, port) et état d'un conteneur, partagés par le tableau et les cartes. */
+export function containerMatches(c: Container, filter: string, state: StateFilter) {
+  const f = filter.toLowerCase();
+  return (
+    (state === "all" || (state === "running" ? c.state === "running" : c.state !== "running")) &&
+    (!f || c.name.toLowerCase().includes(f) || c.image.toLowerCase().includes(f) || (c.composeProject ?? "").toLowerCase().includes(f) || c.ports.some((p) => String(p.hostPort).includes(f)))
+  );
+}
+
+/** Tableau des conteneurs (affichages « par dossier » et « sans groupe » de l'onglet Applications). */
+export default function Containers({
+  serverId,
+  data,
+  docker,
+  reload,
+  filter,
+  state,
+  groupBy,
+}: {
+  serverId: string;
+  data: DockerOverview;
+  docker: string;
+  reload: () => Promise<void>;
+  filter: string;
+  state: StateFilter;
+  groupBy: "folder" | "none";
+}) {
   const stats = useContainerStats(serverId);
   const { busy, act: runAction, shell, logs } = useContainerActions(serverId, docker, reload, data.projects);
   const occasional = new Set(data.occasional);
@@ -36,39 +62,15 @@ export default function Containers({ serverId, data, docker, reload }: { serverI
       useApp.getState().notify(errorMessage(e), "error");
     }
   };
-  const [filter, setFilter] = useState("");
-  const [state, setState] = useState<StateFilter>("all");
-  const [groupBy, setGroupBy] = useState<GroupBy>(() => {
-    try {
-      const v = localStorage.getItem("zenytt.docker.groupBy");
-      return v === "folder" || v === "none" ? v : "project";
-    } catch {
-      return "project";
-    }
-  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [restrict, setRestrict] = useState<{ project: ComposeProject; port: number } | null>(null);
   const collapsed = useApp((s) => s.folders.collapsed);
   const folders = useContainerFolders(serverId);
   const portMenu = useContextMenu();
 
-  const setGroup = (g: GroupBy) => {
-    setGroupBy(g);
-    try {
-      localStorage.setItem("zenytt.docker.groupBy", g);
-    } catch {
-      /* préférence non retenue */
-    }
-  };
-
-  const groupOf = (c: Container) => (groupBy === "project" ? (c.composeProject ?? "") : groupBy === "folder" ? folders.folderOf(c.name) : "");
+  const groupOf = (c: Container) => (groupBy === "folder" ? folders.folderOf(c.name) : "");
   const rows = useMemo(() => {
-    const f = filter.toLowerCase();
-    const list = data.containers.filter(
-      (c) =>
-        (state === "all" || (state === "running" ? c.state === "running" : c.state !== "running")) &&
-        (!f || c.name.toLowerCase().includes(f) || c.image.toLowerCase().includes(f) || (c.composeProject ?? "").toLowerCase().includes(f) || c.ports.some((p) => String(p.hostPort).includes(f))),
-    );
+    const list = data.containers.filter((c) => containerMatches(c, filter, state));
     if (groupBy === "none") return list;
     // Groupes nommés d'abord (ordre alphabétique), « sans groupe » à la fin.
     return [...list].sort((a, b) => {
@@ -85,38 +87,7 @@ export default function Containers({ serverId, data, docker, reload }: { serverI
   };
   const projectOf = (c: Container) => data.projects.find((x) => x.name === c.composeProject);
 
-  const moveItems = (c: Container): MenuItem[] => [
-    { heading: "Ranger dans un dossier (local)" },
-    ...folders.names.filter((f) => f !== folders.folderOf(c.name)).map((f) => ({ label: f, icon: <FolderInput size={14} />, onClick: () => folders.move([c.name], f) })),
-    ...(folders.folderOf(c.name) ? [{ label: "Sortir du dossier", onClick: () => folders.move([c.name], null) }] : []),
-    {
-      label: "Nouveau dossier…",
-      icon: <FolderPlus size={14} />,
-      onClick: async () => {
-        const name = await askFolderName("Nouveau dossier de conteneurs");
-        if (name) folders.move([c.name], name);
-      },
-    },
-  ];
-
-  const rowMenu = (c: Container): MenuItem[] => {
-    const running = c.state === "running";
-    return [
-      ...(running
-        ? [
-            { label: "Redémarrer", icon: <RotateCw size={14} />, onClick: () => void act(c, "restart") },
-            { label: "Arrêter", icon: <Square size={13} />, onClick: () => void act(c, "stop") },
-            { label: "Mettre en pause", icon: <Pause size={14} />, onClick: () => void act(c, "pause") },
-            { label: "Shell", icon: <SquareTerminal size={14} />, onClick: () => shell(c) },
-          ]
-        : [{ label: c.state === "paused" ? "Reprendre" : "Démarrer", icon: <Play size={14} />, onClick: () => void act(c, c.state === "paused" ? "unpause" : "start") }]),
-      { label: "Logs en direct", icon: <ScrollText size={14} />, onClick: () => logs(c) },
-      { label: "Détails et inspect", icon: <FileSearch size={14} />, onClick: () => setSelectedId(c.id) },
-      "separator",
-      ...moveItems(c),
-      ...(!running ? (["separator", { label: "Supprimer…", icon: <Trash2 size={14} />, danger: true, onClick: () => void act(c, "remove") }] as MenuItem[]) : []),
-    ];
-  };
+  const rowMenu = (c: Container) => containerMenu(c, { act: (x, a) => void act(x, a), shell, logs, details: (x) => setSelectedId(x.id), folders });
 
   const columns: Column<Container>[] = [
     {
@@ -197,48 +168,10 @@ export default function Containers({ serverId, data, docker, reload }: { serverI
   ];
 
   const selected = data.containers.find((c) => c.id === selectedId);
-  const groupLabel = (k: string) => (groupBy === "project" ? k || "Sans projet compose" : k || "Sans dossier");
+  const groupLabel = (k: string) => k || "Sans dossier";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-7 py-2.5">
-        <label className="relative w-72">
-          <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />
-          <Input className="pl-8" placeholder="Filtrer : nom, image, projet, port" value={filter} onChange={(e) => setFilter(e.target.value)} />
-        </label>
-        <Segmented
-          label="État"
-          value={state}
-          onChange={setState}
-          options={[
-            { value: "all", label: "Tous" },
-            { value: "running", label: "En cours" },
-            { value: "stopped", label: "Arrêtés" },
-          ]}
-        />
-        <span className="ml-auto text-xs text-muted">Grouper par</span>
-        <Select<GroupBy>
-          className="w-44"
-          value={groupBy}
-          onChange={setGroup}
-          options={[
-            { value: "project", label: "Projet compose" },
-            { value: "folder", label: "Dossier (local)" },
-            { value: "none", label: "Aucun" },
-          ]}
-        />
-        {groupBy === "folder" && (
-          <IconButton
-            title="Nouveau dossier de conteneurs"
-            onClick={async () => {
-              const name = await askFolderName("Nouveau dossier de conteneurs");
-              if (name) folders.create(name);
-            }}
-          >
-            <FolderPlus size={15} />
-          </IconButton>
-        )}
-      </div>
       <DataTable
         className="min-h-0 flex-1"
         rows={rows}
@@ -286,7 +219,6 @@ export default function Containers({ serverId, data, docker, reload }: { serverI
                       <button type="button" onClick={() => toggleCollapsed(collapseKey)} aria-expanded={!isCollapsed} className="flex min-w-0 items-center gap-2">
                         <span className={`inline-block transition-transform ${isCollapsed ? "-rotate-90" : ""}`}>▾</span>
                         <span className={`truncate font-semibold ${k ? "text-fg" : ""}`}>{groupLabel(k)}</span>
-                        {groupBy === "project" && k && <span className="truncate font-mono text-[11px] text-faint">{data.projects.find((p) => p.name === k)?.configFiles.split(",")[0]}</span>}
                       </button>
                       <span className="ml-auto">
                         {run} / {list.length} en cours

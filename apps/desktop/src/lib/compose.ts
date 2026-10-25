@@ -94,3 +94,18 @@ export function memBytes(memUsage: string): number {
   const m = /^\s*([\d.]+)\s*([a-z]+)/i.exec(memUsage);
   return m ? Number(m[1]) * (SIZE_UNITS[m[2].toLowerCase()] ?? 0) : 0;
 }
+
+export type DockerTab = "apps" | "storage";
+
+/**
+ * Lien vers la page Docker (`navigate("docker", …)`), ancien ou nouveau : « containers » et « compose »
+ * sont réunis dans « apps », « registries » est devenu un tiroir ouvert par-dessus « apps ».
+ */
+export function resolveDockerLink(raw: string | null | undefined): { tab: DockerTab; registries: boolean } {
+  if (raw === "storage") return { tab: "storage", registries: false };
+  return { tab: "apps", registries: raw === "registries" };
+}
+
+/** Affichage de l'onglet Applications ; l'ancien regroupement par projet compose devient les cartes. */
+export type AppsView = "cards" | "folder" | "none";
+export const appsViewOf = (stored: string | null): AppsView => (stored === "folder" || stored === "none" ? stored : "cards");

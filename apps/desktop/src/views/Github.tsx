@@ -962,7 +962,7 @@ function ImageCard({ server, dep }: { server: ServerView; dep: GithubDeployment 
         {dep.containers.length === 0 && <li className="flex h-7 items-center text-xs text-faint">Aucun conteneur.</li>}
       </ul>
       <div className="flex items-center gap-1.5 border-t border-border px-2 py-1.5">
-        <Button size="sm" variant="ghost" icon={<Container size={13} />} onClick={() => navigate("docker", dep.project ? "compose" : "containers", server.id)}>
+        <Button size="sm" variant="ghost" icon={<Container size={13} />} onClick={() => navigate("docker", "apps", server.id)}>
           Voir dans Docker
         </Button>
         <span className="flex-1" />

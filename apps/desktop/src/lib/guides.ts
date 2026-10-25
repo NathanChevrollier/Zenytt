@@ -255,7 +255,8 @@ export const GUIDES: Guide[] = [
       "« Logs » (d'un conteneur, d'un projet compose ou d'un service systemd) ouvre un tiroir qui suit la sortie en direct : filtre, niveaux, pause, export, « Charger plus » et « Ouvrir dans Journaux ». Son menu ⋯ garde le suivi dans un onglet de terminal.",
       "« Restreindre les ports » réécrit les ports publiés en 127.0.0.1 : le service n'est plus joignable depuis Internet, on y accède ensuite par un tunnel.",
       "L'onglet « Images, volumes et nettoyage » mesure la taille réelle de chaque volume et signale ceux qu'aucun conteneur, même arrêté, n'utilise : le gain en octets est annoncé avant toute suppression.",
-      "L'onglet « Registres » range les identifiants de Docker Hub, GitHub Packages, GitLab, AWS ECR ou d'un registre privé dans le coffre du système, et connecte un serveur en un clic : le jeton part sur l'entrée standard de docker login, jamais dans une ligne de commande.",
+      "L'onglet « Applications » montre une carte par projet compose (ses actions dans l'en-tête, ses services dedans) et une carte « Hors compose » ; « Affichage » repasse au tableau des conteneurs, par dossier local ou sans groupe.",
+      "Le bouton « Registres » de l'en-tête range les identifiants de Docker Hub, GitHub Packages, GitLab, AWS ECR ou d'un registre privé dans le coffre du système, et connecte un serveur en un clic : le jeton part sur l'entrée standard de docker login, jamais dans une ligne de commande.",
     ],
     requirements: ["Docker ou Podman installé", "l'utilisateur dans le groupe docker, ou un mot de passe sudo dans le profil"],
     steps: [

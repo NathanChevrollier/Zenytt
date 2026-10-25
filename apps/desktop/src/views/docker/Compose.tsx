@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { Cable, ChevronRight, Tag, FileCode2, FolderSearch, GitBranch, Layers, Lock, Package, Play, Plus, Rocket, RotateCw, ScrollText, Square, SquareTerminal, UploadCloud } from "lucide-react";
+import { Box, Cable, ChevronRight, Tag, FileCode2, FolderSearch, GitBranch, Layers, Lock, Package, Play, Plus, Rocket, RotateCw, ScrollText, Square, SquareTerminal, UploadCloud } from "lucide-react";
 import { api, errorMessage, formatBytes, type ComposeProject, type Container, type DockerOverview } from "../../lib/api";
 import { useAppPick } from "../../lib/store";
 import { Badge, Button, IconButton, MenuButton, Modal, StatusDot, useContextMenu, type MenuItem } from "../../components/ui";
@@ -7,22 +7,26 @@ import { deployProject, GithubDeployDialog, RestrictPortDialog, tunnelTo } from 
 import ContainerDrawer from "./ContainerDrawer";
 import ConditionBadge from "./ConditionBadge";
 import PortChips, { isExposed } from "./PortChips";
-import { openComposeLogs, stateTone, useContainerActions, useContainerStats } from "./shared";
+import { openComposeLogs, stateTone, useContainerActions, useContainerFolders, useContainerStats } from "./shared";
+import { containerMatches, type StateFilter } from "./Containers";
+import { containerMenu } from "./containerMenu";
 import { containerKey, memBytes, projectCounts, projectDir, projectNameFromPath } from "../../lib/compose";
 import { composeLockKey, confirmDestructive, groupByClient, NO_CLIENT, useItemFolders, useLocks } from "../../lib/folders";
-import { ClientFilter, clientGroupItems, clientMenuItems } from "../../components/ClientTools";
+import { clientGroupItems, clientMenuItems } from "../../components/ClientTools";
 
 const FileEditor = lazy(() => import("../../components/FileEditor"));
 const ComposeFileDialog = lazy(() => import("../../components/ComposeFileDialog"));
 
 const STOP_WARNING = "Tous les conteneurs du projet seront arrêtés, sans être supprimés : « Démarrer » les relance. Cet arrêt étant voulu, ils ne seront pas signalés comme tombés.";
 
-/** Largeur minimale d'une carte : 1 colonne jusqu'à ~1170 px de zone, 2 ensuite, 3 sur très grand écran. */
-const CARD_MIN = 580;
+/** Grille des cartes : une colonne, puis deux colonnes larges dès 1180 px de zone. */
+const TWO_COLS = "@min-[1180px]:grid-cols-2";
+/** Dernière carte d'un nombre impair : elle prend toute la ligne plutôt que de rester seule à gauche. */
+const SPAN = "@min-[1180px]:col-span-2";
 
 /** Services d'une carte : service, (image si la carte est assez large), ports, CPU, mémoire, actions. */
 const SERVICE_GRID =
-  "grid items-center gap-3 grid-cols-[minmax(110px,1fr)_minmax(0,0.9fr)_48px_64px_116px] @min-[640px]:grid-cols-[minmax(130px,1fr)_minmax(0,1fr)_minmax(0,0.9fr)_48px_64px_116px]";
+  "grid items-center gap-3 grid-cols-[minmax(110px,1fr)_minmax(0,0.9fr)_48px_64px_144px] @min-[640px]:grid-cols-[minmax(130px,1fr)_minmax(0,1fr)_minmax(0,0.9fr)_48px_64px_144px]";
 const SVC_WIDE = "hidden @min-[640px]:block";
 
 /** Groupes repliés, retenus le temps de la session (changer d'onglet ne les perd pas). */
@@ -44,7 +48,28 @@ function useSessionSet(key: string) {
   };
 }
 
-export default function Compose({ serverId, data, docker, reload, onNew, onCatalog }: { serverId: string; data: DockerOverview; docker: string; reload: () => Promise<void>; onNew: () => void; onCatalog: () => void }) {
+/** Cartes par projet compose (onglet Applications), plus une carte « Hors compose » pour les conteneurs isolés. */
+export default function Compose({
+  serverId,
+  data,
+  docker,
+  reload,
+  onNew,
+  onCatalog,
+  filter: text,
+  state,
+  clientFilter,
+}: {
+  serverId: string;
+  data: DockerOverview;
+  docker: string;
+  reload: () => Promise<void>;
+  onNew: () => void;
+  onCatalog: () => void;
+  filter: string;
+  state: StateFilter;
+  clientFilter: string;
+}) {
   const { ask, notify } = useAppPick("ask", "notify");
   const stats = useContainerStats(serverId);
   const containerActions = useContainerActions(serverId, docker, reload, data.projects);
@@ -59,26 +84,24 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   const portMenu = useContextMenu();
   const clients = useItemFolders("compose", serverId);
   const locks = useLocks(serverId);
-  const [clientFilter, setClientFilter] = useState("");
+  const folders = useContainerFolders(serverId);
   const collapsedGroups = useSessionSet(`compose:groups:${serverId}`);
   const lockOf = (p: ComposeProject) => composeLockKey(p);
-  if (data.projects.length === 0) {
-    // État vide compact, sur une ligne : les boutons du bandeau restent aussi disponibles.
-    return (
-      <div className="flex flex-wrap items-center gap-3 px-6 py-4 text-[13px] text-muted">
-        <Layers size={16} className="shrink-0 text-faint" />
-        <span className="min-w-0 flex-1 truncate" title="Le catalogue propose des applications prêtes à l'emploi (n8n, Uptime Kuma, Vaultwarden…).">
-          Aucun projet docker compose : ceux lancés avec docker compose apparaîtront ici.
-        </span>
-        <Button size="sm" icon={<Package size={13} />} onClick={onCatalog}>
-          Catalogue
-        </Button>
-        <Button size="sm" variant="primary" icon={<Plus size={13} />} onClick={onNew}>
-          Nouveau projet
-        </Button>
-      </div>
-    );
-  }
+  // État vide compact, sur une ligne : les boutons du bandeau restent aussi disponibles.
+  const emptyLine = (
+    <div className="flex flex-wrap items-center gap-3 py-1 text-[13px] text-muted">
+      <Layers size={16} className="shrink-0 text-faint" />
+      <span className="min-w-0 flex-1 truncate" title="Le catalogue propose des applications prêtes à l'emploi (n8n, Uptime Kuma, Vaultwarden…).">
+        Aucun projet docker compose : ceux lancés avec docker compose apparaîtront ici.
+      </span>
+      <Button size="sm" icon={<Package size={13} />} onClick={onCatalog}>
+        Catalogue
+      </Button>
+      <Button size="sm" variant="primary" icon={<Plus size={13} />} onClick={onNew}>
+        Nouveau projet
+      </Button>
+    </div>
+  );
 
   const act = async (p: ComposeProject, action: string, label: string, danger?: string) => {
     const locked = locks.isLocked(lockOf(p));
@@ -195,21 +218,153 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   const clientOf = (p: ComposeProject) => clients.folderOf(projectDir(p));
   // Un filtre sur un client supprimé ou renommé retombe sur « Tous ».
   const filter = clientFilter === NO_CLIENT || clients.names.includes(clientFilter) ? clientFilter : "";
-  const groups = groupByClient(data.projects, clientOf, filter);
-  const counts: Record<string, number> = {};
-  for (const p of data.projects) counts[clientOf(p)] = (counts[clientOf(p)] ?? 0) + 1;
-  const visible = groups.flatMap(([, list]) => list);
+  const f = text.toLowerCase();
+  /** Services listés d'un projet : tous si le nom du projet correspond au filtre, sinon ceux qui correspondent. */
+  const listedOf = (p: ComposeProject) => {
+    const hit = !f || p.name.toLowerCase().includes(f) || p.configFiles.toLowerCase().includes(f);
+    return { hit, list: containersOf(p.name).filter((c) => containerMatches(c, hit ? "" : text, state)) };
+  };
+  const shown = (p: ComposeProject) => {
+    const { hit, list } = listedOf(p);
+    return list.length > 0 || (hit && (state === "all" || (state === "stopped" && containersOf(p.name).length === 0)));
+  };
+  const groups = groupByClient(data.projects.filter(shown), clientOf, filter);
+  // Conteneurs lancés hors compose (ou d'un projet que Docker ne liste plus) : carte à part, hors filtre client.
+  const loose = filter
+    ? []
+    : data.containers.filter((c) => !data.projects.some((p) => p.name === c.composeProject) && containerMatches(c, text, state)).sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  const filtering = !!text || state !== "all" || !!filter;
+
+  const containerAct = (c: Container, a: string) => containerActions.act(c, a).then((ok) => ok && a === "remove" && setSelectedId(null));
+
+  const serviceRow = (c: Container, p?: ComposeProject) => {
+    const running = c.state === "running";
+    const s = running ? stats[c.id] : undefined;
+    return (
+      <li
+        key={c.id}
+        className={`group ${SERVICE_GRID} h-8 cursor-pointer px-3 text-[13px] hover:bg-hover-soft ${c.id === selectedId ? "bg-hover-soft" : ""}`}
+        onClick={() => setSelectedId(c.id === selectedId ? null : c.id)}
+      >
+        <span className="flex min-w-0 items-center gap-2" title={c.status}>
+          <StatusDot tone={stateTone(c.state)} className="size-2!" />
+          <span className="truncate font-medium">{p ? (c.composeService ?? c.name) : c.name}</span>
+          {occasional.has(containerKey(c)) && <Badge tone="muted">ponctuel</Badge>}
+          <ConditionBadge c={c} onPurpose={onPurpose.has(containerKey(c))} occasional={occasional.has(containerKey(c))} />
+        </span>
+        <span className={`${SVC_WIDE} truncate font-mono text-xs text-fg/80`} title={c.image}>
+          {c.image.split("@")[0]}
+        </span>
+        {/* Ports sur une ligne : la hauteur des lignes reste constante. */}
+        <span className="h-[22px] min-w-0 overflow-hidden [&>span]:flex-nowrap" title={c.ports.map((x) => `${x.hostPort}→${x.containerPort}`).join(", ")}>
+          <PortChips
+            ports={c.ports}
+            onPortClick={(port, e) =>
+              portMenu.open(e, [
+                { heading: `Port ${port.hostPort}` },
+                ...(port.protocol === "tcp" ? [{ label: "Ouvrir un tunnel depuis mon PC", icon: <Cable size={14} />, onClick: () => void tunnelTo(serverId, c, port.hostPort) }] : []),
+                ...(isExposed(port) && p ? [{ label: "Restreindre à 127.0.0.1…", icon: <Lock size={14} />, onClick: () => setRestrict({ project: p, port: port.hostPort }) }] : []),
+              ])
+            }
+          />
+        </span>
+        <span className="text-right text-xs tabular-nums">{s ? `${s.cpu.toFixed(1)} %` : <span className="text-faint">—</span>}</span>
+        <span className="truncate text-right text-xs text-muted tabular-nums" title={s?.memUsage}>
+          {s ? s.memUsage.split(" / ")[0] : <span className="text-faint">—</span>}
+        </span>
+        <span className="flex justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+          <IconButton size="sm" title="Logs en direct" onClick={() => containerActions.logs(c)}>
+            <ScrollText size={14} />
+          </IconButton>
+          {running ? (
+            <>
+              <IconButton size="sm" title="Shell dans le conteneur" onClick={() => containerActions.shell(c)}>
+                <SquareTerminal size={14} />
+              </IconButton>
+              <IconButton size="sm" title={p ? "Redémarrer ce service" : "Redémarrer"} disabled={!!containerActions.busy} onClick={() => void containerActions.act(c, "restart")}>
+                <RotateCw size={14} className={containerActions.busy === c.id ? "animate-spin" : ""} />
+              </IconButton>
+              <IconButton size="sm" title={p ? "Arrêter ce service" : "Arrêter"} disabled={!!containerActions.busy} onClick={() => void containerActions.act(c, "stop")}>
+                <Square size={13} />
+              </IconButton>
+            </>
+          ) : (
+            <IconButton
+              size="sm"
+              title={c.state === "paused" ? "Reprendre" : p ? "Démarrer ce service" : "Démarrer"}
+              disabled={!!containerActions.busy}
+              onClick={() => void containerActions.act(c, c.state === "paused" ? "unpause" : "start")}
+            >
+              <Play size={14} />
+            </IconButton>
+          )}
+          <MenuButton
+            size="sm"
+            title="Actions du conteneur"
+            items={() => containerMenu(c, { act: (x, a) => void containerAct(x, a), shell: containerActions.shell, logs: containerActions.logs, details: (x) => setSelectedId(x.id), folders })}
+          />
+        </span>
+      </li>
+    );
+  };
+
+  const serviceTable = (rows: Container[], p?: ComposeProject) => (
+    <div className="border-t border-border">
+      <div className={`${SERVICE_GRID} h-7 border-b border-line bg-subtle px-3 text-[11px] font-medium text-muted`}>
+        <span>{p ? "Service" : "Conteneur"}</span>
+        <span className={SVC_WIDE}>Image</span>
+        <span>Ports</span>
+        <span className="text-right">CPU</span>
+        <span className="text-right">Mémoire</span>
+        <span />
+      </div>
+      <ul className="flex flex-col divide-y divide-line">{rows.map((c) => serviceRow(c, p))}</ul>
+    </div>
+  );
+
+  const usage = (list: Container[]) => {
+    const cpu = list.reduce((n, c) => n + (stats[c.id]?.cpu ?? 0), 0);
+    const mem = list.reduce((n, c) => n + (c.state === "running" && stats[c.id] ? memBytes(stats[c.id].memUsage) : 0), 0);
+    return `${cpu.toFixed(1)} % · ${mem > 0 ? formatBytes(mem) : "—"}`;
+  };
+
+  const looseCard = () => {
+    const run = loose.filter((c) => c.state === "running").length;
+    return (
+      <section className="@container flex h-full min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-panel">
+        <header className="flex items-center gap-3 px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2 text-[13px]">
+              <Box size={14} className="shrink-0 text-muted" />
+              <span className="truncate font-semibold">Hors compose</span>
+              <Badge tone={run === 0 ? "muted" : run === loose.length ? "ok" : "warn"} className="shrink-0" title={`${run} en cours sur ${loose.length}`}>
+                {run}/{loose.length}
+              </Badge>
+            </div>
+            <div className="mt-0.5 flex min-w-0 items-center gap-3 pl-[22px] text-xs text-muted">
+              <span className="min-w-0 flex-1 truncate">Conteneurs lancés sans docker compose (docker run…)</span>
+              {run > 0 && (
+                <span className="shrink-0 tabular-nums" title="CPU et mémoire de ces conteneurs">
+                  {usage(loose)}
+                </span>
+              )}
+            </div>
+          </div>
+        </header>
+        {serviceTable(loose)}
+      </section>
+    );
+  };
 
   const projectCard = (p: ComposeProject) => {
     const file = p.configFiles.split(",")[0];
     const b = (a: string) => busy === `${p.name}:${a}`;
     const services = containersOf(p.name);
+    const listed = listedOf(p).list;
     const enMarche = services.filter((c) => c.state === "running").length;
     const arrete = services.length > 0 && enMarche === 0;
     // Les conteneurs ponctuels ne comptent pas : seul le « migrator » arrêté ne rend pas le projet incomplet.
     const counts = projectCounts(services, occasional);
-    const cpu = services.reduce((n, c) => n + (stats[c.id]?.cpu ?? 0), 0);
-    const mem = services.reduce((n, c) => n + (c.state === "running" && stats[c.id] ? memBytes(stats[c.id].memUsage) : 0), 0);
     const locked = locks.isLocked(lockOf(p));
     const client = clientOf(p);
     const dir = projectDir(p);
@@ -217,7 +372,7 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
     const status = services.length > 0 ? `${counts.running}/${counts.expected}` : p.status;
     return (
       // Carte : en-tête sur deux lignes (identité | chemin et ressources), actions à droite sans retour à la ligne, puis les services.
-      <section className="@container flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-panel">
+      <section className="@container flex h-full min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-panel">
         <header className="flex items-center gap-3 px-3 py-2">
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2 text-[13px]">
@@ -265,7 +420,7 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
               )}
               {enMarche > 0 && (
                 <span className="shrink-0 text-muted tabular-nums" title="CPU et mémoire de tous les services">
-                  {cpu.toFixed(1)} % · {mem > 0 ? formatBytes(mem) : "—"}
+                  {usage(services)}
                 </span>
               )}
             </div>
@@ -309,78 +464,7 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
         </header>
 
         {services.length > 0 ? (
-            <div className="border-t border-border">
-              <div className={`${SERVICE_GRID} h-7 border-b border-line bg-subtle px-3 text-[11px] font-medium text-muted`}>
-                <span>Service</span>
-                <span className={SVC_WIDE}>Image</span>
-                <span>Ports</span>
-                <span className="text-right">CPU</span>
-                <span className="text-right">Mémoire</span>
-                <span />
-              </div>
-              <ul className="flex flex-col divide-y divide-line">
-                {services.map((c) => {
-                  const running = c.state === "running";
-                  const s = running ? stats[c.id] : undefined;
-                  return (
-                    <li
-                      key={c.id}
-                      className={`group ${SERVICE_GRID} h-8 cursor-pointer px-3 text-[13px] hover:bg-hover-soft ${c.id === selectedId ? "bg-hover-soft" : ""}`}
-                      onClick={() => setSelectedId(c.id === selectedId ? null : c.id)}
-                    >
-                      <span className="flex min-w-0 items-center gap-2" title={c.status}>
-                        <StatusDot tone={stateTone(c.state)} className="size-2!" />
-                        <span className="truncate font-medium">{c.composeService ?? c.name}</span>
-                        {occasional.has(containerKey(c)) && <Badge tone="muted">ponctuel</Badge>}
-                        <ConditionBadge c={c} onPurpose={onPurpose.has(containerKey(c))} occasional={occasional.has(containerKey(c))} />
-                      </span>
-                      <span className={`${SVC_WIDE} truncate font-mono text-xs text-fg/80`} title={c.image}>
-                        {c.image.split("@")[0]}
-                      </span>
-                      {/* Ports sur une ligne : la hauteur des lignes reste constante. */}
-                      <span className="h-[22px] min-w-0 overflow-hidden [&>span]:flex-nowrap" title={c.ports.map((x) => `${x.hostPort}→${x.containerPort}`).join(", ")}>
-                        <PortChips
-                          ports={c.ports}
-                          onPortClick={(port, e) =>
-                            portMenu.open(e, [
-                              { heading: `Port ${port.hostPort}` },
-                              ...(port.protocol === "tcp" ? [{ label: "Ouvrir un tunnel depuis mon PC", icon: <Cable size={14} />, onClick: () => void tunnelTo(serverId, c, port.hostPort) }] : []),
-                              ...(isExposed(port) ? [{ label: "Restreindre à 127.0.0.1…", icon: <Lock size={14} />, onClick: () => setRestrict({ project: p, port: port.hostPort }) }] : []),
-                            ])
-                          }
-                        />
-                      </span>
-                      <span className="text-right text-xs tabular-nums">{s ? `${s.cpu.toFixed(1)} %` : <span className="text-faint">—</span>}</span>
-                      <span className="truncate text-right text-xs text-muted tabular-nums" title={s?.memUsage}>
-                        {s ? s.memUsage.split(" / ")[0] : <span className="text-faint">—</span>}
-                      </span>
-                      <span className="flex justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
-                        <IconButton size="sm" title="Logs en direct" onClick={() => containerActions.logs(c)}>
-                          <ScrollText size={14} />
-                        </IconButton>
-                        {running ? (
-                          <>
-                            <IconButton size="sm" title="Shell dans le conteneur" onClick={() => containerActions.shell(c)}>
-                              <SquareTerminal size={14} />
-                            </IconButton>
-                            <IconButton size="sm" title="Redémarrer ce service" disabled={!!containerActions.busy} onClick={() => void containerActions.act(c, "restart")}>
-                              <RotateCw size={14} className={containerActions.busy === c.id ? "animate-spin" : ""} />
-                            </IconButton>
-                            <IconButton size="sm" title="Arrêter ce service" disabled={!!containerActions.busy} onClick={() => void containerActions.act(c, "stop")}>
-                              <Square size={13} />
-                            </IconButton>
-                          </>
-                        ) : (
-                          <IconButton size="sm" title="Démarrer ce service" disabled={!!containerActions.busy} onClick={() => void containerActions.act(c, "start")}>
-                            <Play size={14} />
-                          </IconButton>
-                        )}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+          listed.length > 0 && serviceTable(listed, p)
           ) : (
             <p className="border-t border-line px-3 py-2 text-xs text-muted">Aucun conteneur pour ce projet : ▶ le lance (up -d).</p>
           )}
@@ -389,55 +473,65 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
   };
 
   return (
-    <div className="flex min-w-0 flex-col">
-      <div className="flex h-11 items-center gap-3 border-b border-border px-6">
-        <ClientFilter names={clients.names} value={filter} onChange={setClientFilter} counts={counts} />
-        <span className="ml-auto text-xs text-muted tabular-nums">
-          {visible.length} projet{visible.length > 1 ? "s" : ""}
-        </span>
-      </div>
-      {/* Maçonnerie en colonnes CSS : des cartes de hauteurs inégales ne laissent pas de trous. Les groupes
-          de clients s'y enchaînent (en-tête collé à leur première carte) : un petit groupe ne laisse pas
-          de rangée à moitié vide. Jamais plus de colonnes que de projets. */}
-      <div className="px-6 py-4" style={{ columns: `${Math.min(3, Math.max(1, visible.length))} ${CARD_MIN}px`, columnGap: 12 }}>
-        {groups.flatMap(([client, list]) => {
-          // Sans aucun client défini, pas d'en-tête de groupe : les cartes s'enchaînent.
-          if (clients.names.length === 0)
-            return list.map((p) => (
-              <div key={p.name} className="mb-3 break-inside-avoid">
-                {projectCard(p)}
-              </div>
-            ));
-          const gid = client || NO_CLIENT;
-          const folded = collapsedGroups.has(gid);
-          const header = (
-            <div className="flex h-7 items-center gap-2 px-1 text-xs">
-              <button type="button" aria-expanded={!folded} className="flex min-w-0 items-center gap-1.5 font-medium" onClick={() => collapsedGroups.toggle(gid)}>
-                <ChevronRight size={13} className={`shrink-0 text-muted transition-transform ${folded ? "" : "rotate-90"}`} />
-                <Tag size={12} className="shrink-0 text-muted" />
-                <span className="truncate">{client || "Sans client"}</span>
-                <span className="font-normal text-faint tabular-nums">· {list.length}</span>
-              </button>
-              {client && (
-                <span className="ml-auto">
-                  <MenuButton size="sm" title={`Client ${client}`} items={() => clientGroupItems(clients, client)} />
-                </span>
-              )}
-            </div>
-          );
-          if (folded)
+    <div className="@container flex min-w-0 flex-col gap-3 px-6 py-4">
+      {data.projects.length === 0 && emptyLine}
+      {groups.length === 0 && loose.length === 0 && filtering && data.projects.length + data.containers.length > 0 && (
+        <p className="py-6 text-center text-[13px] text-muted">Aucune application ne correspond aux filtres.</p>
+      )}
+      {/* Deux colonnes larges ; un groupe de clients commence sur sa propre ligne et la dernière carte
+          d'un nombre impair prend toute la largeur : aucune carte ne reste seule sur une demi-ligne. */}
+      <div className={`grid grid-cols-1 gap-3 ${TWO_COLS}`}>
+        {(() => {
+          const cards = (list: ComposeProject[], withLoose: boolean) => {
+            const n = list.length + (withLoose ? 1 : 0);
+            const span = (i: number) => (n % 2 === 1 && i === n - 1 ? SPAN : "");
             return [
-              <div key={`client:${gid}`} className="mb-3 break-inside-avoid">
-                {header}
-              </div>,
+              ...list.map((p, i) => (
+                <div key={p.name} className={`min-w-0 ${span(i)}`}>
+                  {projectCard(p)}
+                </div>
+              )),
+              ...(withLoose
+                ? [
+                    <div key="loose" className={`min-w-0 ${span(n - 1)}`}>
+                      {looseCard()}
+                    </div>,
+                  ]
+                : []),
             ];
-          return list.map((p, i) => (
-            <div key={p.name} className="mb-3 break-inside-avoid">
-              {i === 0 && header}
-              {projectCard(p)}
-            </div>
-          ));
-        })}
+          };
+          // Sans aucun client défini, pas d'en-tête de groupe : les cartes s'enchaînent.
+          if (clients.names.length === 0) return cards(groups.flatMap(([, list]) => list), loose.length > 0);
+          return [
+            ...groups.flatMap(([client, list]) => {
+              const gid = client || NO_CLIENT;
+              const folded = collapsedGroups.has(gid);
+              return [
+                <div key={`client:${gid}`} className="col-span-full -mb-1 flex h-7 items-center gap-2 px-1 text-xs">
+                  <button type="button" aria-expanded={!folded} className="flex min-w-0 items-center gap-1.5 font-medium" onClick={() => collapsedGroups.toggle(gid)}>
+                    <ChevronRight size={13} className={`shrink-0 text-muted transition-transform ${folded ? "" : "rotate-90"}`} />
+                    <Tag size={12} className="shrink-0 text-muted" />
+                    <span className="truncate">{client || "Sans client"}</span>
+                    <span className="font-normal text-faint tabular-nums">· {list.length}</span>
+                  </button>
+                  {client && (
+                    <span className="ml-auto">
+                      <MenuButton size="sm" title={`Client ${client}`} items={() => clientGroupItems(clients, client)} />
+                    </span>
+                  )}
+                </div>,
+                ...(folded ? [] : cards(list, false)),
+              ];
+            }),
+            ...(loose.length > 0
+              ? [
+                  <div key="loose" className="col-span-full min-w-0">
+                    {looseCard()}
+                  </div>,
+                ]
+              : []),
+          ];
+        })()}
       </div>
       {portMenu.menu}
       {relinkFile && (
@@ -460,7 +554,7 @@ export default function Compose({ serverId, data, docker, reload, onNew, onCatal
           stats={stats[selected.id]}
           project={projectOf(selected)}
           onClose={() => setSelectedId(null)}
-          onAction={(a) => void containerActions.act(selected, a).then((ok) => ok && a === "remove" && setSelectedId(null))}
+          onAction={(a) => void containerAct(selected, a)}
           onShell={() => containerActions.shell(selected)}
           onLogs={() => containerActions.logs(selected)}
           onTunnel={(port) => void tunnelTo(serverId, selected, port)}
