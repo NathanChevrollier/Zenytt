@@ -15,6 +15,8 @@ import {
 } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 import type { SectionId } from "../sections";
+import { PowerMenu, usePower } from "./supervision/Power";
+import { useProvider } from "./supervision/Provider";
 
 const CONCURRENCY = 4;
 const REFRESH_MS = 30_000;
@@ -245,6 +247,16 @@ export default function HomeView({ visible }: { visible: boolean }) {
     return { m, mem, root, disk };
   };
 
+  // Au plus une action suggérée par serveur, la plus urgente ; le reste vit dans « À traiter ».
+  const suggestion = (s: ServerView, r: DashboardSummary | undefined): { label: string; run: () => void } | null => {
+    if (!r?.connected) return null;
+    const failed = r.failed ?? [];
+    if (failed.length) return { label: failed.length === 1 ? `Relancer ${failed[0].name}` : `Relancer les ${failed.length} en panne`, run: () => void restartStopped(s, failed.map((f) => f.name)) };
+    const soon = r.certificates.map((c) => Math.floor((c.notAfter - now) / DAY)).filter((d) => d < CERT_WARN_DAYS);
+    if (soon.length) return { label: `Certificat · ${Math.min(...soon)} j`, run: () => go(s, "sites") };
+    return null;
+  };
+
   const serverMenu = (s: ServerView): MenuItem[] => [
     { label: "Terminal", icon: <SquareTerminal size={14} />, onClick: () => openTab(s.id) },
     { label: "Supervision", icon: <Activity size={14} />, onClick: () => go(s, "monitoring") },
@@ -313,6 +325,7 @@ export default function HomeView({ visible }: { visible: boolean }) {
                   const certs = r?.certificates ?? [];
                   const minCert = certs.length ? Math.floor((Math.min(...certs.map((c) => c.notAfter)) - now) / DAY) : null;
                   const loading = !r || pending.has(s.id);
+                  const sugg = suggestion(s, r);
                   return (
                     <Card key={s.id} tone={r && !r.connected ? "danger" : undefined} className="flex flex-col gap-3.5">
                       <div className="flex items-center gap-2.5">
@@ -350,9 +363,17 @@ export default function HomeView({ visible }: { visible: boolean }) {
                               {certs.length ? `${certs.length} certificat${certs.length > 1 ? "s" : ""} · ${minCert} j min.` : "Aucun certificat"}
                             </span>
                             <span>{r.agent ? "Agent actif" : "Sans agent"}</span>
-                            <button type="button" onClick={() => openTab(s.id)} className="ml-auto flex items-center gap-1 text-accent hover:underline">
-                              Terminal <ChevronRight size={13} />
-                            </button>
+                            <span className="ml-auto flex items-center gap-3">
+                              {sugg && (
+                                <button type="button" onClick={sugg.run} className="text-warn hover:underline">
+                                  {sugg.label}
+                                </button>
+                              )}
+                              <button type="button" onClick={() => openTab(s.id)} className="flex items-center gap-1 text-accent hover:underline">
+                                Terminal <ChevronRight size={13} />
+                              </button>
+                              <ServerPower server={s} connected />
+                            </span>
                           </div>
                         </>
                       ) : r ? (
@@ -365,6 +386,9 @@ export default function HomeView({ visible }: { visible: boolean }) {
                             <Button size="sm" onClick={() => useDoctor.getState().open(s.id)}>
                               Diagnostiquer
                             </Button>
+                            <span className="ml-auto">
+                              <ServerPower server={s} connected={false} />
+                            </span>
                           </div>
                         </div>
                       ) : (
@@ -385,11 +409,14 @@ export default function HomeView({ visible }: { visible: boolean }) {
                   rowKey={(x) => x.server.id}
                   onRowClick={(x) => go(x.server, "monitoring")}
                   rowMenu={(x) => serverMenu(x.server)}
-                  actionsWidth={150}
+                  actionsWidth={190}
                   rowActions={(x) => (
-                    <Button size="sm" variant="ghost" icon={<SquareTerminal size={13} />} onClick={() => openTab(x.server.id)}>
-                      Terminal
-                    </Button>
+                    <span className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" icon={<SquareTerminal size={13} />} onClick={() => openTab(x.server.id)}>
+                        Terminal
+                      </Button>
+                      <ServerPower server={x.server} connected={!!x.r?.connected} />
+                    </span>
                   )}
                   columns={[
                     {
@@ -441,6 +468,28 @@ export default function HomeView({ visible }: { visible: boolean }) {
                       width: "90px",
                       sortValue: (x) => x.r?.alerts.length ?? 0,
                       render: (x) => (x.r?.alerts.length ? <Badge tone="danger">{x.r.alerts.length}</Badge> : <span className="text-faint">—</span>),
+                    },
+                    {
+                      key: "todo",
+                      header: "À faire",
+                      width: "minmax(0,1fr)",
+                      render: (x) => {
+                        const sg = suggestion(x.server, x.r);
+                        return sg ? (
+                          <button
+                            type="button"
+                            className="truncate text-warn hover:underline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              sg.run();
+                            }}
+                          >
+                            {sg.label}
+                          </button>
+                        ) : (
+                          <span className="text-faint">—</span>
+                        );
+                      },
                     },
                   ]}
                 />
@@ -523,6 +572,18 @@ export default function HomeView({ visible }: { visible: boolean }) {
         </aside>
       </div>
     </PageLayout>
+  );
+}
+
+/** Bouton Alimentation d'une carte : le menu de Supervision (SSH si connecté, hébergeur sinon). */
+function ServerPower({ server, connected }: { server: ServerView; connected: boolean }) {
+  const power = usePower(server.id, server.name, null, () => fetchHealth(server.id, 0).then(() => {}));
+  const provider = useProvider(server.id, server.name);
+  return (
+    <>
+      <PowerMenu compact name={server.name} power={connected ? power : null} provider={provider} onConfigure={() => navigate("monitoring", "provider", server.id)} />
+      {power.dialog}
+    </>
   );
 }
 

@@ -86,7 +86,7 @@ export type PowerState = ReturnType<typeof usePower>;
  * l'hébergeur (utilisable SSH coupé). `power` absent : SSH indisponible. Pendant l'attente du
  * retour après un redémarrage, le menu laisse la place au chronomètre.
  */
-export function PowerMenu({ name, power, provider, onConfigure }: { name: string; power: PowerState | null; provider: ProviderState; onConfigure: () => void }) {
+export function PowerMenu({ name, power, provider, onConfigure, compact }: { name: string; power: PowerState | null; provider: ProviderState; onConfigure: () => void; compact?: boolean }) {
   const { view, status, statusError, busy, ready, test, act } = provider;
   if (power?.waitStart) return <Waiting name={name} start={power.waitStart} onStop={power.stopWaiting} />;
   const kind = KINDS.find((k) => k.value === view?.link?.kind)?.label;
@@ -116,7 +116,9 @@ export function PowerMenu({ name, power, provider, onConfigure }: { name: string
             { label: "Configurer…", icon: <Settings2 size={14} />, onClick: onConfigure },
           ]),
   ];
-  return <MenuButton label={busy && busy !== "status" ? "Alimentation…" : "Alimentation"} icon={<Power size={14} />} title="Redémarrer, programmer, éteindre (SSH ou hébergeur)" items={items} />;
+  const title = `Alimentation de ${name} : redémarrer, programmer, éteindre (SSH ou hébergeur)`;
+  if (compact) return <MenuButton size="sm" icon={busy && busy !== "status" ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />} title={title} items={items} />;
+  return <MenuButton label={busy && busy !== "status" ? "Alimentation…" : "Alimentation"} icon={<Power size={14} />} title={title} items={items} />;
 }
 
 function Waiting({ name, start, onStop }: { name: string; start: number; onStop: () => void }) {
