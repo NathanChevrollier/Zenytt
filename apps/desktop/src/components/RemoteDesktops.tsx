@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Cable, ExternalLink, IdCard, Link2Off, Monitor, MonitorPlay, Pencil, Plus, Trash2 } from "lucide-react";
 import { create } from "zustand";
 import { api, errorMessage, type DesktopProtocol, type DesktopView, type RemoteDesktop } from "../lib/api";
 import { ensureConnected, useApp } from "../lib/store";
-import { Badge, Button, Card, Checkbox, ColorPicker, EmptyState, Field, IconButton, Input, Modal, PROFILE_COLORS, Select } from "./ui";
+import { Avatar, Badge, Button, Card, Checkbox, ColorPicker, EmptyState, Eyebrow, Field, Input, KeyValue, MenuButton, Modal, PROFILE_COLORS, Select, type MenuItem } from "./ui";
 import { IdentitySuggestions, useIdentities } from "./Identities";
 import { useRdp } from "../lib/rdp";
 
@@ -11,7 +11,7 @@ const COLORS = PROFILE_COLORS;
 
 /** Port par défaut de chaque protocole (même règle que côté Rust). */
 const DEFAULT_PORT: Record<DesktopProtocol, number> = { rdp: 3389, vnc: 5900, spice: 5900 };
-const protocolOf = (d: RemoteDesktop): DesktopProtocol => d.protocol ?? "rdp";
+export const protocolOf = (d: RemoteDesktop): DesktopProtocol => d.protocol ?? "rdp";
 
 export const useDesktops = create<{ list: DesktopView[]; reload: () => Promise<void> }>((set) => ({
   list: [],
@@ -40,143 +40,164 @@ export async function openDesktop(d: DesktopView, mode: "internal" | "external")
   }
 }
 
-/** Onglet « Bureaux à distance » de la page Serveurs. */
-export function DesktopsPanel({ creating, onCreatingChange }: { creating: boolean; onCreatingChange: (v: boolean) => void }) {
-  const { list, reload } = useDesktops();
-  const servers = useApp((s) => s.servers);
-  const identities = useIdentities((s) => s.list);
-  const [edited, setEditing] = useState<DesktopView | null>(null);
-  const editing: DesktopView | "new" | null = creating ? "new" : edited;
-  const [busy, setBusy] = useState<string | null>(null);
-  useEffect(() => {
-    void reload();
-  }, [reload]);
+/** État vide des bureaux à distance (page Serveurs). */
+export function DesktopsEmpty({ onCreate }: { onCreate: () => void }) {
+  return (
+    <EmptyState
+      icon={<Monitor />}
+      title="Aucun bureau à distance"
+      action={
+        <Button variant="primary" icon={<Plus size={14} />} onClick={onCreate}>
+          Nouveau bureau
+        </Button>
+      }
+    >
+      Bureaux Windows (RDP) et Linux, Raspberry Pi ou macOS (VNC) ouverts dans Zenytt, consoles de VM QEMU/KVM (SPICE) dans remote-viewer. Via un serveur SSH, Zenytt ouvre un tunnel le temps de la session : ni le port 3389 ni le 5900 n'ont besoin d'être exposés.
+    </EmptyState>
+  );
+}
 
-  const remove = async (d: DesktopView) => {
+/** Adresse affichée dans la liste : utilisateur, hôte, et port s'il n'est pas celui par défaut. */
+export function desktopAddress(d: DesktopView, username?: string): string {
+  const user = username || d.username;
+  return `${user ? `${user}@` : ""}${d.host}${d.port !== DEFAULT_PORT[protocolOf(d)] ? `:${d.port}` : ""}`;
+}
+
+const PROTOCOL_NAMES: Record<DesktopProtocol, string> = { rdp: "RDP", vnc: "VNC", spice: "SPICE (console de VM)" };
+
+/** Fiche d'un bureau à distance, à droite de la liste des machines (page Serveurs). */
+export function DesktopDetail({ desktop: d, onEdit, onDeleted, moveItems }: { desktop: DesktopView; onEdit: () => void; onDeleted: () => void; moveItems: MenuItem[] }) {
+  const servers = useApp((s) => s.servers);
+  const identity = useIdentities((s) => s.list.find((i) => i.id === d.identityId));
+  const open = useRdp((s) => s.desktop?.id === d.id);
+  const [busy, setBusy] = useState(false);
+  const protocol = protocolOf(d);
+  const via = servers.find((s) => s.id === d.viaServerId);
+  const needsPassword = protocol === "rdp" && !d.hasPassword;
+
+  const external = async () => {
+    setBusy(true);
+    await openDesktop(d, "external");
+    setBusy(false);
+  };
+  const remove = async () => {
     const { ask, notify } = useApp.getState();
     if (!(await ask({ title: `Supprimer « ${d.name} » ?`, body: "Le profil et son mot de passe enregistré sont supprimés de ce PC.", confirmLabel: "Supprimer", danger: true }))) return;
     try {
       await api.desktopDelete(d.id);
-      await reload();
+      await useDesktops.getState().reload();
+      onDeleted();
     } catch (e) {
       notify(errorMessage(e), "error");
     }
   };
 
+  const no = (text: string) => <span className="text-muted">{text}</span>;
+  const rdpRows: [React.ReactNode, React.ReactNode][] =
+    protocol === "rdp"
+      ? [
+          ["Écran", d.fullscreen ? "Plein écran" : <span className="font-mono">{d.width ?? 1600}×{d.height ?? 900}</span>],
+          ["Tous les écrans", d.multimon ? "Oui" : no("Non")],
+          ["Disques partagés", d.redirectDrives ? "Oui" : no("Non")],
+        ]
+      : [];
   return (
-    <>
-      {list.length === 0 ? (
-        <EmptyState
-          icon={<Monitor />}
-          title="Aucun bureau à distance"
-          action={
-            <Button variant="primary" icon={<Plus size={14} />} onClick={() => onCreatingChange(true)}>
-              Nouveau bureau
-            </Button>
-          }
-        >
-          Bureaux Windows (RDP) et Linux, Raspberry Pi ou macOS (VNC) ouverts dans Zenytt, consoles de VM QEMU/KVM (SPICE) dans remote-viewer. Via un serveur SSH, Zenytt ouvre un tunnel le temps de la session : ni le port 3389 ni le 5900 n'ont besoin d'être exposés.
-        </EmptyState>
-      ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
-          {list.map((d) => {
-            const via = servers.find((s) => s.id === d.viaServerId);
-            const identity = identities.find((i) => i.id === d.identityId);
-            return (
-              <Card key={d.id}>
-                <div className="mb-3 flex items-start gap-3">
-                  <Monitor size={16} className="mt-0.5 shrink-0" style={{ color: d.color ?? COLORS[0] }} />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium">{d.name}</div>
-                    <div className="truncate font-mono text-xs text-muted">
-                      {identity ? identity.username : d.username || "?"}@{d.host}
-                      {d.port !== DEFAULT_PORT[protocolOf(d)] && `:${d.port}`}
-                    </div>
-                  </div>
-                  <div className="flex">
-                    <IconButton title="Modifier" onClick={() => setEditing(d)}>
-                      <Pencil size={14} />
-                    </IconButton>
-                    <IconButton title="Supprimer" onClick={() => void remove(d)}>
-                      <Trash2 size={14} />
-                    </IconButton>
-                  </div>
-                </div>
-                <div className="mb-4 flex flex-wrap gap-1.5">
-                  <Badge tone={protocolOf(d) === "rdp" ? "muted" : "ok"}>{protocolOf(d).toUpperCase()}</Badge>
-                  {via ? <Badge tone="accent">via {via.name}</Badge> : protocolOf(d) !== "rdp" ? <Badge tone="warn">direct, non chiffré</Badge> : <Badge>direct</Badge>}
-                  {identity && <Badge tone="accent">{identity.name}</Badge>}
-                  {protocolOf(d) === "rdp" && (d.fullscreen ? <Badge>plein écran</Badge> : <Badge>{d.width ?? 1600}×{d.height ?? 900}</Badge>)}
-                  {protocolOf(d) === "rdp" && d.redirectDrives && <Badge>disques partagés</Badge>}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {/* Dans Zenytt par défaut : le client externe reste accessible juste à côté. */}
-                  {protocolOf(d) === "spice" ? (
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      loading={busy === d.id}
-                      icon={<ExternalLink size={13} />}
-                      title="Ouvre la console dans remote-viewer (virt-viewer), à travers le tunnel SSH le cas échéant"
-                      onClick={async () => {
-                        setBusy(d.id);
-                        await openDesktop(d, "external");
-                        setBusy(null);
-                      }}
-                    >
-                      Ouvrir la console
-                    </Button>
-                  ) : (
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    disabled={protocolOf(d) === "rdp" && !d.hasPassword}
-                    title={protocolOf(d) === "rdp" && !d.hasPassword ? "Enregistre un mot de passe pour ouvrir la session dans Zenytt" : undefined}
-                    icon={<MonitorPlay size={13} />}
-                    onClick={() => void useRdp.getState().open(d)}
-                  >
-                    Se connecter
-                  </Button>
-                  )}
-                  {protocolOf(d) !== "spice" && (
-                  <Button
-                    size="sm"
-                    loading={busy === d.id}
-                    icon={<ExternalLink size={13} />}
-                    title={protocolOf(d) === "rdp" ? "Ouvrir avec le client du système (mstsc, FreeRDP…)" : "Ouvrir dans remote-viewer (virt-viewer), à travers le tunnel SSH le cas échéant"}
-                    onClick={async () => {
-                      setBusy(d.id);
-                      await openDesktop(d, "external");
-                      setBusy(null);
-                    }}
-                  >
-                    Client du système
-                  </Button>
-                  )}
-                </div>
-                {protocolOf(d) === "rdp" && !d.hasPassword && (
-                  <p className="mt-2.5 text-xs text-faint">Enregistre un mot de passe dans le profil pour ouvrir la session dans Zenytt.</p>
-                )}
-              </Card>
-            );
-          })}
+    <div className="@container flex flex-col gap-5 px-7 py-6">
+      <div className="flex flex-wrap items-center gap-3.5">
+        <Avatar name={d.name} color={d.color ?? COLORS[0]} size={52} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="truncate text-[19px] font-semibold">{d.name}</h2>
+            {open && <Badge tone="ok">session ouverte</Badge>}
+            {d.group && <Badge>{d.group}</Badge>}
+            <Badge tone="accent">{protocol.toUpperCase()}</Badge>
+            {via ? <Badge tone="accent">via {via.name}</Badge> : protocol !== "rdp" ? <Badge tone="warn">direct, non chiffré</Badge> : <Badge>direct</Badge>}
+          </div>
+          <div className="mt-0.5 truncate font-mono text-xs text-muted">
+            {identity ? identity.username : d.username || "?"}@{d.host}:{d.port}
+          </div>
         </div>
-      )}
-      {editing && (
-        <DesktopForm
-          desktop={editing === "new" ? null : editing}
-          onClose={() => {
-            setEditing(null);
-            onCreatingChange(false);
-          }}
-          onSaved={() => {
-            setEditing(null);
-            onCreatingChange(false);
-            void reload();
-          }}
-        />
-      )}
-    </>
+        {/* Dans Zenytt par défaut : le client externe reste accessible juste à côté. */}
+        {protocol === "spice" ? (
+          <Button variant="primary" loading={busy} icon={<ExternalLink size={14} />} title="Ouvre la console dans remote-viewer (virt-viewer), à travers le tunnel SSH le cas échéant" onClick={() => void external()}>
+            Ouvrir la console
+          </Button>
+        ) : (
+          <>
+            <Button
+              variant="primary"
+              disabled={needsPassword}
+              title={needsPassword ? "Enregistre un mot de passe pour ouvrir la session dans Zenytt" : undefined}
+              icon={<MonitorPlay size={14} />}
+              onClick={() => void useRdp.getState().open(d)}
+            >
+              Se connecter
+            </Button>
+            <Button
+              loading={busy}
+              icon={<ExternalLink size={14} />}
+              title={protocol === "rdp" ? "Ouvrir avec le client du système (mstsc, FreeRDP…)" : "Ouvrir dans remote-viewer (virt-viewer), à travers le tunnel SSH le cas échéant"}
+              onClick={() => void external()}
+            >
+              Client du système
+            </Button>
+          </>
+        )}
+        <Button icon={<Pencil size={14} />} onClick={onEdit}>
+          Modifier
+        </Button>
+        <MenuButton items={[...moveItems, "separator", { label: "Supprimer le profil…", icon: <Trash2 size={14} />, danger: true, onClick: () => void remove() }]} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-3.5 @xl:grid-cols-2">
+        <Card className="flex flex-col gap-3">
+          <Eyebrow>Connexion</Eyebrow>
+          <KeyValue
+            items={[
+              ["Protocole", PROTOCOL_NAMES[protocol]],
+              ["Hôte", <span className="font-mono">{d.host}</span>],
+              ["Port", <span className="font-mono">{d.port}</span>],
+              [
+                "Passage",
+                via ? (
+                  <span className="flex items-center gap-1.5">
+                    <Cable size={13} className="shrink-0 text-muted" />
+                    via {via.name}, tunnel SSH le temps de la session
+                  </span>
+                ) : protocol !== "rdp" ? (
+                  <span className="text-warn">Direct, non chiffré</span>
+                ) : (
+                  no("Connexion directe")
+                ),
+              ],
+              ["Ouverture", protocol === "spice" ? "remote-viewer (virt-viewer)" : protocol === "rdp" ? "Dans Zenytt, ou mstsc / FreeRDP" : "Dans Zenytt (noVNC), ou remote-viewer"],
+            ]}
+          />
+        </Card>
+        <Card className="flex flex-col gap-3">
+          <Eyebrow>Session</Eyebrow>
+          <KeyValue
+            items={[
+              ["Utilisateur", identity || d.username ? <span className="font-mono">{identity ? identity.username : d.username}</span> : no(protocol === "spice" ? "Inutilisé en SPICE" : "Aucun")],
+              ...(protocol === "rdp" ? ([["Domaine", d.domain ? <span className="font-mono">{d.domain}</span> : no("Aucun")]] as [React.ReactNode, React.ReactNode][]) : []),
+              [
+                "Identifiant",
+                identity ? (
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    {identity.name} <Badge tone="accent">banque</Badge>
+                  </span>
+                ) : (
+                  no("Propre au bureau")
+                ),
+              ],
+              ["Mot de passe", d.hasPassword ? "Oui, dans le coffre du système" : no(protocol === "rdp" ? "Non : client du système seulement" : "Non")],
+              ...rdpRows,
+            ]}
+          />
+          {needsPassword && <p className="text-xs text-faint">Enregistre un mot de passe dans le profil pour ouvrir la session dans Zenytt.</p>}
+        </Card>
+      </div>
+    </div>
   );
 }
 
@@ -184,7 +205,7 @@ function emptyDesktop(): RemoteDesktop {
   return { id: "", name: "", protocol: "rdp", host: "", port: 3389, username: "", domain: null, identityId: null, viaServerId: null, fullscreen: false, width: 1600, height: 900, multimon: false, redirectDrives: false, color: COLORS[0] };
 }
 
-function DesktopForm({ desktop, onClose, onSaved }: { desktop: DesktopView | null; onClose: () => void; onSaved: () => void }) {
+export function DesktopForm({ desktop, onClose, onSaved }: { desktop: DesktopView | null; onClose: () => void; onSaved: (id: string) => void }) {
   const notify = useApp((s) => s.notify);
   const servers = useApp((s) => s.servers);
   const identities = useIdentities((s) => s.list);
@@ -203,8 +224,8 @@ function DesktopForm({ desktop, onClose, onSaved }: { desktop: DesktopView | nul
   const save = async () => {
     setSaving(true);
     try {
-      await api.desktopSave(d, password || undefined);
-      onSaved();
+      const id = await api.desktopSave(d, password || undefined);
+      onSaved(id);
     } catch (e) {
       notify(errorMessage(e), "error");
     } finally {

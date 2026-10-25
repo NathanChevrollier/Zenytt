@@ -102,7 +102,7 @@ export const GUIDES: Guide[] = [
       "À la première connexion, l'empreinte de la clé d'hôte est mémorisée ; si elle change ensuite, Zenytt bloque et prévient au lieu de se connecter quand même.",
       "Le mot de passe sudo enregistré dans le profil sert aux actions qui en ont besoin : écriture nginx, pare-feu, agent, sauvegardes.",
       "Un serveur de rebond (bastion) se choisit dans le profil : Zenytt traverse le premier pour joindre le second.",
-      "Une identité de la banque (Serveurs → Identifiants) remplace l'utilisateur et les secrets sur plusieurs profils à la fois.",
+      "Une identité de la banque (bouton « Identifiants » de la page Serveurs) remplace l'utilisateur et les secrets sur plusieurs profils à la fois.",
     ],
     requirements: ["un accès SSH (mot de passe, clé OpenSSH, clé PuTTY .ppk, agent OpenSSH ou Pageant)"],
     steps: [
@@ -547,6 +547,7 @@ export const GUIDES: Guide[] = [
     title: "Bureau à distance (RDP, VNC, SPICE)",
     topic: "securite",
     section: "servers",
+    tab: "desktops",
     summary: "Ouvrir la session graphique d'une machine Windows (RDP), d'un bureau Linux, d'un Raspberry Pi ou d'un Mac (VNC) dans Zenytt, et la console d'une VM QEMU/KVM (SPICE).",
     how: [
       "La session s'affiche dans Zenytt : le client RDP est intégré à l'app, rien n'est installé sur la machine distante.",
