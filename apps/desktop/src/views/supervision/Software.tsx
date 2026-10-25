@@ -1,5 +1,5 @@
-// Logiciels : versions installées des composants, paquets en attente (par famille, application en une
-// fois avec le journal) ; la fraîcheur des images des conteneurs tient en une ligne, détaillée dans un tiroir.
+// Mises à jour : paquets en attente (par famille, application en une fois avec le journal) à côté des
+// versions installées des composants ; la fraîcheur des images tient dans le pied, détaillée dans un tiroir.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Download, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { api, errorMessage, type ContainerImage, type Inventory as InventoryData, type InventoryComponent, type SystemUpdate } from "../../lib/api";
@@ -7,6 +7,7 @@ import { sortImages, sortUpdates, updateGroup, UPDATE_GROUP_LABEL, type UpdateGr
 import { useCachedState } from "../../lib/cache";
 import { useApp } from "../../lib/store";
 import { Badge, Button, Card, CodeBlock, DataTable, Drawer, ErrorState, FOCUS_RING, IconButton, Loading, ResultBanner, Section, type Column } from "../../components/ui";
+import { ColHead, Panel, TWO_COLS } from "./Panel";
 
 const mono = (s: string, cls = "") => <span className={`truncate font-mono text-xs ${cls}`}>{s || "—"}</span>;
 const GROUPS: UpdateGroup[] = ["kernel", "libs", "apps"];
@@ -184,19 +185,22 @@ export default function Software({
   const unsupported = !!error?.includes("apt et dnf");
 
   const components = (
-    <Section title="Composants" count={inv?.components.length} description="Versions installées">
+    <div className="flex min-w-0 flex-col">
+      <ColHead title="Composants" count={inv?.components.length} description="Versions installées" />
       {invError && !inv ? (
-        <ErrorState message={invError} onRetry={() => void loadInventory()} />
+        <div className="px-4 pb-3">
+          <ErrorState message={invError} onRetry={() => void loadInventory()} />
+        </div>
       ) : !inv ? (
-        <Loading rows={3} />
+        <div className="px-4 pb-3">
+          <Loading rows={3} />
+        </div>
       ) : inv.components.length === 0 ? (
-        <Card className="text-[13px] text-muted">Aucun composant connu (nginx, Docker, bases de données…) n'est installé.</Card>
+        <p className="px-4 pb-3 text-[13px] text-muted">Aucun composant connu (nginx, Docker, bases de données…) n'est installé.</p>
       ) : (
-        <Card padded={false} className="overflow-hidden">
-          <DataTable rows={inv.components} rowKey={(c) => c.id} columns={componentColumns} rowHeight={32} stickyHeader={false} />
-        </Card>
+        <DataTable rows={inv.components} rowKey={(c) => c.id} columns={componentColumns} rowHeight={32} stickyHeader={false} />
       )}
-    </Section>
+    </div>
   );
 
   const imagesSection = (
@@ -266,150 +270,147 @@ export default function Software({
     </Section>
   );
 
-  const imagesSummary = (
-    <Card padded={false} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[13px]">
-      <span className="min-w-0 flex-1 truncate">
-        Images des conteneurs :{" "}
-        {!images ? (
-          <span className="text-muted">lecture…</span>
-        ) : images.length === 0 ? (
-          <span className="text-muted">aucun conteneur en marche</span>
-        ) : checked ? (
-          <>
-            <span className={outdated ? "text-warn" : ""}>{outdated} à mettre à jour</span> <span className="text-muted">sur {images.length}</span>
-          </>
-        ) : (
-          <span className="text-muted">{images.length}, non vérifiées</span>
-        )}
-      </span>
-      <Button size="sm" disabled={!images?.length} onClick={() => onImagesOpen(true)}>
-        Voir les images…
-      </Button>
-    </Card>
-  );
-
-  // Paquets : seulement s'il y en a (ou si la liste est en erreur) ; « système à jour » tient dans la barre.
+  // Paquets : seulement s'il y en a (ou si la liste est en erreur) ; « système à jour » tient dans l'en-tête.
   const packages =
     error && !updates && !unsupported ? (
-      <ErrorState message={error} onRetry={() => void refreshAll()} />
+      <div className="p-4">
+        <ErrorState message={error} onRetry={() => void refreshAll()} />
+      </div>
     ) : n > 0 ? (
-      <Section
-        title="Paquets à mettre à jour"
-        count={focused ? `${packageRows.length} / ${n}` : n}
-        actions={
-          focused && (
-            <Button size="sm" variant="ghost" icon={<X size={13} />} onClick={() => setFocus(null)}>
-              {focused.label} · tout afficher
-            </Button>
-          )
-        }
-      >
-        <Card padded={false} className="overflow-hidden">
-          <div className="flex max-h-[max(18rem,calc(100vh-15rem))] flex-col">
-            <DataTable
-              className="min-h-0 flex-1"
-              rows={packageRows}
-              rowKey={(u) => u.name}
-              columns={updateColumns}
-              rowHeight={32}
-              groupBy={{
-                key: (u) => updateGroup(u.name),
-                header: (k, list) => (
-                  <div className="flex h-8 items-center gap-2 border-b border-border bg-subtle px-3 text-xs">
-                    <span className="font-semibold">{UPDATE_GROUP_LABEL[k as UpdateGroup]}</span>
-                    <span className="text-faint">{list.length}</span>
-                  </div>
-                ),
-              }}
-            />
-          </div>
-        </Card>
-      </Section>
+      <div className="flex min-w-0 flex-col">
+        <ColHead
+          title="Paquets à mettre à jour"
+          count={focused ? `${packageRows.length} / ${n}` : n}
+          actions={
+            focused && (
+              <Button size="sm" variant="ghost" icon={<X size={13} />} onClick={() => setFocus(null)}>
+                {focused.label} · tout afficher
+              </Button>
+            )
+          }
+        />
+        <div className="flex max-h-[max(18rem,calc(100vh-15rem))] flex-col">
+          <DataTable
+            className="min-h-0 flex-1"
+            rows={packageRows}
+            rowKey={(u) => u.name}
+            columns={updateColumns}
+            rowHeight={32}
+            groupBy={{
+              key: (u) => updateGroup(u.name),
+              header: (k, list) => (
+                <div className="flex h-8 items-center gap-2 border-b border-border bg-subtle px-3 text-xs">
+                  <span className="font-semibold">{UPDATE_GROUP_LABEL[k as UpdateGroup]}</span>
+                  <span className="text-faint">{list.length}</span>
+                </div>
+              ),
+            }}
+          />
+        </div>
+      </div>
     ) : null;
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      {/* Barre d'état : bilan des paquets, familles, et les deux actions de l'onglet. */}
-      <Card padded={false} className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2.5">
-        <div className="min-w-0">
-          <h2 className="text-[13px] font-semibold">
-            {unsupported ? "Mises à jour indisponibles" : !updates ? "Mises à jour…" : n ? `${n} mise${n > 1 ? "s" : ""} à jour disponible${n > 1 ? "s" : ""}` : "Système à jour"}
-          </h2>
-          <p className="text-xs text-muted">
+    <Panel
+      title="Mises à jour"
+      status={
+        <>
+          <span className={`text-[13px] ${n ? "text-warn" : "text-muted"}`}>
+            {unsupported ? "indisponibles" : !updates ? "lecture…" : n ? `${n} disponible${n > 1 ? "s" : ""}` : "système à jour"}
+          </span>
+          <span className="text-xs text-muted">
             {unsupported ? `Seuls apt et dnf sont pris en charge${packageManager ? ` (ce serveur utilise ${packageManager})` : ""}` : packageManager ? `Paquets ${packageManager}` : "Paquets du système"}
             {checked && outdated ? ` · ${outdated} image${outdated > 1 ? "s" : ""} à mettre à jour` : ""}
-          </p>
-        </div>
-        {n > 0 && (
-          <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-            {perGroup.map(([g, k]) => (
-              <div key={g} className="flex items-baseline gap-1.5">
-                <dt className="text-muted">{UPDATE_GROUP_LABEL[g]}</dt>
-                <dd className={`font-medium tabular-nums ${k ? "" : "text-faint"}`}>{k}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
-        {kernel > 0 && <p className="text-xs text-warn">Noyau concerné : redémarrage à prévoir.</p>}
-        <div className="ml-auto flex items-center gap-1.5">
+          </span>
+          {n > 0 && (
+            <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+              {perGroup.map(([g, k]) => (
+                <div key={g} className="flex items-baseline gap-1.5">
+                  <dt className="text-muted">{UPDATE_GROUP_LABEL[g]}</dt>
+                  <dd className={`font-medium tabular-nums ${k ? "" : "text-faint"}`}>{k}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {kernel > 0 && <Badge tone="warn">Noyau concerné : redémarrage à prévoir</Badge>}
+        </>
+      }
+      actions={
+        <>
           <IconButton title="Actualiser : relit les index des paquets, la liste et les versions" disabled={checking || applying || busy === "inv"} onClick={() => void refreshAll()}>
             <RefreshCw size={15} className={checking || busy === "inv" ? "animate-spin" : ""} />
           </IconButton>
           <Button variant="primary" icon={<Download size={14} />} loading={applying} disabled={!n || checking} onClick={() => void apply()}>
             Tout appliquer
           </Button>
-        </div>
-      </Card>
-
-      {applying && (
-        <ResultBanner tone="accent" title="Application en cours…">
-          <span className="flex items-center gap-2">
-            <Loader2 size={13} className="animate-spin" />
-            Cela peut prendre plusieurs minutes. Le journal s'affiche ici à la fin.
+        </>
+      }
+      banners={
+        <>
+          {applying && (
+            <ResultBanner tone="accent" title="Application en cours…">
+              <span className="flex items-center gap-2">
+                <Loader2 size={13} className="animate-spin" />
+                Cela peut prendre plusieurs minutes. Le journal s'affiche ici à la fin.
+              </span>
+            </ResultBanner>
+          )}
+          {output && (
+            <div className="flex flex-col gap-2">
+              <ResultBanner
+                tone={output.ok ? "ok" : "danger"}
+                title={output.ok ? "Mises à jour appliquées" : "Les mises à jour ont échoué"}
+                action={
+                  <Button size="sm" variant="ghost" onClick={() => setOutput(null)}>
+                    Masquer
+                  </Button>
+                }
+              >
+                {output.ok ? "Journal de la commande (200 dernières lignes) :" : undefined}
+              </ResultBanner>
+              <CodeBlock code={output.text.split("\n").slice(-200).join("\n")} className="max-h-80 overflow-auto" />
+            </div>
+          )}
+        </>
+      }
+      footer={
+        <>
+          <span className="min-w-0 flex-1 truncate">
+            Images des conteneurs :{" "}
+            {!images ? (
+              <span className="text-muted">lecture…</span>
+            ) : images.length === 0 ? (
+              <span className="text-muted">aucun conteneur en marche</span>
+            ) : checked ? (
+              <>
+                <span className={outdated ? "text-warn" : ""}>{outdated} à mettre à jour</span> <span className="text-muted">sur {images.length}</span>
+              </>
+            ) : (
+              <span className="text-muted">{images.length}, non vérifiées</span>
+            )}
           </span>
-        </ResultBanner>
-      )}
-      {output && (
-        <div className="flex flex-col gap-2">
-          <ResultBanner
-            tone={output.ok ? "ok" : "danger"}
-            title={output.ok ? "Mises à jour appliquées" : "Les mises à jour ont échoué"}
-            action={
-              <Button size="sm" variant="ghost" onClick={() => setOutput(null)}>
-                Masquer
-              </Button>
-            }
-          >
-            {output.ok ? "Journal de la commande (200 dernières lignes) :" : undefined}
-          </ResultBanner>
-          <CodeBlock code={output.text.split("\n").slice(-200).join("\n")} className="max-h-80 overflow-auto" />
+          <Button size="sm" disabled={!images?.length} onClick={() => onImagesOpen(true)}>
+            Voir les images…
+          </Button>
+        </>
+      }
+    >
+      {/* Paquets | composants ; sans paquets, les composants prennent toute la largeur. */}
+      {packages ? (
+        <div className={TWO_COLS}>
+          <div ref={packagesRef} className="min-w-0 scroll-mt-4">
+            {packages}
+          </div>
+          {components}
         </div>
+      ) : (
+        components
       )}
-
-      {/* Large : composants et images à gauche, paquets à droite ; sans paquets, composants | images. */}
-      <div className="grid min-w-0 items-start gap-5 @7xl:grid-cols-2">
-        {packages ? (
-          <>
-            <div className="flex min-w-0 flex-col gap-5">
-              {components}
-              {imagesSummary}
-            </div>
-            <div ref={packagesRef} className="min-w-0 scroll-mt-4 @7xl:sticky @7xl:top-0">
-              {packages}
-            </div>
-          </>
-        ) : (
-          <>
-            {components}
-            {imagesSummary}
-          </>
-        )}
-      </div>
       {imagesOpen && (
         <Drawer title="Images des conteneurs" subtitle="Conteneurs en marche, par projet compose" width={900} onClose={() => onImagesOpen(false)}>
           {imagesSection}
         </Drawer>
       )}
-    </div>
+    </Panel>
   );
 }
