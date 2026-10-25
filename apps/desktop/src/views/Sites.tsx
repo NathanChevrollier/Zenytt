@@ -9,7 +9,7 @@ import {
 } from "../lib/api";
 import { useApp, useAppPick } from "../lib/store";
 import { useTabIntent } from "../lib/shell";
-import { Badge, Button, Card, Checkbox, DataTable, EmptyState, ErrorState, IconButton, Loading, MenuButton, Modal, ResultBanner, Segmented } from "../components/ui";
+import { Badge, Button, Card, Checkbox, DataTable, EmptyState, ErrorState, Loading, MenuButton, Modal, ResultBanner, Segmented } from "../components/ui";
 import PageLayout from "../components/PageLayout";
 import ServerGate, { ServerContext } from "../components/ServerGate";
 import { useCachedState } from "../lib/cache";
@@ -77,7 +77,14 @@ function linkFor(file: SiteFile): string | null {
 function Sites({ serverId }: { serverId: string }) {
   const { ask, notify } = useAppPick("ask", "notify");
   const server = useApp((s) => s.servers.find((x) => x.id === serverId));
-  const [tab, setTab] = useTabIntent<"active" | "disabled" | "certificates">("sites", "active");
+  // « active » et « disabled » : anciens identifiants d'onglets, repris par les liens existants.
+  const [rawTab, setTab] = useTabIntent<"sites" | "active" | "disabled" | "certificates">("sites", "sites");
+  const tab = rawTab === "certificates" ? "certificates" : "sites";
+  const [etat, setEtat] = useState<"all" | "active" | "disabled">(rawTab === "disabled" ? "disabled" : "all");
+  useEffect(() => {
+    if (rawTab === "disabled") setEtat("disabled");
+    if (rawTab === "disabled" || rawTab === "active") setTab("sites");
+  }, [rawTab]);
   const [certbotBusy, setCertbotBusy] = useState<string | null>(null);
   // Serveur web affiché : nginx, ou Apache quand il est présent.
   const [engine, setEngine] = useCachedState<WebEngine>(`sitesEngine:${serverId}`, "nginx");
@@ -136,6 +143,10 @@ function Sites({ serverId }: { serverId: string }) {
   const masques = tousLesSites.filter((s) => s.technique).length;
   const sites = showTechnical ? tousLesSites : tousLesSites.filter((s) => !s.technique);
   const disabled = useMemo(() => sitesOf(state?.disabled ?? []), [state]);
+  const entries = [
+    ...(etat === "disabled" ? [] : sites.map((site) => ({ site, off: false }))),
+    ...(etat === "active" ? [] : disabled.map((site) => ({ site, off: true }))),
+  ];
 
   // DNS et expiration des domaines, vérifiés depuis le PC après l'affichage (sans le ralentir).
   const domainList = useMemo(() => sites.map((s) => s.domain).filter((d) => d.includes(".")).join(","), [sites]);
@@ -243,8 +254,7 @@ function Sites({ serverId }: { serverId: string }) {
         </>
       }
       tabs={[
-        { id: "active", label: "Actifs", count: sites.length },
-        { id: "disabled", label: "Désactivés", count: disabled.length },
+        { id: "sites", label: "Sites", count: sites.length + disabled.length },
         { id: "certificates", label: "Certificats", count: soon ? `${soon} bientôt` : state.certificates.length, tone: soon ? "warn" : undefined },
       ]}
       activeTab={tab}
@@ -302,33 +312,99 @@ function Sites({ serverId }: { serverId: string }) {
       }
     >
       <div className="px-7 py-5">
-        {tab === "active" &&
-          (sites.length === 0 ? (
-            <EmptyState
-              icon={<Globe />}
-              title="Aucun site actif"
-              action={
-                <Button variant="primary" icon={<Plus size={14} />} onClick={() => setWizard(true)}>
-                  Nouveau site
-                </Button>
-              }
-            >
-              L'assistant crée le conteneur (ou pointe vers un port existant), le vhost et le certificat HTTPS, puis vérifie que le site répond.
-            </EmptyState>
-          ) : (
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,460px),1fr))] gap-3.5">
-              {clients.names.length > 0 && (
-                <div className="col-span-full flex items-center gap-2">
-                  <ClientFilter names={clients.names} value={clientFilter} onChange={setClientFilter} />
-                </div>
-              )}
-              {groupByClient(sites, (x) => clients.folderOf(x.domain), clientFilter).flatMap(([client, list]) => [
-                clients.names.length > 0 ? (
-                  <h3 key={`client:${client}`} className="col-span-full flex items-center gap-1.5 text-xs font-medium text-muted">
-                    <Tag size={12} /> {client || "Sans client"}
-                  </h3>
-                ) : null,
-                ...list.map((site) => {
+        {tab === "sites" && (
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,460px),1fr))] gap-3.5">
+            <div className="col-span-full flex flex-wrap items-center gap-2">
+              <Segmented
+                size="sm"
+                label="État"
+                value={etat}
+                onChange={setEtat}
+                options={[
+                  { value: "all", label: `Tous ${sites.length + disabled.length}` },
+                  { value: "active", label: `Actifs ${sites.length}` },
+                  { value: "disabled", label: `Désactivés ${disabled.length}` },
+                ]}
+              />
+              {clients.names.length > 0 && <ClientFilter names={clients.names} value={clientFilter} onChange={setClientFilter} />}
+            </div>
+            {entries.length === 0 && (
+              <div className="col-span-full">
+                {(etat === "disabled" ? (
+                  <EmptyState icon={<PowerOff />} title="Aucun site désactivé">
+                    Un site désactivé n'est plus servi, mais sa configuration reste dans sites-available pour être réactivée d'un clic.
+                  </EmptyState>
+                ) : (
+                  <EmptyState
+                    icon={<Globe />}
+                    title={etat === "active" ? "Aucun site actif" : "Aucun site"}
+                    action={
+                      <Button variant="primary" icon={<Plus size={14} />} onClick={() => setWizard(true)}>
+                        Nouveau site
+                      </Button>
+                    }
+                  >
+                    L'assistant crée le conteneur (ou pointe vers un port existant), le vhost et le certificat HTTPS, puis vérifie que le site répond.
+                  </EmptyState>
+                ))}
+              </div>
+            )}
+            {groupByClient(entries, (x) => clients.folderOf(x.site.domain), clientFilter).flatMap(([client, list]) => [
+              clients.names.length > 0 ? (
+                <h3 key={`client:${client}`} className="col-span-full flex items-center gap-1.5 text-xs font-medium text-muted">
+                  <Tag size={12} /> {client || "Sans client"}
+                </h3>
+              ) : null,
+              ...list.map(({ site, off }) => {
+                if (off)
+                  return (
+                    <Card key={site.file.path} className="flex flex-col gap-3.5 border-dashed opacity-70">
+                      <div className="flex items-start gap-2.5">
+                        <PowerOff size={17} className="mt-0.5 shrink-0 text-faint" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate text-sm font-semibold">{site.domain}</span>
+                            {locks.isLocked(siteLock(site.domain)) && (
+                              <Badge tone="warn" title="Verrouillé : désactivation et suppression à confirmer en retapant le nom">
+                                <Lock size={10} /> verrouillé
+                              </Badge>
+                            )}
+                            {clients.folderOf(site.domain) && <Badge title="Client">{clients.folderOf(site.domain)}</Badge>}
+                          </div>
+                          {site.aliases.length > 0 && <div className="truncate text-xs text-muted">+ {site.aliases.join(", ")}</div>}
+                          <div className="truncate font-mono text-[11px] text-faint">{site.file.realPath}</div>
+                        </div>
+                        <Badge>désactivé</Badge>
+                      </div>
+                      <div className="mt-auto flex flex-wrap items-center gap-1.5">
+                        <Button
+                          size="sm"
+                          icon={<Power size={12} />}
+                          onClick={() => void runApply(`Activation de ${site.domain}`, () => api.sitesSetEnabled(serverId, site.file.realPath, linkFor(site.file) ?? "", true, engine))}
+                        >
+                          Activer
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-danger"
+                          icon={<Trash2 size={12} />}
+                          onClick={async () => {
+                            const ok = await confirmDestructive({
+                              title: `Supprimer la configuration de ${site.domain} ?`,
+                              body: `Le fichier est supprimé de sites-available (une sauvegarde de ${state.confRoot} est faite avant). Les conteneurs et certificats ne sont pas touchés.`,
+                              confirmLabel: "Supprimer",
+                              name: site.domain,
+                              locked: locks.isLocked(siteLock(site.domain)),
+                            });
+                            if (ok) await runApply(`Suppression de ${site.domain}`, () => api.sitesDelete(serverId, site.file.realPath, linkFor(site.file) ?? "", engine));
+                          }}
+                        >
+                          Supprimer définitivement
+                        </Button>
+                      </div>
+                    </Card>
+                  );
                 const httpsBlock = site.blocks.find((b) => b.ssl);
                 const cert = httpsBlock ? certFor(httpsBlock) : undefined;
                 const ports = [...new Set(site.blocks.flatMap((b) => b.upstreamPorts))];
@@ -439,7 +515,7 @@ function Sites({ serverId }: { serverId: string }) {
                                     onClick: async () => {
                                       const ok = await confirmDestructive({
                                         title: `Désactiver ${site.domain} ?`,
-                                        body: `Le site ne sera plus servi par ${web}. Sa configuration est conservée dans sites-available et peut être réactivée (onglet Désactivés).`,
+                                        body: `Le site ne sera plus servi par ${web}. Sa configuration est conservée dans sites-available et peut être réactivée (filtre Désactivés de l'onglet Sites).`,
                                         confirmLabel: "Désactiver",
                                         name: site.domain,
                                         locked: locks.isLocked(siteLock(site.domain)),
@@ -455,56 +531,10 @@ function Sites({ serverId }: { serverId: string }) {
                     </div>
                   </Card>
                 );
-                }),
-              ])}
-            </div>
-          ))}
-
-        {tab === "disabled" &&
-          (disabled.length === 0 ? (
-            <EmptyState icon={<PowerOff />} title="Aucun site désactivé">
-              Un site désactivé n'est plus servi, mais sa configuration reste dans sites-available pour être réactivée d'un clic.
-            </EmptyState>
-          ) : (
-            <Card padded={false} className="overflow-hidden">
-              <DataTable
-                rows={disabled}
-                rowKey={(x) => x.file.path}
-                columns={[
-                  { key: "domain", header: "Site", sortValue: (x) => x.domain, render: (x) => <span className="font-medium">{x.domain}</span> },
-                  { key: "path", header: "Fichier", width: "minmax(0,1.3fr)", render: (x) => <span className="font-mono text-xs text-muted">{x.file.realPath}</span> },
-                ]}
-                actionsWidth={150}
-                rowActions={(site) => (
-                  <>
-                    <Button
-                      size="sm"
-                      icon={<Power size={12} />}
-                      onClick={() => void runApply(`Activation de ${site.domain}`, () => api.sitesSetEnabled(serverId, site.file.realPath, linkFor(site.file) ?? "", true, engine))}
-                    >
-                      Activer
-                    </Button>
-                    <IconButton
-                      size="sm"
-                      title="Supprimer définitivement"
-                      onClick={async () => {
-                        const ok = await confirmDestructive({
-                          title: `Supprimer la configuration de ${site.domain} ?`,
-                          body: `Le fichier est supprimé de sites-available (une sauvegarde de ${state.confRoot} est faite avant). Les conteneurs et certificats ne sont pas touchés.`,
-                          confirmLabel: "Supprimer",
-                          name: site.domain,
-                          locked: locks.isLocked(siteLock(site.domain)),
-                        });
-                        if (ok) await runApply(`Suppression de ${site.domain}`, () => api.sitesDelete(serverId, site.file.realPath, linkFor(site.file) ?? "", engine));
-                      }}
-                    >
-                      <Trash2 size={14} />
-                    </IconButton>
-                  </>
-                )}
-              />
-            </Card>
-          ))}
+              }),
+            ])}
+          </div>
+        )}
 
         {tab === "certificates" &&
           (state.certificates.length === 0 ? (
