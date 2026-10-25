@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Box, Cable, CircleHelp, FolderOpen, Globe, History, Layers, Monitor, Plug, Power, RotateCw, ScrollText, Search, Server, ShieldCheck, SquareTerminal, Star, Stethoscope, Zap } from "lucide-react";
+import { Box, Cable, CircleHelp, FolderOpen, Globe, History, Layers, Monitor, Network, Plug, Power, RotateCw, ScrollText, Search, Server, ShieldCheck, SquareTerminal, Star, Stethoscope, Zap } from "lucide-react";
 import { useDoctor } from "./ConnectionDoctor";
 import { focusedTerminal } from "../lib/focus";
 import { api, errorMessage, hasShell, shellQuote, type DesktopView, type DockerOverview, type Snippet, type TunnelView, type WebEngine } from "../lib/api";
@@ -37,6 +37,7 @@ const SCOPE_GROUPS: Record<Exclude<ScopeKey, "">, Group[]> = {
 const GROUP_ORDER: Group[] = ["Chemins", "Actions", "Navigation", "Serveurs", "Conteneurs", "Projets compose", "Sites", "Fragments", "Raccourcis", "Tunnels", "Bureaux à distance", "Historique", "Aide"];
 
 const SUPERVISION_ALIASES = "supervision monitoring système systeme machine sécurité securite";
+const NETWORK_ALIASES = "réseau reseau tunnels tunnel ssh réseau privé mesh wireguard vpn";
 
 interface Action {
   id: string;
@@ -113,7 +114,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
       id: `go:${s.id}`,
       label: `Aller à ${s.label}`,
       // Supervision a absorbé Système et Sécurité : leurs anciens noms y mènent toujours.
-      keywords: s.id === "monitoring" ? SUPERVISION_ALIASES : undefined,
+      keywords: s.id === "monitoring" ? SUPERVISION_ALIASES : s.id === "network" ? NETWORK_ALIASES : undefined,
       icon: <s.icon size={15} />,
       run: () => setSection(s.id),
     }));
@@ -133,6 +134,11 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
         ["security/access", "Accès SSH"],
       ])
         list.push({ group: "Navigation", id: `go:monitoring:${tab}`, label: `Aller à Supervision › ${label}`, keywords: SUPERVISION_ALIASES, icon: <ShieldCheck size={15} />, run: () => navigate("monitoring", tab) });
+    // Réseau a absorbé Tunnels et Réseau privé : chaque onglet reste joignable directement.
+    list.push(
+      { group: "Navigation", id: "go:network:tunnels", label: "Aller à Réseau › Tunnels SSH", keywords: NETWORK_ALIASES, icon: <Cable size={15} />, run: () => navigate("network", "tunnels") },
+      { group: "Navigation", id: "go:network:mesh", label: "Aller à Réseau › Réseau privé", keywords: NETWORK_ALIASES, icon: <Network size={15} />, run: () => navigate("network", "mesh") },
+    );
     // Les fiches d'aide sont cherchables ici : « tmux », « compose », « restic »… mènent droit au mode d'emploi.
     for (const g of GUIDES) {
       list.push({ group: "Aide", id: `guide:${g.id}`, label: `Aide : ${g.title}`, hint: g.summary, icon: <CircleHelp size={15} />, run: () => useApp.getState().openHelpPage(g.id) });

@@ -25,7 +25,7 @@ interface ShellState {
   requestNewServer: (v: boolean) => void;
   /** Onglet à ouvrir à l'arrivée sur une section (lien « Installer l'agent » → tiroir Alertes de Supervision…). */
   intent: { section: SectionId; tab: string } | null;
-  /** Tiroir « Machines » à droite (retenu d'une session à l'autre). */
+  /** Tiroir « Sessions ouvertes » à droite (retenu d'une session à l'autre). */
   machinesOpen: boolean;
   setMachinesOpen: (v: boolean) => void;
 }

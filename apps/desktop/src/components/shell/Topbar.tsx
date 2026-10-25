@@ -7,6 +7,7 @@ import { useApp, type NotificationEntry } from "../../lib/store";
 import { useShell } from "../../lib/shell";
 import { refreshAll, useRefresh } from "../../lib/refresh";
 import { useAssistant } from "../../lib/assistant";
+import { useRdp } from "../../lib/rdp";
 import { display, shortcutOf } from "../../lib/shortcuts";
 import { SECTIONS } from "../../sections";
 import { Button, EmptyState, FOCUS_RING, IconButton, Kbd, StatusDot } from "../ui";
@@ -58,7 +59,7 @@ export default function Topbar() {
       <div className="flex min-w-fit flex-1 basis-0 items-center justify-end gap-1">
         <RefreshButton />
         <NotificationsButton />
-        <MachinesButton />
+        <SessionsButton />
         <AssistantButton />
       </div>
     </header>
@@ -82,13 +83,21 @@ function RefreshButton() {
   );
 }
 
-/** Tiroir des machines : prendre la main sur un serveur, une VM ou un bureau distant. */
-function MachinesButton() {
+/** Tiroir des sessions ouvertes : reprendre un écran distant ou un terminal en cours. */
+function SessionsButton() {
   const open = useShell((s) => s.machinesOpen);
+  const count = useApp((s) => s.tabs.length) + (useRdp((s) => s.desktop) ? 1 : 0);
   return (
-    <IconButton title={`Machines : changer de machine (${display(shortcutOf("machines"))})`} aria-pressed={open} className={open ? "text-accent" : ""} onClick={() => useShell.getState().setMachinesOpen(!open)}>
-      <PanelRight size={16} />
-    </IconButton>
+    <Button
+      variant={open ? "subtle" : "ghost"}
+      title={`Sessions ouvertes (${display(shortcutOf("machines"))})`}
+      aria-pressed={open}
+      icon={<PanelRight size={15} />}
+      onClick={() => useShell.getState().setMachinesOpen(!open)}
+    >
+      <span className="max-xl:hidden">Sessions ouvertes</span>
+      {count > 0 && <span className="tabular-nums text-muted"><span className="max-xl:hidden">· </span>{count}</span>}
+    </Button>
   );
 }
 

@@ -63,7 +63,7 @@ Mac Apple Silicon ou Intel ? Menu  → *À propos de ce Mac* : la ligne « Puce 
 joint à chaque release. Pas à pas : [`apps/mobile`](apps/mobile/README.md#installer-lapp).
 
 Zenytt vérifie au démarrage si une nouvelle version existe et propose de l'installer
-(Réglages → Maintenance → Mises à jour). Les paquets sont signés : une version altérée est refusée.
+(Réglages → Général → Mises à jour et journaux). Les paquets sont signés : une version altérée est refusée.
 
 > **Windows** — tant que la signature de code SignPath n'est pas active, SmartScreen affiche
 > « Windows a protégé votre ordinateur » → *Informations complémentaires* → *Exécuter quand même*.
@@ -103,7 +103,7 @@ du système (Windows Credential Manager, Trousseau macOS, Secret Service sous Li
 | **Bases de données** | MySQL/MariaDB, PostgreSQL et **SQLite**, en conteneur ou installés sur l'hôte : bases, tables, éditeur SQL avec **autocomplétion des tables et colonnes**, exécution (Ctrl+Entrée), **tri et filtres depuis l'en-tête**, **édition en cellule** avec aperçu du `UPDATE` avant exécution (clé primaire exigée), ajout et suppression de ligne, export CSV. **Explorateur Redis / Valkey** : clés par pages (SCAN), tous les types, durée de vie, console. |
 | **Sites** | Domaine → nginx ou Apache → port → conteneur, certificats TLS, éditeur de vhost sécurisé, assistant « Nouveau site », **historique des configurations** avec comparaison et restauration. |
 | **Journaux** | Logs Docker, systemd et fichiers suivis en direct, fusionnés, filtrables (texte, expression régulière, niveau) et exportables. |
-| **Tunnels** | Tunnels SSH locaux (127.0.0.1 uniquement) pour joindre une base ou une interface d'administration sans l'exposer. |
+| **Réseau** | Onglet **Tunnels SSH** : tunnels locaux (127.0.0.1 uniquement) pour joindre une base ou une interface d'administration sans l'exposer. Onglet **Réseau privé** : serveurs de différents hébergeurs reliés par WireGuard. |
 | **Sauvegardes** | restic chiffré et dédupliqué : dumps MySQL/PostgreSQL cohérents, volumes, dossiers, vers le serveur ou un stockage S3. Planification, rétention, vérification, restauration (téléchargement, remise en place, réimport d'une base). |
 | **Sécurité** | Audit (SSH, pare-feu, fail2ban, mises à jour, ports exposés, comptes UID 0, xrdp limité à 16 bits) et corrections guidées ; alertes ignorables puis archivées. Pour SSH et le pare-feu, une connexion de contrôle est maintenue et la modification est annulée automatiquement si elle échoue. |
 | **Réglages** | Journal de toutes les actions, accès IA serveur par serveur, synchronisation, verrouillage de l'app, thème clair/sombre, raccourcis. |
@@ -146,11 +146,11 @@ lecture seule** : état, historique, alertes, conteneurs, journaux, sites, confi
 audit, sauvegardes, processus, fichiers de configuration.
 
 - Aucun outil ne peut modifier un serveur ni exécuter une commande libre.
-- Seuls les serveurs autorisés dans Réglages → Accès IA (MCP) sont visibles.
+- Seuls les serveurs autorisés dans Réglages → IA → Outils IA externes sont visibles.
 - Les secrets sont masqués et les clés privées refusées.
 - Chaque appel est inscrit au journal d'actions.
 
-La configuration à copier se trouve dans Réglages → Accès IA (MCP).
+La configuration à copier se trouve dans Réglages → IA → Outils IA externes.
 
 ## Agent `zenyttd`
 
