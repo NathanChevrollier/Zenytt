@@ -10,12 +10,10 @@ import {
   Lock,
   Minus,
   Monitor,
-  Plug,
   Plus,
   RefreshCw,
   Search,
   SquareTerminal,
-  Wrench,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -33,22 +31,19 @@ import PageLayout from "../components/PageLayout";
 import { checkForUpdate } from "../lib/updater";
 import SyncSettings from "../components/SyncSettings";
 import AiSettingsPanel from "../components/AiSettings";
-import { ALWAYS_VISIBLE, SECTIONS } from "../sections";
+import { ALWAYS_VISIBLE, MOVED_SETTINGS_TABS, SECTIONS } from "../sections";
 
 /** Nom du système, pour parler de « Windows », « macOS » ou « Linux » plutôt que d'un seul. */
 const OS_NAME = /Windows/i.test(navigator.userAgent) ? "Windows" : /Mac/i.test(navigator.userAgent) ? "macOS" : "Linux";
 const VAULT = OS_NAME === "Windows" ? "Gestionnaire d'identification de Windows" : OS_NAME === "macOS" ? "Trousseau de macOS" : "coffre-fort du système (Secret Service)";
 
-type TabId = "general" | "terminal" | "shortcuts" | "lock" | "ai" | "mcp" | "sync" | "maintenance" | "journal";
+type TabId = "general" | "terminal" | "shortcuts" | "ai" | "sync" | "journal";
 const NAV: { id: TabId; label: string; icon: LucideIcon; description: string }[] = [
-  { id: "general", label: "Général", icon: Monitor, description: "Thème, actualisation, notifications et fichiers." },
+  { id: "general", label: "Général", icon: Monitor, description: "Démarrage, verrouillage, affichage, mises à jour et à propos." },
   { id: "terminal", label: "Terminal", icon: SquareTerminal, description: "Sessions persistantes, police, clic droit, monitoring." },
   { id: "shortcuts", label: "Raccourcis", icon: Keyboard, description: "Tous modifiables : clique sur un raccourci puis tape la combinaison voulue." },
-  { id: "lock", label: "Sécurité de l'app", icon: Lock, description: "Verrouillage de Zenytt sur ce poste." },
-  { id: "ai", label: "Assistant IA", icon: Bot, description: "Fournisseur, modèle, clé et ce que l'assistant a le droit de consulter." },
-  { id: "mcp", label: "Accès IA (MCP)", icon: Plug, description: "Serveurs lisibles par l'IA et branchement de Claude Code ou Claude Desktop." },
+  { id: "ai", label: "IA", icon: Bot, description: "L'assistant de Zenytt, puis les outils IA externes (Claude Code, Claude Desktop) branchés par MCP." },
   { id: "sync", label: "Synchronisation", icon: RefreshCw, description: "Retrouver sa configuration sur un autre poste, ou l'exporter dans un fichier chiffré." },
-  { id: "maintenance", label: "Maintenance", icon: Wrench, description: "Mises à jour et journaux de l'app." },
   { id: "journal", label: "Journal d'actions", icon: History, description: "Chaque modification faite par Zenytt sur un serveur, et chaque lecture de l'IA via MCP." },
 ];
 
@@ -69,19 +64,24 @@ function Hint({ children, className = "" }: { children: ReactNode; className?: s
   );
 }
 
-/** Groupe de réglages : un petit titre, puis des lignes séparées par un filet (pas de carte). */
-function Group({ title, description, children }: { title?: string; description?: string; children: ReactNode }) {
+/** Groupe de réglages : un petit titre, puis des lignes séparées par un filet ; en carte dans une grille. */
+function Group({ title, description, card, children }: { title?: string; description?: string; card?: boolean; children: ReactNode }) {
   return (
-    <section className="flex min-w-0 flex-col">
+    <section className={`flex min-w-0 flex-col ${card ? "rounded-xl border border-border bg-panel px-4 pt-3 pb-1" : ""}`}>
       {(title || description) && (
         <div className="mb-1">
           {title && <h3 className="text-[13px] font-semibold">{title}</h3>}
           {description && <Hint>{description}</Hint>}
         </div>
       )}
-      <div className="divide-y divide-line border-y border-line">{children}</div>
+      <div className={`divide-y divide-line ${card ? "" : "border-y border-line"}`}>{children}</div>
     </section>
   );
+}
+
+/** Cartes sur 1, 2 puis 3 colonnes selon la largeur ; les cartes d'une rangée ont la même hauteur. */
+function Cards({ children }: { children: ReactNode }) {
+  return <div className="grid grid-cols-1 gap-4 @min-[900px]:grid-cols-2 @min-[1500px]:grid-cols-3">{children}</div>;
 }
 
 /**
@@ -111,7 +111,11 @@ function Toggle({ title, description, checked, onChange }: { title: string; desc
 
 export default function SettingsView() {
   const [tab, setTab] = useTabIntent<TabId>("settings", "general");
-  const current = NAV.find((n) => n.id === tab) ?? NAV[0];
+  // Anciennes rubriques (Sécurité de l'app, Maintenance, Accès IA) : rangées dans leur nouvelle rubrique.
+  const current = NAV.find((n) => n.id === (MOVED_SETTINGS_TABS[tab] ?? tab)) ?? NAV[0];
+  useEffect(() => {
+    if ((tab as string) === "mcp") document.getElementById("ai-mcp")?.scrollIntoView();
+  }, [tab]);
   return (
     <PageLayout title="Réglages" subtitle="Préférences de l'app, verrouillage, assistant, synchronisation et journal des actions." guide="settings" scroll={false}>
       <div className="flex min-h-0 flex-1">
@@ -145,20 +149,27 @@ export default function SettingsView() {
             {current.id === "general" && <General />}
             {current.id === "terminal" && <TerminalPrefs />}
             {current.id === "shortcuts" && <Shortcuts />}
-            {current.id === "lock" && <AppLock />}
             {current.id === "ai" && (
-              <div className="max-w-[960px]">
-                <AiSettingsPanel onOpenAccess={() => setTab("mcp")} />
+              <div className="flex flex-col gap-4">
+                <section aria-label="Assistant" className="flex flex-col gap-3 rounded-xl border border-border bg-panel p-4">
+                  <h3 className="text-sm font-semibold">Assistant</h3>
+                  <AiSettingsPanel onOpenAccess={() => document.getElementById("ai-mcp")?.scrollIntoView({ behavior: "smooth" })} />
+                </section>
+                <section id="ai-mcp" aria-label="Outils IA externes" className="flex flex-col gap-3 rounded-xl border border-border bg-panel p-4">
+                  <div>
+                    <h3 className="text-sm font-semibold">Outils IA externes</h3>
+                    <Hint>Claude Code ou Claude Desktop lisent les serveurs cochés, par le serveur MCP de Zenytt.</Hint>
+                  </div>
+                  <AiAccess />
+                </section>
               </div>
             )}
-            {current.id === "mcp" && <AiAccess />}
             {current.id === "sync" && (
               <Flow>
                 <SyncSettings />
                 <ExportImport />
               </Flow>
             )}
-            {current.id === "maintenance" && <Maintenance />}
             {current.id === "journal" && <Journal />}
           </div>
         </div>
@@ -181,9 +192,10 @@ function General() {
       notify(errorMessage(e), "error");
     }
   };
+  const [checking, setChecking] = useState(false);
   return (
-    <Flow>
-      <Group title="Démarrage et fermeture">
+    <Cards>
+      <Group card title="Démarrage et fermeture">
         <Toggle
           title="Lancer Zenytt à l'ouverture de ma session"
           description="Zenytt démarre discrètement dans la zone de notification. Les serveurs marqués « Se connecter au démarrage » (dans leur profil) se connectent, une fois Zenytt déverrouillé si tu as défini un mot de passe."
@@ -209,7 +221,8 @@ function General() {
           onChange={(confirmQuit) => setSettings({ confirmQuit })}
         />
       </Group>
-      <Group title="Affichage">
+      <AppLock />
+      <Group card title="Affichage">
         <Setting title="Thème" description={`« Système » suit le thème clair ou sombre de ${OS_NAME}.`}>
           <Segmented
             label="Thème"
@@ -238,8 +251,27 @@ function General() {
           />
         </Setting>
       </Group>
-      <Group title="Onglets de la barre latérale" description="Décoche ce dont tu ne te sers pas : l'onglet disparaît de la barre latérale, sans rien désactiver (la palette Ctrl+K y mène toujours). Accueil, Aide et Réglages restent affichés.">
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-x-4 gap-y-2 py-3">
+      <Group card title="Mises à jour et journaux">
+        <Setting title="Mises à jour" description="Zenytt vérifie au démarrage si une nouvelle version est publiée sur GitHub. Les mises à jour sont signées : une version modifiée est refusée.">
+          <Button
+            size="sm"
+            loading={checking}
+            onClick={() => {
+              setChecking(true);
+              void checkForUpdate(true).finally(() => setChecking(false));
+            }}
+          >
+            Rechercher
+          </Button>
+        </Setting>
+        <Setting title="Journaux de Zenytt" description="Connexions, actions et erreurs de l'app, sans aucun secret. Utile pour comprendre un problème.">
+          <Button size="sm" onClick={() => void api.logsOpenDir().catch((e) => notify(errorMessage(e), "error"))}>
+            Ouvrir le dossier
+          </Button>
+        </Setting>
+      </Group>
+      <Group card title="Onglets de la barre latérale" description="Décoche ce dont tu ne te sers pas : l'onglet disparaît de la barre latérale, sans rien désactiver (la palette Ctrl+K y mène toujours). Accueil, Aide et Réglages restent affichés.">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-4 gap-y-2 py-3">
           {SECTIONS.filter((s) => !ALWAYS_VISIBLE.includes(s.id)).map((s) => {
             const hidden = settings.hiddenSections ?? [];
             const Icon = s.icon;
@@ -259,7 +291,7 @@ function General() {
           })}
         </div>
       </Group>
-      <Group title="Notifications et fichiers">
+      <Group card title="Notifications et fichiers">
         <Toggle
           title={`Notifications ${OS_NAME} pour les alertes`}
           description="Tant que Zenytt est ouvert, une notification apparaît dès qu'une alerte se déclenche (CPU, mémoire, disque, site injoignable…). Zenytt fermé, c'est l'agent qui prévient (Discord, ntfy, webhook)."
@@ -272,8 +304,17 @@ function General() {
           checked={settings.showHiddenFiles}
           onChange={(showHiddenFiles) => setSettings({ showHiddenFiles })}
         />
+        <h3 className="pt-4 pb-1 text-[13px] font-semibold">À propos</h3>
+        <Setting title="Soutenir Zenytt" description="Zenytt est gratuit et développé sur mon temps libre. S'il te rend service, un don sur GitHub Sponsors aide à le faire avancer.">
+          <Button size="sm" icon={<Heart size={14} />} onClick={() => void openUrl(SPONSORS_URL)}>
+            Soutenir
+          </Button>
+        </Setting>
+        <Setting title="Licence et confidentialité" description="Zenytt n'envoie aucune télémétrie : tes données restent sur ton ordinateur. © 2026 Nathan Chevrollier, licence PolyForm Shield 1.0.0.">
+          <MenuButton size="sm" label="Documents" items={LEGAL_DOCS.map(([label, path]) => ({ label, onClick: () => void openUrl(`${REPO_BLOB}/${path}`) }))} />
+        </Setting>
       </Group>
-    </Flow>
+    </Cards>
   );
 }
 
@@ -342,44 +383,6 @@ function TerminalPrefs() {
           <span className="text-ok">debian@prod-01</span>:<span className="text-accent">~</span>$ docker compose ps
         </div>
       </section>
-    </Flow>
-  );
-}
-
-function Maintenance() {
-  const { notify } = useAppPick("notify");
-  const [checking, setChecking] = useState(false);
-  return (
-    <Flow>
-    <Group title="Mises à jour et journaux">
-      <Setting title="Mises à jour" description="Zenytt vérifie au démarrage si une nouvelle version est publiée sur GitHub. Les mises à jour sont signées : une version modifiée est refusée.">
-        <Button
-          size="sm"
-          loading={checking}
-          onClick={() => {
-            setChecking(true);
-            void checkForUpdate(true).finally(() => setChecking(false));
-          }}
-        >
-          Rechercher
-        </Button>
-      </Setting>
-      <Setting title="Journaux de Zenytt" description="Connexions, actions et erreurs de l'app, sans aucun secret. Utile pour comprendre un problème.">
-        <Button size="sm" onClick={() => void api.logsOpenDir().catch((e) => notify(errorMessage(e), "error"))}>
-          Ouvrir le dossier
-        </Button>
-      </Setting>
-    </Group>
-    <Group title="À propos">
-      <Setting title="Soutenir Zenytt" description="Zenytt est gratuit et développé sur mon temps libre. S'il te rend service, un don sur GitHub Sponsors aide à le faire avancer.">
-        <Button size="sm" icon={<Heart size={14} />} onClick={() => void openUrl(SPONSORS_URL)}>
-          Soutenir
-        </Button>
-      </Setting>
-      <Setting title="Licence et confidentialité" description="Zenytt n'envoie aucune télémétrie : tes données restent sur ton ordinateur. © 2026 Nathan Chevrollier, licence PolyForm Shield 1.0.0.">
-        <MenuButton size="sm" label="Documents" items={LEGAL_DOCS.map(([label, path]) => ({ label, onClick: () => void openUrl(`${REPO_BLOB}/${path}`) }))} />
-      </Setting>
-    </Group>
     </Flow>
   );
 }
@@ -624,8 +627,7 @@ function AppLock() {
   };
 
   return (
-    <Flow>
-    <Group title="Verrouillage de Zenytt">
+    <Group card title="Verrouillage">
       <Setting
         title={
           <span className="flex items-center gap-2">
@@ -658,7 +660,7 @@ function AppLock() {
             void save();
           }}
         >
-          <div className="grid max-w-xl grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Nouveau mot de passe" hint="6 caractères minimum.">
               <Input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} />
             </Field>
@@ -679,7 +681,6 @@ function AppLock() {
         </form>
       )}
     </Group>
-    </Flow>
   );
 }
 

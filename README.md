@@ -63,7 +63,7 @@ Mac Apple Silicon ou Intel ? Menu  → *À propos de ce Mac* : la ligne « Puce 
 joint à chaque release. Pas à pas : [`apps/mobile`](apps/mobile/README.md#installer-lapp).
 
 Zenytt vérifie au démarrage si une nouvelle version existe et propose de l'installer
-(Réglages → Maintenance → Mises à jour). Les paquets sont signés : une version altérée est refusée.
+(Réglages → Général → Mises à jour et journaux). Les paquets sont signés : une version altérée est refusée.
 
 > **Windows** — tant que la signature de code SignPath n'est pas active, SmartScreen affiche
 > « Windows a protégé votre ordinateur » → *Informations complémentaires* → *Exécuter quand même*.
@@ -146,11 +146,11 @@ lecture seule** : état, historique, alertes, conteneurs, journaux, sites, confi
 audit, sauvegardes, processus, fichiers de configuration.
 
 - Aucun outil ne peut modifier un serveur ni exécuter une commande libre.
-- Seuls les serveurs autorisés dans Réglages → Accès IA (MCP) sont visibles.
+- Seuls les serveurs autorisés dans Réglages → IA → Outils IA externes sont visibles.
 - Les secrets sont masqués et les clés privées refusées.
 - Chaque appel est inscrit au journal d'actions.
 
-La configuration à copier se trouve dans Réglages → Accès IA (MCP).
+La configuration à copier se trouve dans Réglages → IA → Outils IA externes.
 
 ## Agent `zenyttd`
 

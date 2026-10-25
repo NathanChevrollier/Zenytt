@@ -55,6 +55,9 @@ export interface Section {
 /** Sections qui exécutent des commandes sur le serveur : absentes pour un compte SFTP seul ou FTP. */
 export const needsShell = (id: SectionId) => !!SECTIONS.find((s) => s.id === id)?.perServer && id !== "files";
 
+/** Rubriques des réglages fusionnées : un ancien lien (« lock », « mcp »…) ouvre la nouvelle. */
+export const MOVED_SETTINGS_TABS: Record<string, string> = { lock: "general", maintenance: "general", mcp: "ai" };
+
 /** Toujours dans la barre latérale : on ne peut pas se retrouver sans accueil ni réglages. */
 export const ALWAYS_VISIBLE: SectionId[] = ["home", "help", "settings"];
 

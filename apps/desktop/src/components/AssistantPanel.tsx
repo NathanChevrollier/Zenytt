@@ -155,7 +155,7 @@ export default function AssistantPanel() {
               </Button>
             }
           >
-            <span className="text-xs text-muted">Choisis un fournisseur, un modèle et une clé dans Réglages › Assistant IA.</span>
+            <span className="text-xs text-muted">Choisis un fournisseur, un modèle et une clé dans Réglages › IA.</span>
           </ResultBanner>
         )}
         {entries.length === 0 && configured && (
@@ -171,7 +171,7 @@ export default function AssistantPanel() {
               ))}
             </ul>
             <p className="mt-3 text-xs">
-              Il ne voit que les serveurs autorisés dans Réglages › Accès IA.{" "}
+              Il ne voit que les serveurs autorisés dans Réglages › IA › Outils IA externes.{" "}
               {config?.execMode === "off"
                 ? "Il n'exécute aucune commande : il explique, tu tapes."
                 : config?.execMode === "auto"

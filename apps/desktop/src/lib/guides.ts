@@ -664,7 +664,7 @@ export const GUIDES: Guide[] = [
     ],
     requirements: ["une clé d'API (Claude ou service compatible OpenAI), ou un modèle local (Ollama, LM Studio)"],
     steps: [
-      { text: "Réglages → Assistant IA : choisir le fournisseur et coller la clé" },
+      { text: "Réglages → IA : choisir le fournisseur et coller la clé" },
       { text: "Pour un modèle local, vérifier qu'il répond", command: "curl -fsS http://localhost:11434/api/tags" },
       { text: "Ouvrir le panneau avec Ctrl+I" },
     ],

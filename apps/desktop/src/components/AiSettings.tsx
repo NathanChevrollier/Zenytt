@@ -142,10 +142,10 @@ export default function AiSettingsPanel({ onOpenAccess }: { onOpenAccess?: () =>
           Il ne voit que les serveurs autorisés dans{" "}
           {onOpenAccess ? (
             <button type="button" className="text-accent hover:underline" onClick={onOpenAccess}>
-              Accès IA (MCP)
+              Outils IA externes (plus bas)
             </button>
           ) : (
-            "Accès IA (MCP)"
+            "Réglages › IA › Outils IA externes"
           )}
           . Rien n'est consulté sans que tu poses une question.
         </p>
